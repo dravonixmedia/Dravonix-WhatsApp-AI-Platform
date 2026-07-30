@@ -107,6 +107,26 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/speech:
+    dependencies:
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/storage:
+    dependencies:
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/tenant:
     dependencies:
       "@dravonix/core":
