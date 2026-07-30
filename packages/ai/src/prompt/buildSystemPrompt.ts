@@ -108,8 +108,23 @@ export function buildSystemPrompt(
   );
 
   sections.push(
-    "Respond with ONLY a single JSON object matching the required schema -- no prose before or after it, " +
-      "no markdown code fences.",
+    [
+      "Respond with ONLY a single JSON object matching this exact schema -- no prose before or after it, " +
+        "no markdown code fences, and use these exact field names (do not rename, omit, or add fields):",
+      "{",
+      '  "answer": string,',
+      '  "language": string (BCP-47 language code, e.g. "en"),',
+      '  "intent": string (a short label for what the customer wants, e.g. "pricing_question"),',
+      '  "confidence": number between 0 and 1,',
+      '  "replyMode": "text_only" | "voice_only" | "text_and_voice" | "auto",',
+      '  "leadUpdates": null, or an object with any of these string-or-null keys: name, companyName, ' +
+        "service, product, budget, timeline, email, phoneNumber, location, notes,",
+      '  "requiresHuman": boolean,',
+      '  "handoverReason": string or null,',
+      '  "knowledgeSourceIds": array of the sourceId strings you actually used,',
+      '  "internalNotes": string or null (never shown to the customer)',
+      "}",
+    ].join("\n"),
   );
 
   return sections.join("\n\n");
