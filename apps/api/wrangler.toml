@@ -11,14 +11,12 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 APP_ENV = "development"
 
-# Queue producer bindings -- commented out until the underlying queues exist
-# in this Cloudflare account (Wrangler refuses to deploy a binding to a queue
-# that hasn't been created yet: `npx wrangler queues create <name>`).
-# Uncomment once both queues exist, then redeploy -- see CLOUDFLARE_SETUP.md.
-#
-# [[queues.producers]]
-# queue = "dravonix-message-queue"
-# binding = "MESSAGE_QUEUE"
+[[queues.producers]]
+queue = "dravonix-message-queue"
+binding = "MESSAGE_QUEUE"
+
+# Voice queue producer binding -- commented out until apps/workers/voice-consumer
+# is built. Uncomment once that consumer exists and is deployed, then redeploy.
 #
 # [[queues.producers]]
 # queue = "dravonix-voice-queue"

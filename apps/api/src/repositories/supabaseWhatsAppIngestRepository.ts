@@ -95,9 +95,23 @@ export class SupabaseWhatsAppIngestRepository implements WhatsAppIngestRepositor
       return { contactId: contact.id, conversationId: existingConversation.id };
     }
 
+    // Recorded so the message-consumer worker knows which Meta phone_number_id
+    // to reply from without re-deriving it later -- see conversations.whatsapp_phone_number_id.
+    const { data: phoneNumberRow, error: phoneNumberError } = await this.client
+      .from("whatsapp_phone_numbers")
+      .select("id")
+      .eq("phone_number_id", input.phoneNumberId)
+      .maybeSingle();
+    if (phoneNumberError) throw phoneNumberError;
+
     const { data: newConversation, error: createError } = await this.client
       .from("conversations")
-      .insert({ company_id: input.companyId, contact_id: contact.id, state: "ai_active" })
+      .insert({
+        company_id: input.companyId,
+        contact_id: contact.id,
+        whatsapp_phone_number_id: phoneNumberRow?.id ?? null,
+        state: "ai_active",
+      })
       .select("id")
       .single();
     if (createError) throw createError;

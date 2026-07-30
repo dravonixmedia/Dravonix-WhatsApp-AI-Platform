@@ -5,17 +5,23 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev"
   },
   "dependencies": {
     "@dravonix/ai": "workspace:*",
     "@dravonix/billing": "workspace:*",
+    "@dravonix/config": "workspace:*",
     "@dravonix/core": "workspace:*",
+    "@dravonix/database": "workspace:*",
     "@dravonix/knowledge": "workspace:*",
     "@dravonix/observability": "workspace:*",
-    "@dravonix/whatsapp": "workspace:*"
+    "@dravonix/whatsapp": "workspace:*",
+    "@supabase/supabase-js": "^2.47.10"
   },
   "devDependencies": {
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "wrangler": "^3.99.0"
   }
 }
