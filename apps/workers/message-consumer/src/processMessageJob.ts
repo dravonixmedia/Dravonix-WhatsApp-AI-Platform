@@ -69,7 +69,8 @@ export async function processMessageJob(
   const { response, usedFallback } = await generateValidatedResponse(
     {
       provider: deps.aiProvider,
-      onValidationFailure: () => log.error("AI structured response failed validation twice"),
+      onValidationFailure: (details) =>
+        log.error("AI structured response failed validation twice", details),
     },
     {
       company: context.aiContext,
