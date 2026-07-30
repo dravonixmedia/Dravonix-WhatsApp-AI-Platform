@@ -20,6 +20,6 @@
       "@dravonix/storage": ["packages/storage/src/index.ts"]
     }
   },
-  "include": ["packages/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx"],
-  "exclude": ["node_modules", "**/dist", "**/.next", "**/.wrangler"]
+  "include": ["packages/**/*.ts", "apps/api/**/*.ts", "apps/workers/**/*.ts"],
+  "exclude": ["node_modules", "**/dist", "**/.next", "**/.wrangler", "apps/web"]
 }
