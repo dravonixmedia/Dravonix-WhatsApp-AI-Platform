@@ -87,6 +87,31 @@ importers:
         specifier: ^3.99.0
         version: 3.114.17
 
+  apps/workers/message-consumer:
+    dependencies:
+      "@dravonix/ai":
+        specifier: workspace:*
+        version: link:../../../packages/ai
+      "@dravonix/billing":
+        specifier: workspace:*
+        version: link:../../../packages/billing
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../../../packages/core
+      "@dravonix/knowledge":
+        specifier: workspace:*
+        version: link:../../../packages/knowledge
+      "@dravonix/observability":
+        specifier: workspace:*
+        version: link:../../../packages/observability
+      "@dravonix/whatsapp":
+        specifier: workspace:*
+        version: link:../../../packages/whatsapp
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/ai:
     dependencies:
       "@anthropic-ai/sdk":

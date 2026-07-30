@@ -1,0 +1,21 @@
+{
+  "name": "@dravonix/message-consumer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dravonix/ai": "workspace:*",
+    "@dravonix/billing": "workspace:*",
+    "@dravonix/core": "workspace:*",
+    "@dravonix/knowledge": "workspace:*",
+    "@dravonix/observability": "workspace:*",
+    "@dravonix/whatsapp": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
