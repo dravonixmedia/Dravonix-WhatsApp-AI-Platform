@@ -17,8 +17,12 @@ export interface WorkerEnv {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   META_APP_SECRET?: string;
   META_VERIFY_TOKEN?: string;
-  MESSAGE_QUEUE: QueueLike<MessageJobPayload>;
-  VOICE_QUEUE: QueueLike<VoiceJobPayload>;
+  // Optional: absent until the corresponding queues exist in this Cloudflare
+  // account and their bindings are uncommented in wrangler.toml (see
+  // CLOUDFLARE_SETUP.md). Guarded below rather than assumed present, so a
+  // missing binding fails with a clear message instead of a runtime crash.
+  MESSAGE_QUEUE?: QueueLike<MessageJobPayload>;
+  VOICE_QUEUE?: QueueLike<VoiceJobPayload>;
 }
 
 /**
@@ -37,6 +41,13 @@ export default {
     }
     if (!env.META_APP_SECRET || !env.META_VERIFY_TOKEN) {
       return new Response("Server misconfigured: Meta credentials missing", { status: 500 });
+    }
+    if (!env.MESSAGE_QUEUE || !env.VOICE_QUEUE) {
+      return new Response(
+        "Server misconfigured: message/voice queue bindings missing -- create the queues " +
+          "(see CLOUDFLARE_SETUP.md) and uncomment the bindings in wrangler.toml",
+        { status: 500 },
+      );
     }
 
     const supabase = createServiceRoleClient({
