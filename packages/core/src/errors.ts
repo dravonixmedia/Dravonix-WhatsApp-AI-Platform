@@ -39,6 +39,13 @@ export class EntitlementDeniedError extends AppError {
   }
 }
 
+/** Thrown when a manual payment approval is attempted by a user not authorized to approve it. */
+export class ManualPaymentApprovalDeniedError extends AppError {
+  constructor(message: string) {
+    super("manual_payment_approval_denied", message);
+  }
+}
+
 /** Thrown when a cross-tenant access attempt is detected. Always a bug or an attack, never expected. */
 export class TenantIsolationViolationError extends AppError {
   constructor(

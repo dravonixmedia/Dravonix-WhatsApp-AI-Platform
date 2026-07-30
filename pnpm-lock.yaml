@@ -51,6 +51,16 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/billing:
+    dependencies:
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/config:
     dependencies:
       zod:
