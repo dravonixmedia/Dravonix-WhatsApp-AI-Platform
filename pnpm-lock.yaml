@@ -107,6 +107,36 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/knowledge:
+    dependencies:
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/notifications:
+    dependencies:
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/observability:
+    dependencies:
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/speech:
     dependencies:
       "@dravonix/core":
