@@ -1,0 +1,15 @@
+-- Dravonix WhatsApp AI Platform -- super-admin seed TEMPLATE
+--
+-- auth.users rows are managed by Supabase Auth (GoTrue), not by raw SQL insert,
+-- so this file is a template, not an executable migration/seed. To create your
+-- first Dravonix Media super-admin:
+--
+-- 1. Create the user via Supabase Auth:
+--      - Dashboard: Authentication -> Users -> Add user (or "Invite"), or
+--      - CLI:       supabase auth admin create-user --email you@dravonix.example
+-- 2. Copy the resulting user's UUID.
+-- 3. Replace REPLACE_WITH_USER_UUID below and run this statement against your
+--    project (SQL editor, or `psql "$SUPABASE_DATABASE_URL" -f this-file`).
+
+insert into platform_members (user_id, role, is_active)
+values ('REPLACE_WITH_USER_UUID', 'super_admin', true);
