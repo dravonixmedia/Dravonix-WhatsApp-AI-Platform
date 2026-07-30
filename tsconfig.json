@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@dravonix/config": ["packages/config/src/index.ts"],
+      "@dravonix/core": ["packages/core/src/index.ts"],
+      "@dravonix/database": ["packages/database/src/index.ts"],
+      "@dravonix/auth": ["packages/auth/src/index.ts"],
+      "@dravonix/tenant": ["packages/tenant/src/index.ts"],
+      "@dravonix/whatsapp": ["packages/whatsapp/src/index.ts"],
+      "@dravonix/ai": ["packages/ai/src/index.ts"],
+      "@dravonix/speech": ["packages/speech/src/index.ts"],
+      "@dravonix/billing": ["packages/billing/src/index.ts"],
+      "@dravonix/knowledge": ["packages/knowledge/src/index.ts"],
+      "@dravonix/notifications": ["packages/notifications/src/index.ts"],
+      "@dravonix/observability": ["packages/observability/src/index.ts"],
+      "@dravonix/validation": ["packages/validation/src/index.ts"],
+      "@dravonix/storage": ["packages/storage/src/index.ts"]
+    }
+  },
+  "include": ["packages/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx"],
+  "exclude": ["node_modules", "**/dist", "**/.next", "**/.wrangler"]
+}

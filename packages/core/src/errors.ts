@@ -1,0 +1,60 @@
+/** Base class for all typed application errors, carrying a stable machine-readable code. */
+export class AppError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = new.target.name;
+    this.code = code;
+  }
+}
+
+/** Thrown when a state machine is asked to apply an event not valid for its current state. */
+export class InvalidStateTransitionError extends AppError {
+  constructor(
+    public readonly fromState: string,
+    public readonly event: string,
+  ) {
+    super("invalid_state_transition", `Cannot apply event "${event}" from state "${fromState}"`);
+  }
+}
+
+export type EntitlementDenialReason =
+  | "company_suspended"
+  | "company_manually_suspended"
+  | "subscription_not_active"
+  | "plan_missing_feature"
+  | "usage_limit_reached"
+  | "provider_not_configured"
+  | "whatsapp_not_connected";
+
+/** Thrown by the billing entitlement guard whenever a chargeable operation is disallowed. */
+export class EntitlementDeniedError extends AppError {
+  constructor(
+    public readonly companyId: string,
+    public readonly capability: string,
+    public readonly reason: EntitlementDenialReason,
+  ) {
+    super("entitlement_denied", `Company ${companyId} may not use "${capability}": ${reason}`);
+  }
+}
+
+/** Thrown when a cross-tenant access attempt is detected. Always a bug or an attack, never expected. */
+export class TenantIsolationViolationError extends AppError {
+  constructor(
+    public readonly requestedCompanyId: string,
+    public readonly resourceCompanyId: string,
+  ) {
+    super(
+      "tenant_isolation_violation",
+      `Company ${requestedCompanyId} attempted to access a resource owned by ${resourceCompanyId}`,
+    );
+  }
+}
+
+/** Thrown when an AI structured response fails schema validation after the repair attempt. */
+export class AiResponseValidationError extends AppError {
+  constructor(message: string) {
+    super("ai_response_invalid", message);
+  }
+}
