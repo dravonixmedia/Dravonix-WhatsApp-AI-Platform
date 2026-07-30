@@ -11,17 +11,12 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 APP_ENV = "development"
 
-# Queue producer bindings -- commented out because Cloudflare Workers Builds'
-# CI deploy token cannot verify/bind Queues even when they exist (confirmed:
-# "Queue does not exist" despite the queue being visible in the dashboard).
-# Workaround: deploy without these bindings, then attach each producer to its
-# queue manually via the dashboard (Worker -> Bindings -> Add binding -> Queue)
-# using the full-permission interactive login instead of the CI pipeline's
-# scoped token. MESSAGE_QUEUE/VOICE_QUEUE stay optional in src/index.ts either way.
-#
-# [[queues.producers]]
-# queue = "dravonix-message-queue"
-# binding = "MESSAGE_QUEUE"
+[[queues.producers]]
+queue = "dravonix-message-queue"
+binding = "MESSAGE_QUEUE"
+
+# Voice queue producer binding -- commented out until apps/workers/voice-consumer
+# is built. Uncomment once that consumer exists and is deployed, then redeploy.
 #
 # [[queues.producers]]
 # queue = "dravonix-voice-queue"
