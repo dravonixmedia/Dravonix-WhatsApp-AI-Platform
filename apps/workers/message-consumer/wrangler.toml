@@ -1,4 +1,4 @@
-name = "dravonix-message-consumer"
+name = "dravonix-whatsapp-ai-platform"
 main = "src/worker.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
@@ -10,7 +10,15 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 APP_ENV = "development"
 
-[[queues.consumers]]
-queue = "dravonix-message-queue"
-max_batch_size = 10
-max_retries = 3
+# Queue consumer binding -- commented out because Cloudflare Workers Builds'
+# CI deploy token cannot verify/bind Queues even when they exist (confirmed:
+# "Queue does not exist" despite the queue being visible in the dashboard).
+# Workaround: deploy without this binding, then attach the consumer to
+# dravonix-message-queue manually via the dashboard (Worker -> Settings ->
+# Trigger events, or the queue's own Consumers page) using the full-permission
+# interactive login instead of the CI pipeline's scoped token.
+#
+# [[queues.consumers]]
+# queue = "dravonix-message-queue"
+# max_batch_size = 10
+# max_retries = 3
