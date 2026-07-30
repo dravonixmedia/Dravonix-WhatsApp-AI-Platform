@@ -1,0 +1,30 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "TEST_WABA_ID",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550001111",
+              "phone_number_id": "TEST_PHONE_NUMBER_ID"
+            },
+            "contacts": [{ "profile": { "name": "Asha Menon" }, "wa_id": "919820000001" }],
+            "messages": [
+              {
+                "from": "919820000001",
+                "id": "wamid.HBgLTEST_AUDIO_0001",
+                "timestamp": "1706601700",
+                "type": "audio",
+                "audio": { "id": "MEDIA_ID_0001", "mime_type": "audio/ogg; codecs=opus" }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

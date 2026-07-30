@@ -107,6 +107,19 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/whatsapp:
+    dependencies:
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../core
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
 packages:
   "@ampproject/remapping@2.3.0":
     resolution:

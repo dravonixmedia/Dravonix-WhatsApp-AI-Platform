@@ -1,0 +1,30 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "TEST_WABA_ID",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550001111",
+              "phone_number_id": "TEST_PHONE_NUMBER_ID"
+            },
+            "contacts": [{ "profile": { "name": "Asha Menon" }, "wa_id": "919820000001" }],
+            "messages": [
+              {
+                "from": "919820000001",
+                "id": "wamid.HBgLTEST_TEXT_0001",
+                "timestamp": "1706601600",
+                "type": "text",
+                "text": { "body": "Hi, what services do you offer?" }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
