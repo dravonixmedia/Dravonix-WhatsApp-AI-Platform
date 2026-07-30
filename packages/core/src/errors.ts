@@ -58,3 +58,20 @@ export class AiResponseValidationError extends AppError {
     super("ai_response_invalid", message);
   }
 }
+
+/** Thrown when a request has no valid, unexpired session. */
+export class UnauthorizedError extends AppError {
+  constructor(message = "Authentication required") {
+    super("unauthorized", message);
+  }
+}
+
+/** Thrown when an authenticated user lacks the company role-permission required for an action. */
+export class PermissionDeniedError extends AppError {
+  constructor(
+    public readonly companyId: string,
+    public readonly permission: string,
+  ) {
+    super("permission_denied", `Missing permission "${permission}" for company ${companyId}`);
+  }
+}

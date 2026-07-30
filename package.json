@@ -16,7 +16,8 @@
     "format:check": "prettier --check .",
     "typecheck": "pnpm -r --if-present run typecheck",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:db": "bash supabase/tests/run.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
