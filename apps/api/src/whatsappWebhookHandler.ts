@@ -14,8 +14,13 @@ export interface WhatsAppWebhookDeps {
   appSecret: string;
   verifyToken: string;
   repo: WhatsAppIngestRepository;
-  messageQueue: QueueSender<MessageJobPayload>;
-  voiceQueue: QueueSender<VoiceJobPayload>;
+  // Optional: absent until the underlying queues exist and their bindings are
+  // uncommented in wrangler.toml (see CLOUDFLARE_SETUP.md). When absent, the
+  // webhook still verifies signatures, dedupes, and persists messages -- it
+  // just can't hand them off for AI/voice processing yet, which is logged
+  // rather than crashing the whole webhook endpoint.
+  messageQueue: QueueSender<MessageJobPayload> | undefined;
+  voiceQueue: QueueSender<VoiceJobPayload> | undefined;
   logger: Logger;
 }
 
@@ -130,15 +135,21 @@ async function handleSingleEvent(
       channelType: "text",
     });
 
-    const payload: MessageJobPayload = {
-      ...baseJobFields,
-      kind: "inbound_text",
-      conversationId,
-      messageId,
-      waId: event.waId,
-      body: event.body,
-    };
-    await deps.messageQueue.send(payload);
+    if (deps.messageQueue) {
+      const payload: MessageJobPayload = {
+        ...baseJobFields,
+        kind: "inbound_text",
+        conversationId,
+        messageId,
+        waId: event.waId,
+        body: event.body,
+      };
+      await deps.messageQueue.send(payload);
+    } else {
+      deps.logger.warn("Message persisted but not enqueued: MESSAGE_QUEUE is not configured yet", {
+        messageId,
+      });
+    }
   } else if (event.kind === "inbound_audio") {
     const { messageId } = await deps.repo.recordInboundMessage({
       companyId,
@@ -148,16 +159,23 @@ async function handleSingleEvent(
       channelType: "audio",
     });
 
-    const payload: VoiceJobPayload = {
-      ...baseJobFields,
-      kind: "inbound_audio",
-      conversationId,
-      messageId,
-      waId: event.waId,
-      mediaId: event.mediaId,
-      mimeType: event.mimeType,
-    };
-    await deps.voiceQueue.send(payload);
+    if (deps.voiceQueue) {
+      const payload: VoiceJobPayload = {
+        ...baseJobFields,
+        kind: "inbound_audio",
+        conversationId,
+        messageId,
+        waId: event.waId,
+        mediaId: event.mediaId,
+        mimeType: event.mimeType,
+      };
+      await deps.voiceQueue.send(payload);
+    } else {
+      deps.logger.warn(
+        "Audio message persisted but not enqueued: VOICE_QUEUE is not configured yet",
+        { messageId },
+      );
+    }
   }
 
   await deps.repo.recordWebhookEvent({

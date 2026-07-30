@@ -42,11 +42,14 @@ export default {
     if (!env.META_APP_SECRET || !env.META_VERIFY_TOKEN) {
       return new Response("Server misconfigured: Meta credentials missing", { status: 500 });
     }
+    // MESSAGE_QUEUE/VOICE_QUEUE are intentionally not required here: webhook
+    // verification, signature checks, dedup, and persistence all work without
+    // them. Their absence only degrades one specific capability (handing a
+    // message off for AI/voice processing), logged per-request inside
+    // whatsappWebhookHandler.ts rather than blocking the entire Worker.
     if (!env.MESSAGE_QUEUE || !env.VOICE_QUEUE) {
-      return new Response(
-        "Server misconfigured: message/voice queue bindings missing -- create the queues " +
-          "(see CLOUDFLARE_SETUP.md) and uncomment the bindings in wrangler.toml",
-        { status: 500 },
+      logger.warn(
+        "MESSAGE_QUEUE/VOICE_QUEUE not configured -- inbound messages will be persisted but not processed",
       );
     }
 

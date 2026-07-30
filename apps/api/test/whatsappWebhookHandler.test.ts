@@ -218,4 +218,52 @@ describe("handleWhatsAppWebhookPost", () => {
     const result = await handleWhatsAppWebhookPost(ctx.deps, body, signature);
     expect(result.status).toBe(200);
   });
+
+  it("persists a message without crashing when the message queue is not configured yet", async () => {
+    const degradedDeps: WhatsAppWebhookDeps = { ...ctx.deps, messageQueue: undefined };
+    const body = JSON.stringify(textMessagePayload("wamid.NOQUEUE1"));
+    const signature = await sign(body);
+
+    const result = await handleWhatsAppWebhookPost(degradedDeps, body, signature);
+
+    expect(result.status).toBe(200);
+    expect(ctx.repo.recordedMessages).toHaveLength(1);
+    expect(ctx.repo.recordedWebhookEvents.some((e) => e.status === "processed")).toBe(true);
+  });
+
+  it("persists an audio message without crashing when the voice queue is not configured yet", async () => {
+    const degradedDeps: WhatsAppWebhookDeps = { ...ctx.deps, voiceQueue: undefined };
+    const body = JSON.stringify({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "TEST_WABA_ID",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                messaging_product: "whatsapp",
+                metadata: { phone_number_id: PHONE_NUMBER_ID },
+                messages: [
+                  {
+                    from: "919820000001",
+                    id: "wamid.NOQUEUE_AUDIO1",
+                    timestamp: "1706601700",
+                    type: "audio",
+                    audio: { id: "MEDIA1", mime_type: "audio/ogg; codecs=opus" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const signature = await sign(body);
+
+    const result = await handleWhatsAppWebhookPost(degradedDeps, body, signature);
+
+    expect(result.status).toBe(200);
+    expect(ctx.repo.recordedMessages).toHaveLength(1);
+  });
 });
