@@ -149,6 +149,49 @@ importers:
         specifier: ^3.99.0
         version: 3.114.17
 
+  apps/workers/voice-consumer:
+    dependencies:
+      "@dravonix/ai":
+        specifier: workspace:*
+        version: link:../../../packages/ai
+      "@dravonix/billing":
+        specifier: workspace:*
+        version: link:../../../packages/billing
+      "@dravonix/config":
+        specifier: workspace:*
+        version: link:../../../packages/config
+      "@dravonix/core":
+        specifier: workspace:*
+        version: link:../../../packages/core
+      "@dravonix/database":
+        specifier: workspace:*
+        version: link:../../../packages/database
+      "@dravonix/knowledge":
+        specifier: workspace:*
+        version: link:../../../packages/knowledge
+      "@dravonix/observability":
+        specifier: workspace:*
+        version: link:../../../packages/observability
+      "@dravonix/speech":
+        specifier: workspace:*
+        version: link:../../../packages/speech
+      "@dravonix/storage":
+        specifier: workspace:*
+        version: link:../../../packages/storage
+      "@dravonix/whatsapp":
+        specifier: workspace:*
+        version: link:../../../packages/whatsapp
+      "@supabase/supabase-js":
+        specifier: ^2.47.10
+        version: 2.111.0
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      wrangler:
+        specifier: ^3.99.0
+        version: 3.114.17
+
   packages/ai:
     dependencies:
       "@anthropic-ai/sdk":
