@@ -64,8 +64,20 @@ insert into knowledge_chunks (company_id, knowledge_source_id, content, chunk_in
    'Dravonix Media offers: Branding, Website Development, E-commerce Development, Social Media Management, Video Editing, Digital Marketing, Business Email Setup, CRM Setup, and AI Automation.', 0),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
    'DEMO PRICING (not final commercial pricing): Website Development starts at INR 25,000. E-commerce Development starts at INR 45,000. AI Automation (this platform) starts at a one-time implementation fee plus a monthly subscription -- contact us for a quote.', 0),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
+   'DEMO PRICING -- Website packages: Starter package (up to 5 pages, mobile responsive, one contact form) costs INR 25,000. Business package (up to 10 pages, blog setup, basic SEO) costs INR 45,000. E-commerce package (product catalog up to 50 products, payment gateway integration) costs INR 65,000. Custom or enterprise builds beyond these are quoted individually after a requirements call.', 1),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
+   'DEMO PRICING -- Add-on services: an extra page beyond the package limit costs INR 2,500 each. Logo design costs INR 5,000. Professional copywriting costs INR 1,500 per page. Monthly hosting and maintenance costs INR 3,000 per month.', 2),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
+   'DEMO -- Typical project timeline: Starter website takes 7-10 business days. Business website takes 15-20 business days. E-commerce website takes 25-30 business days, depending on catalog size and how many rounds of revisions are needed.', 3),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
-   'Q: Do you build e-commerce websites? A: Yes, we build e-commerce websites on modern platforms with payment gateway integration.', 0);
+   'Q: Do you build e-commerce websites? A: Yes, we build e-commerce websites on modern platforms with payment gateway integration.', 0),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
+   'Q: How long does a website take to build? A: It depends on the package -- a Starter website (up to 5 pages) typically takes 7-10 business days, a Business website 15-20 business days, and an E-commerce website 25-30 business days.', 1),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
+   'Q: Do you offer revisions? A: Yes, every website package includes two rounds of revisions before final delivery. Additional revision rounds can be added for an extra fee.', 2),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
+   'Q: Do you provide hosting after the website is built? A: Yes, we offer monthly hosting and maintenance starting at INR 3,000 per month, which includes uptime monitoring and minor content updates.', 3);
 
 -- Starter subscription in trial state, using the demo Starter plan.
 insert into subscriptions (company_id, plan_version_id, state, provider, current_period_start, current_period_end)
