@@ -78,8 +78,14 @@ export default {
     const deps: MessageConsumerDeps = {
       repo: new SupabaseMessageConsumerRepository(supabase),
       entitlementRepo: new SupabaseEntitlementRepository(supabase),
+      // minRelevance lowered from the 0.15 default: raw ts_rank scores for
+      // short chunks against OR-matched natural-language queries (see
+      // 00000000000011_knowledge_search_or_matching.sql) don't scale
+      // predictably to [0, 1], so the default threshold silently dropped
+      // genuine matches.
       knowledgeRetriever: new PostgresKnowledgeRetriever(
         new SupabaseKnowledgeChunkRepository(supabase),
+        { minRelevance: 0.01 },
       ),
       aiProvider: new AnthropicProvider({
         apiKey: env.ANTHROPIC_API_KEY,
