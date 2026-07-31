@@ -53,11 +53,12 @@ insert into voice_settings (
   'text_only_with_notice'
 );
 
--- Demo knowledge base: services, FAQs, and clearly marked demo pricing.
+-- Demo knowledge base: services, FAQs, clearly marked demo pricing, and policies.
 insert into knowledge_sources (id, company_id, source_type, title, is_enabled, ingestion_status) values
   ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-000000000001', 'service', 'Services Offered', true, 'ready'),
   ('00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-000000000001', 'pricing', 'Demo Pricing Guide', true, 'ready'),
-  ('00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-000000000001', 'faq', 'Frequently Asked Questions', true, 'ready');
+  ('00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-000000000001', 'faq', 'Frequently Asked Questions', true, 'ready'),
+  ('00000000-0000-0000-0000-0000000000a4', '00000000-0000-0000-0000-000000000001', 'policy', 'Policies & Business Info', true, 'ready');
 
 insert into knowledge_chunks (company_id, knowledge_source_id, content, chunk_index) values
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a1',
@@ -77,7 +78,33 @@ insert into knowledge_chunks (company_id, knowledge_source_id, content, chunk_in
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
    'Q: Do you offer revisions? A: Yes, every website package includes two rounds of revisions before final delivery. Additional revision rounds can be added for an extra fee.', 2),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
-   'Q: Do you provide hosting after the website is built? A: Yes, we offer monthly hosting and maintenance starting at INR 3,000 per month, which includes uptime monitoring and minor content updates.', 3);
+   'Q: Do you provide hosting after the website is built? A: Yes, we offer monthly hosting and maintenance starting at INR 3,000 per month, which includes uptime monitoring and minor content updates.', 3),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
+   'DEMO PRICING -- Branding: Logo plus brand guidelines plus business card design costs INR 15,000. Full brand identity package (logo, brand guidelines, social media templates, letterhead) costs INR 30,000.', 4),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
+   'DEMO PRICING -- Social Media Management: Starter plan (2 platforms, 12 posts per month) costs INR 10,000 per month. Growth plan (4 platforms, 20 posts per month, basic ad management) costs INR 20,000 per month.', 5),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
+   'DEMO PRICING -- Video Editing: a short-form reel or short video (up to 60 seconds) costs INR 2,500 per video. A long-form video (up to 10 minutes) costs INR 8,000 per video.', 6),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
+   'DEMO PRICING -- Digital Marketing: Google and Meta ads management starts at INR 15,000 per month plus ad spend. An SEO package starts at INR 12,000 per month.', 7),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a2',
+   'DEMO PRICING -- Business Email and CRM setup: business email setup (Google Workspace or Microsoft 365, up to 5 accounts) costs INR 5,000 one-time. CRM setup and configuration costs INR 20,000 one-time, with optional monthly support at INR 5,000 per month.', 8),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
+   'Q: Do you offer a free consultation? A: Yes, we offer a free 20-minute consultation call to understand your requirements before sharing a detailed quote.', 4),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
+   'Q: Can I see examples of your previous work? A: Yes, we can share a portfolio of previous projects relevant to your industry on request.', 5),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a3',
+   'Q: Do you sign NDAs? A: Yes, we are happy to sign a non-disclosure agreement before discussing project details if required.', 6),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a4',
+   'Business hours: Monday to Saturday, 10 AM to 7 PM IST. Closed on Sundays and public holidays. During business hours we typically reply on WhatsApp within a few minutes; outside business hours, replies resume the next business day.', 0),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a4',
+   'Payment methods accepted: bank transfer (NEFT/IMPS), UPI, and major credit or debit cards via Razorpay. A 50 percent advance is required to start a project, with the balance due before final delivery.', 1),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a4',
+   'DEMO refund policy: if a project is cancelled before design work begins, the advance is refunded minus a INR 2,000 processing fee. Once work has started, refunds are prorated based on work completed and are not available after final delivery.', 2),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a4',
+   'Service area: Dravonix Media works with clients across India and internationally. All communication and delivery is handled remotely -- no physical office visit is required.', 3),
+  ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a4',
+   'Languages supported: we can communicate with customers in English and Malayalam. For other languages, let us know and we will do our best to accommodate or connect you with a team member who can help.', 4);
 
 -- Starter subscription in trial state, using the demo Starter plan.
 insert into subscriptions (company_id, plan_version_id, state, provider, current_period_start, current_period_end)
