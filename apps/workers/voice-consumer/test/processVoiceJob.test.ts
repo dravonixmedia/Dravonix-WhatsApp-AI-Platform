@@ -177,6 +177,9 @@ describe("processVoiceJob", () => {
 
     expect(repo.recordedInboundAudio).toHaveLength(1);
     expect(repo.recordedTranscriptions).toHaveLength(1);
+    // Recorded provider must reflect the actual injected STT provider, not a
+    // hardcoded vendor name that could drift out of sync with it.
+    expect(repo.recordedTranscriptions[0]).toMatchObject({ provider: sttProvider.providerName });
     expect(aiProvider.calls).toHaveLength(1);
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentAudio).toHaveLength(1);

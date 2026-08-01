@@ -15,6 +15,7 @@ export interface WhisperSttConfig {
  * better than Google's standard recognition model.
  */
 export class WhisperSpeechToTextProvider implements SpeechToTextProvider {
+  readonly providerName = "whisper";
   private readonly baseUrl: string;
 
   constructor(private readonly config: WhisperSttConfig) {

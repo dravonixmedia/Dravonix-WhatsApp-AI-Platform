@@ -9,6 +9,7 @@ import type {
 
 /** Deterministic mock STT provider for local development and tests. */
 export class MockSpeechToTextProvider implements SpeechToTextProvider {
+  readonly providerName = "mock";
   public fixedText = "This is a mock transcription.";
 
   async transcribe(input: SpeechToTextInput): Promise<SpeechToTextResult> {

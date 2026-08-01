@@ -16,6 +16,7 @@ export interface ElevenLabsSttConfig {
  * customer speaks a different one of their enabled languages.
  */
 export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
+  readonly providerName = "elevenlabs";
   private readonly baseUrl: string;
 
   constructor(private readonly config: ElevenLabsSttConfig) {

@@ -50,6 +50,7 @@ function readOggOpusInputSampleRate(audio: ArrayBuffer): number {
  * human correction.
  */
 export class GoogleSpeechToTextProvider implements SpeechToTextProvider {
+  readonly providerName = "google";
   private readonly baseUrl: string;
 
   constructor(private readonly config: GoogleSttConfig) {

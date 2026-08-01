@@ -144,7 +144,7 @@ export async function processVoiceJob(
     companyId: payload.companyId,
     messageId: payload.messageId,
     mediaFileId,
-    provider: "google",
+    provider: deps.sttProvider.providerName,
     rawText: transcription.text,
     detectedLanguage: transcription.detectedLanguageCode,
     languageConfidence: transcription.confidence,

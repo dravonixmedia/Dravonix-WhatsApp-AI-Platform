@@ -14,6 +14,8 @@ export interface SpeechToTextResult {
 }
 
 export interface SpeechToTextProvider {
+  /** Stable identifier for whichever vendor this implementation calls (e.g. "elevenlabs", "whisper", "google"), recorded alongside each transcription so the audit trail can never drift out of sync with which provider actually produced it. */
+  readonly providerName: string;
   transcribe(input: SpeechToTextInput): Promise<SpeechToTextResult>;
 }
 
