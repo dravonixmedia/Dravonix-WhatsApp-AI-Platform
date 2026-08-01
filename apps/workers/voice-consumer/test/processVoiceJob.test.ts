@@ -184,6 +184,25 @@ describe("processVoiceJob", () => {
     expect(repo.recordedOutboundVoice).toHaveLength(1);
   });
 
+  it("degrades to the already-sent text reply without throwing when text-to-speech fails", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    deps.ttsProvider = {
+      synthesize: async () => {
+        throw new Error(
+          "ElevenLabs text-to-speech request failed with status 402: payment_required",
+        );
+      },
+    };
+
+    await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
+
+    // The text reply must have gone out exactly once -- a TTS failure must
+    // never cause the whole job to retry and re-send it.
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(0);
+    expect(repo.recordedOutboundVoice).toHaveLength(0);
+  });
+
   it("retrieves knowledge scoped to the company using the transcribed text", async () => {
     const deps = makeDeps(activeEntitlementSnapshot());
     await processVoiceJob(deps, makePayload());

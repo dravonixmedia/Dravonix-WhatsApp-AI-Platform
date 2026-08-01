@@ -328,7 +328,17 @@ export async function processVoiceJob(
         log.warn("Blocked text-to-speech call: company not entitled", { reason: error.reason });
         return;
       }
-      throw error;
+      // A TTS provider failure here must not throw: the text reply above (if
+      // this mode included one) has already been sent and recorded. Rethrowing
+      // would fail the whole queue job and cause a retry that re-runs
+      // everything from the top -- including re-transcribing the audio and
+      // re-sending that same text reply again, duplicating it to the customer
+      // for a failure that's specific to voice synthesis. Degrade to the
+      // text-only outcome instead.
+      log.error("Text-to-speech failed; falling back to the text-only reply already sent", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
     }
   }
 }
