@@ -17,10 +17,29 @@ export interface OrchestrationDependencies {
   onValidationFailure?: (details: { rawFirstAttempt: string; rawRepairAttempt: string }) => void;
 }
 
+/**
+ * Claude frequently wraps its JSON answer in a markdown code fence (```json ... ```)
+ * even when explicitly told not to, and may add stray prose before/after it. Strip
+ * a wrapping fence and fall back to the first {...} substring before giving up, so a
+ * cosmetically-decorated but otherwise valid response isn't treated as a parse failure.
+ */
+function extractJsonCandidate(rawText: string): string {
+  const trimmed = rawText.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced?.[1] !== undefined) return fenced[1].trim();
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1);
+  }
+  return trimmed;
+}
+
 function tryParse(rawText: string): AiStructuredResponse | null {
   let json: unknown;
   try {
-    json = JSON.parse(rawText);
+    json = JSON.parse(extractJsonCandidate(rawText));
   } catch {
     return null;
   }

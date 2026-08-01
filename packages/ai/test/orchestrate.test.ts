@@ -69,6 +69,54 @@ describe("generateValidatedResponse", () => {
     expect(result.usage.outputTokens).toBe(100);
   });
 
+  it("parses a valid response even when wrapped in a markdown code fence", async () => {
+    const validResponse = {
+      answer: "Fenced answer",
+      language: "en",
+      intent: "general_enquiry",
+      confidence: 0.8,
+      replyMode: "auto",
+      leadUpdates: null,
+      requiresHuman: false,
+      handoverReason: null,
+      knowledgeSourceIds: [],
+      internalNotes: null,
+    };
+    const provider = new MockAiProvider(
+      () => "```json\n" + JSON.stringify(validResponse) + "\n```",
+    );
+
+    const result = await generateValidatedResponse({ provider }, makeInput());
+
+    expect(result.usedFallback).toBe(false);
+    expect(result.repaired).toBe(false);
+    expect(result.response.answer).toBe("Fenced answer");
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it("parses a valid response even with stray prose before and after the JSON object", async () => {
+    const validResponse = {
+      answer: "Prose-wrapped answer",
+      language: "en",
+      intent: "general_enquiry",
+      confidence: 0.8,
+      replyMode: "auto",
+      leadUpdates: null,
+      requiresHuman: false,
+      handoverReason: null,
+      knowledgeSourceIds: [],
+      internalNotes: null,
+    };
+    const provider = new MockAiProvider(
+      () => "Here is my response:\n" + JSON.stringify(validResponse) + "\nLet me know if that helps!",
+    );
+
+    const result = await generateValidatedResponse({ provider }, makeInput());
+
+    expect(result.usedFallback).toBe(false);
+    expect(result.response.answer).toBe("Prose-wrapped answer");
+  });
+
   it("does not repair (and reports low confidence) when the model itself signals low confidence", async () => {
     const provider = new MockAiProvider(() =>
       JSON.stringify({
