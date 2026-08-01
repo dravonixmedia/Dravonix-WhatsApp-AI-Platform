@@ -12,6 +12,37 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+const OPUS_HEAD_MAGIC = [0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64]; // "OpusHead"
+
+/**
+ * Reads the "input sample rate" field straight out of the Ogg Opus ID header
+ * (RFC 7845 section 5.1). Google's STT API requires an explicit sampleRateHertz
+ * for OGG_OPUS and rejects requests without one ("Opus sample rate (0) not in
+ * supported rates"), but the value it actually needs varies by encoder --
+ * WhatsApp's own voice notes have been observed declaring 24000 Hz, not the
+ * commonly-assumed 16000 or 48000, so hardcoding any single constant here
+ * silently produces empty transcripts for files where the guess is wrong.
+ * Falls back to 48000 (Opus's native internal rate) if the header can't be found.
+ */
+function readOggOpusInputSampleRate(audio: ArrayBuffer): number {
+  const bytes = new Uint8Array(audio);
+  // Sample rate is read at i+12 for 4 bytes, so i+16 must stay in bounds.
+  for (let i = 0; i <= bytes.length - 16; i += 1) {
+    let matches = true;
+    for (let j = 0; j < OPUS_HEAD_MAGIC.length; j += 1) {
+      if (bytes[i + j] !== OPUS_HEAD_MAGIC[j]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      // Layout after the magic: version(1) + channels(1) + pre-skip(2) + sample rate(4, LE).
+      return new DataView(audio, i + 12, 4).getUint32(0, true);
+    }
+  }
+  return 48000;
+}
+
 /**
  * Google Cloud Speech-to-Text v1 REST adapter. Sends the primary language code
  * plus alternative language hints for mixed-language speech (Master Prompt
@@ -37,15 +68,7 @@ export class GoogleSpeechToTextProvider implements SpeechToTextProvider {
       body: JSON.stringify({
         config: {
           encoding: "OGG_OPUS",
-          // Google's STT API requires this explicitly for OGG_OPUS -- it does not
-          // read the rate from the Ogg header, and rejects the request with "Opus
-          // sample rate (0) not in supported rates" if it's omitted. 48000 is the
-          // input sample rate WhatsApp's Ogg Opus container declares regardless of
-          // the actual voice bandwidth encoded (an Opus RFC 7845 convention) --
-          // using 16000 here previously caused every request to succeed but
-          // return an empty transcript (the resampling assumption was wrong, not
-          // the request itself).
-          sampleRateHertz: 48000,
+          sampleRateHertz: readOggOpusInputSampleRate(input.audio),
           languageCode: input.languageCode,
           alternativeLanguageCodes: input.alternativeLanguageCodes ?? [],
           enableAutomaticPunctuation: true,
