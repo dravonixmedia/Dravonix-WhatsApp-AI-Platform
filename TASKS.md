@@ -246,12 +246,14 @@ Legend: `[x]` done · `[~]` partially done / mocked pending real credentials · 
    `billing-consumer`, `knowledge-consumer`, and `notification-consumer` are
    not yet built or deployed — the packages they would call
    (`packages/billing`, `packages/knowledge`, `packages/notifications`) are
-   built and independently tested. Cloudflare Workers Builds' CI deploy token
-   cannot bind Queues (a confirmed platform limitation); every deploy
-   currently requires manually reattaching queue producer/consumer bindings
-   via the dashboard, tracked as an operational gap worth automating (a
-   custom-scoped `wrangler deploy` via GitHub Actions, replacing Workers
-   Builds' auto-provisioned token, would fix this permanently).
+   built and independently tested. Cloudflare Workers Builds' auto-provisioned
+   CI deploy token cannot bind Queues (a confirmed platform limitation, hit
+   repeatedly); this is now fixed by deploying through
+   `.github/workflows/ci.yml`'s `deploy` job with a custom-scoped
+   `CLOUDFLARE_API_TOKEN` instead (see `DEPLOYMENT.md`), which does have
+   Queues permission. Workers Builds' git integration should be disabled for
+   these three services (one-time dashboard action) so it stops deploying
+   alongside this pipeline and re-wiping bindings.
 4. **apps/api has only the WhatsApp webhook and health routes.** No REST API
    exists yet for conversations, leads, knowledge, billing, team management,
    or super-admin actions — these are the next concrete step for anyone
@@ -265,7 +267,12 @@ Legend: `[x]` done · `[~]` partially done / mocked pending real credentials · 
 6. **No browser/E2E tests, no load tests, no third-party security audit.**
 7. **Meta Embedded Signup is designed for but not implemented**, pending a
    Meta Tech Provider/Solution Partner account.
-8. **CI auto-deploys `apps/api`, `voice-consumer`, and `message-consumer` to
-   Cloudflare on every push** (Workers Builds' git integration) but does not
-   reattach queue bindings, per item 3 above — not a true zero-touch CD
-   pipeline.
+8. **CI (`.github/workflows/ci.yml`'s `deploy` job) deploys `apps/api`,
+   `voice-consumer`, and `message-consumer` to Cloudflare on every push to
+   the current working branch**, gated on lint/typecheck/test passing first,
+   using a custom-scoped `CLOUDFLARE_API_TOKEN` that can manage Queues (see
+   item 3 and `DEPLOYMENT.md`). Requires the `CLOUDFLARE_API_TOKEN` and
+   `CLOUDFLARE_ACCOUNT_ID` repository secrets to be set, and Workers Builds'
+   git integration disabled for these three services, before it's fully
+   effective. The deploy job's branch condition should be revisited once a
+   real branching/release strategy is settled on.

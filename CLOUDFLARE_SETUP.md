@@ -31,10 +31,16 @@ npx wrangler queues create dravonix-notification-queue
 npx wrangler queues create dravonix-notification-queue-dlq
 ```
 
-`apps/api/wrangler.toml` already declares producer bindings for the message
-and voice queues; add consumer bindings (with `dead_letter_queue` pointing at
-the matching `*-dlq`) to each `apps/workers/*/wrangler.toml` as those workers
-are built out (see `TASKS.md`).
+`apps/api/wrangler.toml` declares producer bindings for the message and voice
+queues, and `apps/workers/message-consumer`/`apps/workers/voice-consumer`
+declare the matching consumer bindings. **These only actually apply if
+deployed via `.github/workflows/ci.yml`'s `deploy` job** (a custom-scoped
+`CLOUDFLARE_API_TOKEN`, see `DEPLOYMENT.md`) -- Cloudflare Workers Builds'
+own auto-provisioned deploy token cannot manage Queues at all and silently
+drops these bindings on every deploy through it. Add consumer bindings (with
+`dead_letter_queue` pointing at the matching `*-dlq`) to
+`billing-consumer`/`knowledge-consumer`/`notification-consumer` as those
+workers are built out (see `TASKS.md`).
 
 ## 3. Create the R2 bucket
 

@@ -63,9 +63,36 @@ migration rollback requires a hand-written compensating migration; avoid
 deploying a migration and an application change that depends on it in the
 same release without a tested rollback plan.
 
-## What is not yet automated
+## CD pipeline: `.github/workflows/ci.yml`'s `deploy` job
 
-There is no CD pipeline in this repository (CI runs lint/typecheck/test/RLS on
-every push; it does not deploy). Standing up `wrangler deploy` in
-`.github/workflows/` (or an equivalent) as part of a release process is
-tracked as a follow-up in `TASKS.md`.
+`apps/api`, `apps/workers/message-consumer`, and `apps/workers/voice-consumer`
+deploy via a `deploy` job in the same CI workflow (gated on the `build` job's
+lint/typecheck/test passing), running `wrangler deploy` directly with a
+custom-scoped `CLOUDFLARE_API_TOKEN` GitHub Actions secret.
+
+This exists specifically because Cloudflare Workers Builds' git-integration
+auto-deploy (its own separate mechanism) uses an auto-provisioned deploy token
+that **cannot** manage Queues — every deploy through it silently drops the
+`queues.producers`/`queues.consumers` bindings declared in each
+`wrangler.toml`, requiring them to be re-added by hand in the dashboard after
+every single push (this was hit repeatedly and is the reason this pipeline
+exists). A custom token with real Queues permission does not have this
+problem, so bindings declared in `wrangler.toml` stay applied permanently.
+
+### One-time setup
+
+1. Create a Cloudflare API token (My Profile → API Tokens → Create Token →
+   Custom): **Account → Workers Queues → Edit**, **Account → Workers
+   Scripts → Edit**, scoped to the account these Workers live in.
+2. Add two repository secrets (Settings → Secrets and variables → Actions):
+   `CLOUDFLARE_API_TOKEN` (the token above) and `CLOUDFLARE_ACCOUNT_ID`
+   (Cloudflare dashboard → Workers & Pages → Overview, right sidebar).
+3. **Disable Workers Builds' git integration** for `dravonixapp`,
+   `dravonix-whatsapp-ai-platform`, and `dravonix-audio` (each Worker →
+   Settings → Build → disconnect/disable). Leaving both mechanisms active
+   means both deploy on the same push — redundant, and Workers Builds' would
+   still periodically wipe the Queues bindings this pipeline exists to fix.
+
+The `deploy` job's `if` condition is currently scoped to one specific branch;
+update it (or generalize it, e.g. to `main`) once this repository settles on
+a real branching/release strategy.

@@ -10,21 +10,15 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 APP_ENV = "development"
 
-# Queue consumer binding -- commented out because Cloudflare Workers Builds'
-# CI deploy token cannot verify/bind Queues even when they exist (confirmed
-# twice now: "Queue does not exist" despite the queue being visible and fully
-# operational in the dashboard). This is a persistent Workers Builds
-# limitation, not a transient one -- do not retest without CLI/wrangler access
-# to deploy outside the CI pipeline.
-#
-# Workaround: deploy without this binding, then attach the consumer to
-# dravonix-message-queue manually via the dashboard (queue's own page ->
-# Bindings -> Add Consumer) using the full-permission interactive login
-# instead of the CI pipeline's scoped token. This must be redone after every
-# push that redeploys this Worker, since a CI deploy resets bindings to
-# exactly what's declared here.
-#
-# [[queues.consumers]]
-# queue = "dravonix-message-queue"
-# max_batch_size = 10
-# max_retries = 3
+# Queue consumer binding. Cloudflare Workers Builds' auto-provisioned CI
+# deploy token cannot verify/bind Queues (confirmed repeatedly: "Queue does
+# not exist" despite the queue being visible and operational in the
+# dashboard) -- this previously had to be re-added by hand via the queue's
+# own page after every deploy. Deploying instead through
+# .github/workflows/deploy.yml with a custom-scoped CLOUDFLARE_API_TOKEN
+# (Account: Workers Queues:Edit, Workers Scripts:Edit) resolves this, since
+# that token actually has permission to manage Queues.
+[[queues.consumers]]
+queue = "dravonix-message-queue"
+max_batch_size = 10
+max_retries = 3

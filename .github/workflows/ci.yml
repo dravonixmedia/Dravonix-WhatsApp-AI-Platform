@@ -54,3 +54,53 @@ jobs:
         env:
           TEST_DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pnpm test:db
+
+  deploy:
+    name: Deploy Cloudflare Workers
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/claude/dravonix-whatsapp-ai-platform-19nnm8'
+    runs-on: ubuntu-latest
+    # Deploys apps/api, message-consumer, and voice-consumer directly with
+    # wrangler, using a custom-scoped CLOUDFLARE_API_TOKEN (see
+    # DEPLOYMENT.md) instead of Cloudflare Workers Builds' git integration.
+    # Workers Builds' auto-provisioned deploy token cannot manage Queues, so
+    # every deploy through it silently drops the queues.producers/consumers
+    # bindings declared in each wrangler.toml; this token can, so deploying
+    # only through this job keeps those bindings intact permanently. Disable
+    # Workers Builds' git integration for these three services once this
+    # workflow is confirmed working, to avoid both deploying on the same push.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Deploy apps/api (dravonixapp)
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm deploy
+
+      - name: Deploy message-consumer (dravonix-whatsapp-ai-platform)
+        working-directory: apps/workers/message-consumer
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm deploy
+
+      - name: Deploy voice-consumer (dravonix-audio)
+        working-directory: apps/workers/voice-consumer
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm deploy

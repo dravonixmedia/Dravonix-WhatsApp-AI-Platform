@@ -16,16 +16,15 @@ APP_ENV = "development"
 binding = "AUDIO_BUCKET"
 bucket_name = "dravonix-audio"
 
-# Queue consumer binding -- commented out because Cloudflare Workers Builds'
-# CI deploy token cannot verify/bind Queues even when they exist (confirmed
-# repeatedly for apps/api and apps/workers/message-consumer: "Queue does not
-# exist" despite the queue being visible and fully operational in the
-# dashboard). Deploy without this binding, then attach the consumer to
-# dravonix-voice-queue manually via the dashboard (queue's own page ->
-# Bindings -> Add Consumer) using the full-permission interactive login. This
-# must be redone after every push that redeploys this Worker.
-#
-# [[queues.consumers]]
-# queue = "dravonix-voice-queue"
-# max_batch_size = 5
-# max_retries = 3
+# Queue consumer binding. Cloudflare Workers Builds' auto-provisioned CI
+# deploy token cannot verify/bind Queues (confirmed repeatedly: "Queue does
+# not exist" despite the queue being visible and operational in the
+# dashboard) -- this previously had to be re-added by hand via the queue's
+# own page after every deploy. Deploying instead through
+# .github/workflows/deploy.yml with a custom-scoped CLOUDFLARE_API_TOKEN
+# (Account: Workers Queues:Edit, Workers Scripts:Edit) resolves this, since
+# that token actually has permission to manage Queues.
+[[queues.consumers]]
+queue = "dravonix-voice-queue"
+max_batch_size = 5
+max_retries = 3
