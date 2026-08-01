@@ -94,6 +94,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Preflight — verify resolved ${{ inputs.target_environment }} resource names
+        # Prints and validates every Worker name/queue/dead_letter_queue/R2
+        # bucket name that wrangler will actually resolve for this
+        # environment, straight from each wrangler.toml's [env.*] block --
+        # before any Cloudflare credential is used. This exists because a
+        # staging deploy once resolved the unsuffixed production queue
+        # (dravonix-message-queue instead of dravonix-message-queue-staging),
+        # a mistake wrangler's own --dry-run output can't catch (it doesn't
+        # print queue consumer bindings at all). See scripts/verify-wrangler-
+        # env-bindings.sh for exactly what's checked.
+        run: |
+          for toml in apps/api/wrangler.toml \
+                      apps/workers/message-consumer/wrangler.toml \
+                      apps/workers/voice-consumer/wrangler.toml; do
+            bash scripts/verify-wrangler-env-bindings.sh "$toml" "${{ inputs.target_environment }}"
+          done
+
       - name: Deploy apps/api
         working-directory: apps/api
         env:
