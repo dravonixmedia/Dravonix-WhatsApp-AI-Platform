@@ -6,7 +6,7 @@ describe("GoogleSpeechToTextProvider", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends sampleRateHertz: 16000 for OGG_OPUS, matching WhatsApp's voice note encoding", async () => {
+  it("sends sampleRateHertz: 48000 for OGG_OPUS, matching WhatsApp's Ogg container header", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -31,6 +31,6 @@ describe("GoogleSpeechToTextProvider", () => {
     const [, requestInit] = fetchMock.mock.calls[0]!;
     const body = JSON.parse((requestInit as RequestInit).body as string);
     expect(body.config.encoding).toBe("OGG_OPUS");
-    expect(body.config.sampleRateHertz).toBe(16000);
+    expect(body.config.sampleRateHertz).toBe(48000);
   });
 });

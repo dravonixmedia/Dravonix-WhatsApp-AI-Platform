@@ -151,14 +151,21 @@ export async function processVoiceJob(
   });
 
   if (!transcription.text.trim()) {
+    const diagnostics = {
+      detectedLanguageCode: transcription.detectedLanguageCode,
+      confidence: transcription.confidence,
+      requestedLanguageCode: sttInput.languageCode,
+      mimeType,
+      sizeBytes: audioBytes.byteLength,
+    };
     if (context.voiceSettings.fallbackBehavior === "escalate") {
       await deps.repo.triggerHandover({
         conversationId: payload.conversationId,
         reason: "speech_to_text_failed",
       });
-      log.warn("Speech-to-text produced no transcript; escalated to a human");
+      log.warn("Speech-to-text produced no transcript; escalated to a human", diagnostics);
     } else {
-      log.warn("Speech-to-text produced no transcript; sent a text-only notice");
+      log.warn("Speech-to-text produced no transcript; sent a text-only notice", diagnostics);
     }
 
     try {

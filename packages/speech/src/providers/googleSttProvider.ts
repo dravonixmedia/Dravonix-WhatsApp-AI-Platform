@@ -37,11 +37,15 @@ export class GoogleSpeechToTextProvider implements SpeechToTextProvider {
       body: JSON.stringify({
         config: {
           encoding: "OGG_OPUS",
-          // WhatsApp voice notes are Opus-encoded at 16kHz mono. Google's STT API
-          // requires this explicitly for OGG_OPUS -- it does not reliably read the
-          // rate from the Ogg header, and rejects the request with "Opus sample
-          // rate (0) not in supported rates" if it's omitted.
-          sampleRateHertz: 16000,
+          // Google's STT API requires this explicitly for OGG_OPUS -- it does not
+          // read the rate from the Ogg header, and rejects the request with "Opus
+          // sample rate (0) not in supported rates" if it's omitted. 48000 is the
+          // input sample rate WhatsApp's Ogg Opus container declares regardless of
+          // the actual voice bandwidth encoded (an Opus RFC 7845 convention) --
+          // using 16000 here previously caused every request to succeed but
+          // return an empty transcript (the resampling assumption was wrong, not
+          // the request itself).
+          sampleRateHertz: 48000,
           languageCode: input.languageCode,
           alternativeLanguageCodes: input.alternativeLanguageCodes ?? [],
           enableAutomaticPunctuation: true,
