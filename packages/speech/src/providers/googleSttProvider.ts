@@ -46,7 +46,10 @@ export class GoogleSpeechToTextProvider implements SpeechToTextProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Google Speech-to-Text request failed with status ${response.status}`);
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Google Speech-to-Text request failed with status ${response.status}: ${body}`,
+      );
     }
 
     const data = (await response.json()) as {
