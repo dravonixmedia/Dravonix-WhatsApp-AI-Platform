@@ -33,7 +33,11 @@ export class AnthropicProvider implements AiProvider {
     const messages: Anthropic.MessageParam[] = [
       ...input.memory.recentMessages.map((m) => ({
         role: (m.role === "customer" ? "user" : "assistant") as "user" | "assistant",
-        content: m.body,
+        // A voice note whose transcription is still pending or failed is stored
+        // with an empty body; Claude's API rejects any message with empty
+        // content outright (400: "user messages must have non-empty content"),
+        // which would otherwise hard-fail every future turn in the conversation.
+        content: m.body.trim() ? m.body : "[voice message with no transcript available]",
       })),
       { role: "user", content: input.customerMessage },
     ];
