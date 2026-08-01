@@ -108,7 +108,8 @@ describe("generateValidatedResponse", () => {
       internalNotes: null,
     };
     const provider = new MockAiProvider(
-      () => "Here is my response:\n" + JSON.stringify(validResponse) + "\nLet me know if that helps!",
+      () =>
+        "Here is my response:\n" + JSON.stringify(validResponse) + "\nLet me know if that helps!",
     );
 
     const result = await generateValidatedResponse({ provider }, makeInput());
