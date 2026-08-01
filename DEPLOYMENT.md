@@ -63,12 +63,31 @@ migration rollback requires a hand-written compensating migration; avoid
 deploying a migration and an application change that depends on it in the
 same release without a tested rollback plan.
 
-## CD pipeline: `.github/workflows/ci.yml`'s `deploy` job
+## CI vs CD: two separate workflows
 
-`apps/api`, `apps/workers/message-consumer`, and `apps/workers/voice-consumer`
-deploy via a `deploy` job in the same CI workflow (gated on the `build` job's
-lint/typecheck/test passing), running `wrangler deploy` directly with a
-custom-scoped `CLOUDFLARE_API_TOKEN` GitHub Actions secret.
+`.github/workflows/ci.yml` and `.github/workflows/deploy.yml` are
+deliberately separate:
+
+- **`ci.yml`** runs on every push/PR and only validates: lint, format,
+  typecheck, unit tests (against the mock Meta/Claude/ElevenLabs/Razorpay
+  providers — no provider secrets are set in this workflow, see the comment
+  in the `build` job), migration sequence validation, RLS tenant-isolation
+  tests, and a build-verification pass (`next build` for `apps/web`,
+  `wrangler deploy --dry-run` for `apps/api` and each Worker consumer). It
+  never deploys anything and never touches Cloudflare credentials. Failed
+  runs upload the RLS test log and dry-run bundle output as a workflow
+  artifact for debugging. The job is cancelled if a newer push to the same
+  branch/PR arrives (`concurrency` with `cancel-in-progress: true`).
+- **`deploy.yml`** is `workflow_dispatch`-only (manually triggered from the
+  Actions tab, never on push) and deploys `apps/api`,
+  `apps/workers/message-consumer`, and `apps/workers/voice-consumer` via
+  `wrangler deploy` with a custom-scoped `CLOUDFLARE_API_TOKEN`. It takes a
+  `target_environment` input (`staging` or `production`) that selects a
+  GitHub Environment (Settings → Environments) — configure required
+  reviewers on the `production` environment there and GitHub will pause the
+  run for manual approval before it deploys anything. This is the
+  manual-approval gate; there is no separate auto-deploying "staging"
+  pipeline.
 
 This exists specifically because Cloudflare Workers Builds' git-integration
 auto-deploy (its own separate mechanism) uses an auto-provisioned deploy token
@@ -79,20 +98,32 @@ every single push (this was hit repeatedly and is the reason this pipeline
 exists). A custom token with real Queues permission does not have this
 problem, so bindings declared in `wrangler.toml` stay applied permanently.
 
+Note: `apps/api`/`apps/workers/*`'s `wrangler.toml` files do not yet declare
+per-environment `[env.staging]`/`[env.production]` blocks (separate Worker
+names, queues, R2 buckets — see "Environments" below), so today both
+`target_environment` choices deploy the same underlying Workers; what differs
+is which GitHub Environment's reviewers/secrets gate the run. Add the
+`[env.*]` blocks and a matching `--env` flag to the deploy commands in
+`deploy.yml` once real staging/production separation is provisioned.
+
 ### One-time setup
 
 1. Create a Cloudflare API token (My Profile → API Tokens → Create Token →
    Custom): **Account → Workers Queues → Edit**, **Account → Workers
    Scripts → Edit**, scoped to the account these Workers live in.
-2. Add two repository secrets (Settings → Secrets and variables → Actions):
-   `CLOUDFLARE_API_TOKEN` (the token above) and `CLOUDFLARE_ACCOUNT_ID`
-   (Cloudflare dashboard → Workers & Pages → Overview, right sidebar).
+2. Create `staging` and `production` environments (Settings → Environments).
+   Add `CLOUDFLARE_API_TOKEN` (the token above) and `CLOUDFLARE_ACCOUNT_ID`
+   (Cloudflare dashboard → Workers & Pages → Overview, right sidebar) as
+   environment secrets on each — as repository-level secrets if both
+   environments currently share one Cloudflare account, or scoped
+   per-environment once separate accounts/tokens exist. Add required
+   reviewers to the `production` environment so `deploy.yml` pauses for
+   approval whenever `target_environment: production` is selected.
 3. **Disable Workers Builds' git integration** for `dravonixapp`,
    `dravonix-whatsapp-ai-platform`, and `dravonix-audio` (each Worker →
    Settings → Build → disconnect/disable). Leaving both mechanisms active
    means both deploy on the same push — redundant, and Workers Builds' would
    still periodically wipe the Queues bindings this pipeline exists to fix.
 
-The `deploy` job's `if` condition is currently scoped to one specific branch;
-update it (or generalize it, e.g. to `main`) once this repository settles on
-a real branching/release strategy.
+To deploy, go to Actions → Deploy → Run workflow, pick `staging` or
+`production`, and run it.

@@ -34,7 +34,7 @@ npx wrangler queues create dravonix-notification-queue-dlq
 `apps/api/wrangler.toml` declares producer bindings for the message and voice
 queues, and `apps/workers/message-consumer`/`apps/workers/voice-consumer`
 declare the matching consumer bindings. **These only actually apply if
-deployed via `.github/workflows/ci.yml`'s `deploy` job** (a custom-scoped
+deployed via `.github/workflows/deploy.yml`** (a custom-scoped
 `CLOUDFLARE_API_TOKEN`, see `DEPLOYMENT.md`) -- Cloudflare Workers Builds'
 own auto-provisioned deploy token cannot manage Queues at all and silently
 drops these bindings on every deploy through it. Add consumer bindings (with

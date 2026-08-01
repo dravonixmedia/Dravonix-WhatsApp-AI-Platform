@@ -1,0 +1,71 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: >-
+          GitHub Environment to deploy under. Selecting "production" only
+          runs once approved by that environment's required reviewers
+          (configure this in Settings → Environments → production) — this is
+          the manual-approval gate for production deploys. There is no
+          automatic deploy on push; every deploy is a deliberate, human-
+          triggered run of this workflow.
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+
+concurrency:
+  group: deploy-${{ inputs.target_environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Cloudflare Workers (${{ inputs.target_environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_environment }}
+    # NOTE: apps/api and apps/workers/*/wrangler.toml do not yet declare
+    # per-environment [env.staging]/[env.production] blocks (separate Worker
+    # names, queues, R2 buckets — see DEPLOYMENT.md's "Environments" section).
+    # Until that split exists, both choices above deploy the same underlying
+    # Workers; what differs today is which GitHub Environment's required
+    # reviewers and secrets (CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID) gate
+    # the run. Add the wrangler.toml [env.*] blocks and a `--env` flag on the
+    # deploy commands below once real staging/production separation lands.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Deploy apps/api (dravonixapp)
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm deploy
+
+      - name: Deploy message-consumer (dravonix-whatsapp-ai-platform)
+        working-directory: apps/workers/message-consumer
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm deploy
+
+      - name: Deploy voice-consumer (dravonix-audio)
+        working-directory: apps/workers/voice-consumer
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm deploy
