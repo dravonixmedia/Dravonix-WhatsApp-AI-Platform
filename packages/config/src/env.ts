@@ -56,7 +56,7 @@ const rawEnvSchema = z.object({
   // vars above remain for GoogleSpeechToTextProvider/GoogleTextToSpeechProvider,
   // which stay available as an alternative implementation.
   ELEVENLABS_API_KEY: z.string().optional(),
-  ELEVENLABS_VOICE_ID_DEFAULT: z.string().default("21m00Tcm4TlvDq8ikWAM"),
+  ELEVENLABS_VOICE_ID_DEFAULT: z.string().default("Jzzpex8KZbIGNI57kL48"),
   ELEVENLABS_TTS_MODEL_ID: z.string().default("eleven_multilingual_v2"),
   ELEVENLABS_STT_MODEL_ID: z.string().default("scribe_v1"),
 
