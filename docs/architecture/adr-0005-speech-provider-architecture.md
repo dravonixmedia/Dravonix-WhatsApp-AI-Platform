@@ -21,9 +21,11 @@ running in a Cloudflare Workers environment where bundling FFmpeg is impractical
     synthesize(input: TextToSpeechInput): Promise<TextToSpeechResult>;
   }
   ```
-- `GoogleSpeechToTextProvider` / `GoogleTextToSpeechProvider` implement these using
-  Google Cloud Speech-to-Text / Text-to-Speech REST APIs, selected when
-  `GOOGLE_CLOUD_CREDENTIALS` is configured.
+- `GoogleTextToSpeechProvider` implements `TextToSpeechProvider` using the Google
+  Cloud Text-to-Speech REST API, selected when `GOOGLE_CLOUD_CREDENTIALS` is
+  configured. `GoogleSpeechToTextProvider` implements `SpeechToTextProvider` the
+  same way and remains available, but production STT now uses
+  `WhisperSpeechToTextProvider` instead -- see Update below.
 - `MockSpeechToTextProvider` / `MockTextToSpeechProvider` implement the same
   interfaces deterministically, used in tests and local development without Google
   credentials.
@@ -53,3 +55,26 @@ running in a Cloudflare Workers environment where bundling FFmpeg is impractical
 - Adding a second STT/TTS vendor later (e.g. for cost or accuracy reasons in a
   specific language) means a new adapter, no changes to `voice-consumer` or the
   reply-mode resolution logic.
+
+## Update: STT switched to Whisper
+
+Production STT (`apps/workers/voice-consumer`'s composition root) now injects
+`WhisperSpeechToTextProvider` (OpenAI `audio/transcriptions`, requires
+`OPENAI_API_KEY`) instead of `GoogleSpeechToTextProvider`, for two reasons
+confirmed against real WhatsApp voice notes:
+
+- Whisper accepts Ogg/Opus directly and determines the sample rate itself.
+  Google's API requires an explicit `sampleRateHertz` that must match the
+  file's actual encoding, and direct inspection of a real WhatsApp voice note's
+  Ogg Opus header found it declares 24000 Hz -- not a value that can be safely
+  assumed for every client/version, and wrong twice before this was confirmed.
+- Whisper handles colloquial/code-switched regional speech (e.g. Malayalam
+  slang) noticeably better than Google's standard recognition model in
+  practice, and auto-detects language reliably enough that no `languageCode`
+  hint is sent (forcing one would actively hurt accuracy whenever a customer
+  speaks a different one of their enabled languages).
+
+TTS is unchanged (still Google) since no equivalent issue was observed there.
+`GoogleSpeechToTextProvider` and its test coverage remain in `packages/speech`
+as a working alternative implementation, just not the one wired into
+`voice-consumer` today.

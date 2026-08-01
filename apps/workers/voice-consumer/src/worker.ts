@@ -6,8 +6,8 @@ import { PostgresKnowledgeRetriever } from "@dravonix/knowledge";
 import {
   fetchGoogleAccessToken,
   parseGoogleServiceAccountJson,
-  GoogleSpeechToTextProvider,
   GoogleTextToSpeechProvider,
+  WhisperSpeechToTextProvider,
 } from "@dravonix/speech";
 import { R2StorageProvider, type R2BucketLike } from "@dravonix/storage";
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
@@ -45,6 +45,7 @@ export interface WorkerEnv {
   ANTHROPIC_API_KEY?: string;
   META_ACCESS_TOKEN?: string;
   GOOGLE_CLOUD_CREDENTIALS?: string;
+  OPENAI_API_KEY?: string;
   AUDIO_BUCKET?: R2BucketLike;
 }
 
@@ -82,6 +83,11 @@ export default {
       retryEntireBatch(batch);
       return;
     }
+    if (!env.OPENAI_API_KEY) {
+      logger.error("Voice consumer misconfigured: OPENAI_API_KEY missing");
+      retryEntireBatch(batch);
+      return;
+    }
     if (!env.AUDIO_BUCKET) {
       logger.error("Voice consumer misconfigured: AUDIO_BUCKET R2 binding missing");
       retryEntireBatch(batch);
@@ -95,9 +101,8 @@ export default {
     });
 
     const googleAccount = parseGoogleServiceAccountJson(env.GOOGLE_CLOUD_CREDENTIALS);
-    // Shared per-batch token cache: STT and TTS both need a bearer token for
-    // the same service account/scope, so one call fetches it for both rather
-    // than requesting a fresh token per provider call.
+    // Cached per-batch: TTS (voice replies) still uses Google, so this token
+    // is fetched once and reused across calls rather than per-message.
     let cachedToken: Promise<string> | null = null;
     const getAccessToken = (): Promise<string> => {
       cachedToken ??= fetchGoogleAccessToken(googleAccount, GOOGLE_CLOUD_SCOPE).then(
@@ -122,7 +127,7 @@ export default {
         accessToken: env.META_ACCESS_TOKEN,
         graphApiVersion: platformEnv.META_GRAPH_API_VERSION,
       }),
-      sttProvider: new GoogleSpeechToTextProvider({ getAccessToken }),
+      sttProvider: new WhisperSpeechToTextProvider({ apiKey: env.OPENAI_API_KEY }),
       ttsProvider: new GoogleTextToSpeechProvider({
         getAccessToken,
         defaultVoice: platformEnv.GOOGLE_TTS_VOICE_DEFAULT,

@@ -1,11 +1,17 @@
 # GOOGLE_SPEECH_SETUP.md
 
+Covers Google Cloud Text-to-Speech (voice replies). Speech-to-text
+(transcribing inbound voice notes) uses OpenAI Whisper instead -- set
+`OPENAI_API_KEY` as a Cloudflare Worker secret (`wrangler secret put
+OPENAI_API_KEY`); no other setup is required for it. See
+`docs/architecture/adr-0005-speech-provider-architecture.md` for why.
+
 ## 1. Create a Google Cloud project and service account
 
 1. Create (or reuse) a Google Cloud project.
-2. Enable the **Cloud Speech-to-Text API** and **Cloud Text-to-Speech API**.
+2. Enable the **Cloud Text-to-Speech API**.
 3. Create a service account with the `roles/speech.client` role (or a
-   narrower custom role limited to the speech/TTS APIs).
+   narrower custom role limited to the TTS API).
 4. Create a JSON key for the service account.
 
 ## 2. Configure environment variables
@@ -45,8 +51,8 @@ key using the same Web Crypto primitives the adapter uses in production.
 ```typescript
 import {
   fetchGoogleAccessToken,
-  GoogleSpeechToTextProvider,
   GoogleTextToSpeechProvider,
+  WhisperSpeechToTextProvider,
 } from "@dravonix/speech";
 
 const getAccessToken = async () => {
@@ -57,36 +63,41 @@ const getAccessToken = async () => {
   return access_token;
 };
 
-const stt = new GoogleSpeechToTextProvider({ getAccessToken });
+const stt = new WhisperSpeechToTextProvider({ apiKey: env.OPENAI_API_KEY });
 const tts = new GoogleTextToSpeechProvider({
   getAccessToken,
   defaultVoice: env.GOOGLE_TTS_VOICE_DEFAULT,
 });
 ```
 
-A production composition root should cache the access token until shortly
-before its `expires_in` elapses rather than fetching a new one per request.
+A production composition root should cache the Google access token until
+shortly before its `expires_in` elapses rather than fetching a new one per
+request (Whisper needs no such token -- it's a plain bearer API key).
 
 ## Without credentials
 
 If `GOOGLE_CLOUD_CREDENTIALS` is unset, `env.googleSpeechConfigured` is
-`false` and the composition root should select `MockSpeechToTextProvider` /
-`MockTextToSpeechProvider` instead (`packages/speech/src/providers/mockProvider.ts`),
-which return deterministic results with no network call.
+`false` and the composition root should select `MockTextToSpeechProvider`
+instead (`packages/speech/src/providers/mockProvider.ts`), which returns
+deterministic results with no network call. Same for `OPENAI_API_KEY` unset
+and `MockSpeechToTextProvider`.
 
 ## Language configuration
 
-STT requests carry `languageCode` (primary hint) and
-`alternativeLanguageCodes` (e.g. English as an alternative when the primary is
-Malayalam, for Malayalam-English mixed speech — Master Prompt section 5), both
-sourced from the company's `enabled_languages` setting. TTS requests OGG/Opus
-output directly (`audioConfig.audioEncoding = "OGG_OPUS"`) so no transcoding
-step is needed before sending a WhatsApp voice reply.
+TTS requests OGG/Opus output directly (`audioConfig.audioEncoding =
+"OGG_OPUS"`) so no transcoding step is needed before sending a WhatsApp voice
+reply, and pick a language-specific voice from the company's
+`defaultVoiceByLanguage` setting.
+
+Whisper (STT) auto-detects the spoken language itself and is not sent a
+language hint -- forcing one based on the company's configured primary
+language would hurt accuracy whenever a customer speaks a different one of
+their enabled languages, which is exactly the case multi-language support
+exists for (e.g. Malayalam-English mixed speech, Master Prompt section 5).
 
 ## Outstanding: real accuracy validation
 
-Malayalam, Hindi, and Arabic transcription accuracy has **not** been validated
-against real audio samples in this development environment (no physical audio
-files or live credential available). Before considering the voice feature
-complete, record real sample audio in each supported language and verify
-transcription quality manually, per Master Prompt section 5.
+STT accuracy on real audio (not yet re-validated against Whisper since the
+switch from Google STT documented in ADR-0005) and Hindi/Arabic transcription
+generally still need verification against real recorded samples in each
+supported language before considering the voice feature complete.
