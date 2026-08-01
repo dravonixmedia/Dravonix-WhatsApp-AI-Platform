@@ -47,6 +47,12 @@ describe("loadEnv", () => {
     expect(env.anthropicConfigured).toBe(true);
     expect(env.razorpayConfigured).toBe(true);
     expect(env.googleSpeechConfigured).toBe(false);
+    expect(env.elevenLabsConfigured).toBe(false);
     expect(env.r2Configured).toBe(false);
+  });
+
+  it("marks elevenLabsConfigured true only when ELEVENLABS_API_KEY is present", () => {
+    const env = loadEnv({ ...base, ELEVENLABS_API_KEY: "sk-test" });
+    expect(env.elevenLabsConfigured).toBe(true);
   });
 });

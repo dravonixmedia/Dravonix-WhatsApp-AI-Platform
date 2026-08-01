@@ -21,14 +21,13 @@ running in a Cloudflare Workers environment where bundling FFmpeg is impractical
     synthesize(input: TextToSpeechInput): Promise<TextToSpeechResult>;
   }
   ```
-- `GoogleTextToSpeechProvider` implements `TextToSpeechProvider` using the Google
-  Cloud Text-to-Speech REST API, selected when `GOOGLE_CLOUD_CREDENTIALS` is
-  configured. `GoogleSpeechToTextProvider` implements `SpeechToTextProvider` the
-  same way and remains available, but production STT now uses
-  `WhisperSpeechToTextProvider` instead -- see Update below.
+- `GoogleTextToSpeechProvider` / `GoogleSpeechToTextProvider` implement
+  `TextToSpeechProvider` / `SpeechToTextProvider` using the Google Cloud
+  REST APIs. Both remain available as working alternative implementations,
+  but neither is what production is wired to today -- see Update below.
 - `MockSpeechToTextProvider` / `MockTextToSpeechProvider` implement the same
-  interfaces deterministically, used in tests and local development without Google
-  credentials.
+  interfaces deterministically, used in tests and local development without
+  any real provider credentials.
 - TTS output is requested directly in OGG/Opus where the provider supports it, so
   WhatsApp voice messages can be sent without a transcoding step. Format
   conversion, if ever required for a provider that can't emit OGG/Opus directly, is
@@ -56,25 +55,34 @@ running in a Cloudflare Workers environment where bundling FFmpeg is impractical
   specific language) means a new adapter, no changes to `voice-consumer` or the
   reply-mode resolution logic.
 
-## Update: STT switched to Whisper
+## Update history
 
-Production STT (`apps/workers/voice-consumer`'s composition root) now injects
-`WhisperSpeechToTextProvider` (OpenAI `audio/transcriptions`, requires
-`OPENAI_API_KEY`) instead of `GoogleSpeechToTextProvider`, for two reasons
-confirmed against real WhatsApp voice notes:
+1. **STT switched from Google to Whisper (OpenAI).** Google's STT API
+   requires an explicit `sampleRateHertz` matching the audio's actual
+   encoding, and direct inspection of a real WhatsApp voice note's Ogg Opus
+   header found it declares 24000 Hz -- not a value safely assumed for every
+   client/version, and wrong twice (16000, then 48000) before this was
+   confirmed. Whisper accepts Ogg/Opus directly and determines the sample
+   rate itself, sidestepping the problem entirely.
+2. **Both STT and TTS switched to ElevenLabs.** Whisper handled the sample
+   rate problem, but a real Malayalam voice note with colloquial/slang speech
+   still came back with an empty transcript. ElevenLabs (Scribe for STT) was
+   evaluated next and confirmed working against that same audio. TTS was
+   switched to ElevenLabs at the same time for voice-reply quality (more
+   natural-sounding than Google's standard Neural2 voices), not because of a
+   specific bug.
 
-- Whisper accepts Ogg/Opus directly and determines the sample rate itself.
-  Google's API requires an explicit `sampleRateHertz` that must match the
-  file's actual encoding, and direct inspection of a real WhatsApp voice note's
-  Ogg Opus header found it declares 24000 Hz -- not a value that can be safely
-  assumed for every client/version, and wrong twice before this was confirmed.
-- Whisper handles colloquial/code-switched regional speech (e.g. Malayalam
-  slang) noticeably better than Google's standard recognition model in
-  practice, and auto-detects language reliably enough that no `languageCode`
-  hint is sent (forcing one would actively hurt accuracy whenever a customer
-  speaks a different one of their enabled languages).
+**Current state**: `apps/workers/voice-consumer`'s composition root injects
+`ElevenLabsSpeechToTextProvider` and `ElevenLabsTextToSpeechProvider`
+(both requiring `ELEVENLABS_API_KEY` -- see `ELEVENLABS_SETUP.md`) for both
+directions of the voice pipeline. Neither auto-detected-language provider
+(Whisper, ElevenLabs) is sent a `languageCode` hint -- forcing one based on
+the company's configured primary language would hurt accuracy whenever a
+customer speaks a different one of their enabled languages, which is exactly
+the case multi-language support exists for.
 
-TTS is unchanged (still Google) since no equivalent issue was observed there.
-`GoogleSpeechToTextProvider` and its test coverage remain in `packages/speech`
-as a working alternative implementation, just not the one wired into
-`voice-consumer` today.
+`GoogleSpeechToTextProvider`, `GoogleTextToSpeechProvider`, and
+`WhisperSpeechToTextProvider` all remain in `packages/speech` with their test
+coverage intact, as working alternative implementations -- just not the ones
+wired into `voice-consumer` today. Swapping again later is a change to that
+one composition root file, per the Consequences section above.

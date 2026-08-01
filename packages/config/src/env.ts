@@ -51,6 +51,15 @@ const rawEnvSchema = z.object({
   GOOGLE_STT_LOCATION: z.string().default("global"),
   GOOGLE_TTS_VOICE_DEFAULT: z.string().default("en-US-Neural2-C"),
 
+  // ElevenLabs is the default voice provider (both STT and TTS) -- see
+  // docs/architecture/adr-0005-speech-provider-architecture.md. The GOOGLE_*
+  // vars above remain for GoogleSpeechToTextProvider/GoogleTextToSpeechProvider,
+  // which stay available as an alternative implementation.
+  ELEVENLABS_API_KEY: z.string().optional(),
+  ELEVENLABS_VOICE_ID_DEFAULT: z.string().default("21m00Tcm4TlvDq8ikWAM"),
+  ELEVENLABS_TTS_MODEL_ID: z.string().default("eleven_multilingual_v2"),
+  ELEVENLABS_STT_MODEL_ID: z.string().default("scribe_v1"),
+
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
@@ -73,6 +82,7 @@ export interface PlatformEnv extends RawEnv {
   whatsappConfigured: boolean;
   anthropicConfigured: boolean;
   googleSpeechConfigured: boolean;
+  elevenLabsConfigured: boolean;
   razorpayConfigured: boolean;
   r2Configured: boolean;
 }
@@ -121,6 +131,7 @@ export function loadEnv(source: Record<string, string | undefined>): PlatformEnv
     ),
     anthropicConfigured: Boolean(raw.ANTHROPIC_API_KEY),
     googleSpeechConfigured: Boolean(raw.GOOGLE_CLOUD_CREDENTIALS),
+    elevenLabsConfigured: Boolean(raw.ELEVENLABS_API_KEY),
     razorpayConfigured: Boolean(raw.RAZORPAY_KEY_ID && raw.RAZORPAY_KEY_SECRET),
     r2Configured: Boolean(raw.R2_ACCOUNT_ID && raw.R2_ACCESS_KEY_ID && raw.R2_SECRET_ACCESS_KEY),
   };

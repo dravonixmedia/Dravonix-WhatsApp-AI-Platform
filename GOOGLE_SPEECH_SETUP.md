@@ -1,17 +1,20 @@
 # GOOGLE_SPEECH_SETUP.md
 
-Covers Google Cloud Text-to-Speech (voice replies). Speech-to-text
-(transcribing inbound voice notes) uses OpenAI Whisper instead -- set
-`OPENAI_API_KEY` as a Cloudflare Worker secret (`wrangler secret put
-OPENAI_API_KEY`); no other setup is required for it. See
-`docs/architecture/adr-0005-speech-provider-architecture.md` for why.
+Google Cloud Speech-to-Text/Text-to-Speech is an **alternative** provider
+implementation, not the default. The default (both STT and TTS) is
+ElevenLabs — see `ELEVENLABS_SETUP.md`. Use this doc only if you're switching
+`apps/workers/voice-consumer`'s composition root back to Google, or adding it
+as a company-specific override in the future.
+
+See `docs/architecture/adr-0005-speech-provider-architecture.md` for the full
+history of provider changes and why.
 
 ## 1. Create a Google Cloud project and service account
 
 1. Create (or reuse) a Google Cloud project.
-2. Enable the **Cloud Text-to-Speech API**.
+2. Enable the **Cloud Speech-to-Text API** and **Cloud Text-to-Speech API**.
 3. Create a service account with the `roles/speech.client` role (or a
-   narrower custom role limited to the TTS API).
+   narrower custom role limited to the speech/TTS APIs).
 4. Create a JSON key for the service account.
 
 ## 2. Configure environment variables
@@ -51,8 +54,8 @@ key using the same Web Crypto primitives the adapter uses in production.
 ```typescript
 import {
   fetchGoogleAccessToken,
+  GoogleSpeechToTextProvider,
   GoogleTextToSpeechProvider,
-  WhisperSpeechToTextProvider,
 } from "@dravonix/speech";
 
 const getAccessToken = async () => {
@@ -63,41 +66,42 @@ const getAccessToken = async () => {
   return access_token;
 };
 
-const stt = new WhisperSpeechToTextProvider({ apiKey: env.OPENAI_API_KEY });
+const stt = new GoogleSpeechToTextProvider({ getAccessToken });
 const tts = new GoogleTextToSpeechProvider({
   getAccessToken,
   defaultVoice: env.GOOGLE_TTS_VOICE_DEFAULT,
 });
 ```
 
-A production composition root should cache the Google access token until
-shortly before its `expires_in` elapses rather than fetching a new one per
-request (Whisper needs no such token -- it's a plain bearer API key).
+A production composition root should cache the access token until shortly
+before its `expires_in` elapses rather than fetching a new one per request.
+
+**Known issue if you switch back to `GoogleSpeechToTextProvider`**: Google's
+STT API requires an explicit `sampleRateHertz` matching the audio's actual Ogg
+Opus header. Direct inspection of a real WhatsApp voice note found this to be
+24000 Hz, not the commonly-assumed 16000 or 48000 — the provider reads it
+directly from each file's header rather than assuming a fixed value, but this
+is worth knowing if you extend or replace that logic.
 
 ## Without credentials
 
 If `GOOGLE_CLOUD_CREDENTIALS` is unset, `env.googleSpeechConfigured` is
-`false` and the composition root should select `MockTextToSpeechProvider`
-instead (`packages/speech/src/providers/mockProvider.ts`), which returns
-deterministic results with no network call. Same for `OPENAI_API_KEY` unset
-and `MockSpeechToTextProvider`.
+`false` and the composition root should select `MockSpeechToTextProvider` /
+`MockTextToSpeechProvider` instead (`packages/speech/src/providers/mockProvider.ts`),
+which return deterministic results with no network call.
 
 ## Language configuration
 
-TTS requests OGG/Opus output directly (`audioConfig.audioEncoding =
-"OGG_OPUS"`) so no transcoding step is needed before sending a WhatsApp voice
-reply, and pick a language-specific voice from the company's
-`defaultVoiceByLanguage` setting.
-
-Whisper (STT) auto-detects the spoken language itself and is not sent a
-language hint -- forcing one based on the company's configured primary
-language would hurt accuracy whenever a customer speaks a different one of
-their enabled languages, which is exactly the case multi-language support
-exists for (e.g. Malayalam-English mixed speech, Master Prompt section 5).
+STT requests carry `languageCode` (primary hint) and
+`alternativeLanguageCodes` (e.g. English as an alternative when the primary is
+Malayalam, for Malayalam-English mixed speech — Master Prompt section 5), both
+sourced from the company's `enabled_languages` setting. TTS requests OGG/Opus
+output directly (`audioConfig.audioEncoding = "OGG_OPUS"`) so no transcoding
+step is needed before sending a WhatsApp voice reply.
 
 ## Outstanding: real accuracy validation
 
-STT accuracy on real audio (not yet re-validated against Whisper since the
-switch from Google STT documented in ADR-0005) and Hindi/Arabic transcription
-generally still need verification against real recorded samples in each
-supported language before considering the voice feature complete.
+Malayalam, Hindi, and Arabic transcription accuracy has not been validated
+against real audio samples using this provider (ElevenLabs is what's actually
+deployed — see its own outstanding-validation note in `ELEVENLABS_SETUP.md`
+and ADR-0005).

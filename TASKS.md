@@ -84,23 +84,42 @@ Legend: `[x]` done · `[~]` partially done / mocked pending real credentials · 
 
 ## Phase 5 — Voice-note system
 
-- [x] `packages/speech`: STT/TTS provider interfaces, Google Cloud
-      Speech-to-Text/Text-to-Speech REST adapters requesting OGG/Opus
-      directly, mock adapters
-- [x] From-scratch Google OAuth2 service-account JWT (RS256) signer on Web
-      Crypto, with a genuine cryptographic sign/verify round-trip test
+- [x] `packages/speech`: STT/TTS provider interfaces (`SpeechToTextProvider`,
+      `TextToSpeechProvider`), mock adapters
+- [x] Google Cloud Speech-to-Text/Text-to-Speech REST adapters (OGG/Opus
+      output directly) and a from-scratch OAuth2 service-account JWT (RS256)
+      signer on Web Crypto, cryptographically tested. Remain available as an
+      alternative implementation; no longer the default provider (see below).
+- [x] `WhisperSpeechToTextProvider` (OpenAI) — briefly the default STT
+      provider after live testing found Google's API required guessing an
+      Ogg Opus sample rate that didn't match real WhatsApp audio (confirmed
+      24000 Hz via direct header inspection, not the commonly-assumed 16000
+      or 48000). Superseded by ElevenLabs below; remains available.
+- [x] `ElevenLabsSpeechToTextProvider` / `ElevenLabsTextToSpeechProvider` —
+      current default for both STT and TTS (`apps/workers/voice-consumer`'s
+      composition root), chosen for Ogg/Opus support with no sample-rate
+      guessing and better colloquial/code-switched regional speech handling
+      than Google's standard model. See
+      `docs/architecture/adr-0005-speech-provider-architecture.md`.
 - [x] Reply-mode resolution implementing the full Master Prompt section 4
       precedence chain (contact preference overrides company default unless
       voice is disabled/plan-gated/suspended/over-limit/provider-unavailable)
 - [x] `packages/storage`: tenant-scoped key builder (path-traversal rejected),
       R2 adapter, in-memory mock adapter, retention-expiry helpers
-- [ ] **apps/workers/voice-consumer** itself (audio download → STT →
-      AI → TTS → WhatsApp voice send, wired the same way message-consumer is)
-      — not yet built; the pieces it needs (speech, storage, AI, billing,
-      WhatsApp send) all exist and are tested individually
-- [ ] Real Malayalam/Hindi/Arabic sample-audio manual accuracy test — requires
-      a physical audio sample and a live Google Cloud STT credential; **not
-      run in this session**, tracked as an outstanding limitation
+- [x] **apps/workers/voice-consumer** (audio download → STT → AI → TTS →
+      WhatsApp voice send) — built, deployed, and exercised end to end
+      against the live Meta test number and a live Anthropic key during this
+      integration's debugging; entitlement/suspension checks (ADR-0006) gate
+      every STT/TTS/Claude call the same way message-consumer does.
+- [ ] Real multi-language/accent sample-audio accuracy test against
+      ElevenLabs — one real Malayalam voice note has been tested; the fuller
+      matrix (English/Hindi/Arabic, multiple speakers/accents/conditions) has
+      **not** been run. Tracked as an outstanding limitation.
+- [ ] Dashboard voice settings UI (provider/model/voice selection, per-company
+      voice usage, connection test) and dedicated ElevenLabs usage-metering
+      records beyond the existing `media_files`-based entitlement usage
+      calculation — not built; a separate, larger piece of work from this
+      integration.
 
 ## Phase 6 — Inbox & human handover
 
@@ -211,34 +230,42 @@ Legend: `[x]` done · `[~]` partially done / mocked pending real credentials · 
 
 ## Outstanding limitations (honest list)
 
-1. **No live external credentials** — Meta WABA/phone number, Anthropic API
-   key, Google Cloud service account, Razorpay live keys, and a real Supabase
-   project are all absent from this environment. Every provider has a tested
-   mock adapter; switching to the real one is a configuration change, not a
-   code change, documented in each `*_SETUP.md` file.
-2. **Malayalam/Hindi/Arabic voice accuracy is unvalidated** — the Google
-   Speech adapter and its from-scratch OAuth2 auth are implemented and
-   cryptographically tested, but no real audio sample has been transcribed.
-3. **No live deployment** — nothing has been deployed to Cloudflare or a real
-   Supabase project from this session. The database schema and RLS _have_
-   been verified against a real local Postgres 16 + pgvector instance, which
-   is the closest verification possible without cloud provisioning.
-4. **Four of five queue consumers are unbuilt**: only
-   `apps/workers/message-consumer` exists. `voice-consumer`,
+1. **Live credentials**: Meta WABA/phone number, Anthropic API key, and a real
+   Supabase project are configured and working in production. Google Cloud
+   service account credentials and Razorpay live keys are still absent.
+   Every provider has a tested mock adapter regardless; switching to a real
+   one is a configuration change, not a code change, documented in each
+   `*_SETUP.md` file.
+2. **Malayalam/Hindi/Arabic voice accuracy is only partially validated** —
+   one real Malayalam voice note has been transcribed successfully via
+   ElevenLabs; Hindi, Arabic, and a fuller matrix of speakers/accents/audio
+   conditions have not been tested.
+3. **`apps/api`, `voice-consumer`, and `message-consumer` are deployed to
+   Cloudflare** (dravonixapp, dravonix-audio, dravonix-whatsapp-ai-platform)
+   and have processed real messages against the live Meta test number.
    `billing-consumer`, `knowledge-consumer`, and `notification-consumer` are
-   not yet implemented — the packages they would call
-   (`packages/speech`, `packages/billing`, `packages/knowledge`,
-   `packages/notifications`) are built and independently tested.
-5. **apps/api has only the WhatsApp webhook and health routes.** No REST API
+   not yet built or deployed — the packages they would call
+   (`packages/billing`, `packages/knowledge`, `packages/notifications`) are
+   built and independently tested. Cloudflare Workers Builds' CI deploy token
+   cannot bind Queues (a confirmed platform limitation); every deploy
+   currently requires manually reattaching queue producer/consumer bindings
+   via the dashboard, tracked as an operational gap worth automating (a
+   custom-scoped `wrangler deploy` via GitHub Actions, replacing Workers
+   Builds' auto-provisioned token, would fix this permanently).
+4. **apps/api has only the WhatsApp webhook and health routes.** No REST API
    exists yet for conversations, leads, knowledge, billing, team management,
    or super-admin actions — these are the next concrete step for anyone
    continuing this work, and the domain logic each would call already exists
    in `packages/*`.
-6. **apps/web is a UI shell**, not a data-connected dashboard: every page
+5. **apps/web is a UI shell**, not a data-connected dashboard: every page
    beyond login/branding renders a documented placeholder or empty state
    rather than live data, because there is no deployed API for it to call.
-7. **No browser/E2E tests, no load tests, no third-party security audit.**
-8. **Meta Embedded Signup is designed for but not implemented**, pending a
+   Voice settings (provider/model/voice selection, per-company usage,
+   connection test) are part of this gap, not built yet.
+6. **No browser/E2E tests, no load tests, no third-party security audit.**
+7. **Meta Embedded Signup is designed for but not implemented**, pending a
    Meta Tech Provider/Solution Partner account.
-9. **No CD pipeline** — CI runs lint/typecheck/test/RLS on every push; nothing
-   auto-deploys.
+8. **CI auto-deploys `apps/api`, `voice-consumer`, and `message-consumer` to
+   Cloudflare on every push** (Workers Builds' git integration) but does not
+   reattach queue bindings, per item 3 above — not a true zero-touch CD
+   pipeline.

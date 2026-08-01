@@ -37,7 +37,7 @@ packages/
   tenant          tenant context resolution, permission checks, dev tenant selector
   whatsapp        webhook signature/parsing/routing, Graph API + mock send adapters
   ai              Claude structured-output engine: schema, prompt builder, safety rules, orchestration
-  speech          STT/TTS interfaces, Whisper (STT) + Google (TTS, from-scratch OAuth2 JWT auth) adapters, reply-mode logic
+  speech          STT/TTS interfaces, ElevenLabs (default) + Whisper/Google (alternatives, incl. from-scratch OAuth2 JWT auth) adapters, reply-mode logic
   billing         internal subscription state machine, entitlement guard, Razorpay adapter
   knowledge       tenant-scoped retriever + ingestion pipeline
   notifications   notification provider abstraction (billing-category audience guard)
@@ -89,7 +89,8 @@ Postgres instance (no Supabase account needed for this), see
 | `META_TEST_NUMBER_SETUP.md`    | Stage A: connecting the Meta WhatsApp Cloud API test number         |
 | `WHATSAPP_PRODUCTION_SETUP.md` | Stage B: onboarding a real client's WhatsApp Business Account       |
 | `ANTHROPIC_SETUP.md`           | Configuring Claude / verifying the model ID                         |
-| `GOOGLE_SPEECH_SETUP.md`       | Configuring Google Cloud Text-to-Speech + OpenAI Whisper (STT)      |
+| `ELEVENLABS_SETUP.md`          | Configuring ElevenLabs (default STT + TTS provider)                 |
+| `GOOGLE_SPEECH_SETUP.md`       | Configuring Google Cloud Speech (alternative STT/TTS provider)      |
 | `RAZORPAY_TEST_SETUP.md`       | Configuring Razorpay in test mode                                   |
 | `SUPABASE_SETUP.md`            | Provisioning Supabase, running migrations, creating the super-admin |
 | `CLOUDFLARE_SETUP.md`          | Provisioning Workers, Queues, R2, and Pages                         |

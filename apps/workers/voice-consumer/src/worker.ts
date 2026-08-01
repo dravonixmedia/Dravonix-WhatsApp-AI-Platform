@@ -3,12 +3,7 @@ import { loadEnv } from "@dravonix/config";
 import { createServiceRoleClient } from "@dravonix/database";
 import { createLogger } from "@dravonix/observability";
 import { PostgresKnowledgeRetriever } from "@dravonix/knowledge";
-import {
-  fetchGoogleAccessToken,
-  parseGoogleServiceAccountJson,
-  GoogleTextToSpeechProvider,
-  WhisperSpeechToTextProvider,
-} from "@dravonix/speech";
+import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider } from "@dravonix/speech";
 import { R2StorageProvider, type R2BucketLike } from "@dravonix/storage";
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
 import {
@@ -35,8 +30,6 @@ interface QueueBatch<T> {
   readonly messages: readonly QueueMessage<T>[];
 }
 
-const GOOGLE_CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
-
 export interface WorkerEnv {
   APP_ENV?: string;
   SUPABASE_URL?: string;
@@ -44,8 +37,7 @@ export interface WorkerEnv {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   META_ACCESS_TOKEN?: string;
-  GOOGLE_CLOUD_CREDENTIALS?: string;
-  OPENAI_API_KEY?: string;
+  ELEVENLABS_API_KEY?: string;
   AUDIO_BUCKET?: R2BucketLike;
 }
 
@@ -78,13 +70,8 @@ export default {
       retryEntireBatch(batch);
       return;
     }
-    if (!env.GOOGLE_CLOUD_CREDENTIALS) {
-      logger.error("Voice consumer misconfigured: GOOGLE_CLOUD_CREDENTIALS missing");
-      retryEntireBatch(batch);
-      return;
-    }
-    if (!env.OPENAI_API_KEY) {
-      logger.error("Voice consumer misconfigured: OPENAI_API_KEY missing");
+    if (!env.ELEVENLABS_API_KEY) {
+      logger.error("Voice consumer misconfigured: ELEVENLABS_API_KEY missing");
       retryEntireBatch(batch);
       return;
     }
@@ -99,17 +86,6 @@ export default {
       anonKey: env.SUPABASE_ANON_KEY,
       serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
     });
-
-    const googleAccount = parseGoogleServiceAccountJson(env.GOOGLE_CLOUD_CREDENTIALS);
-    // Cached per-batch: TTS (voice replies) still uses Google, so this token
-    // is fetched once and reused across calls rather than per-message.
-    let cachedToken: Promise<string> | null = null;
-    const getAccessToken = (): Promise<string> => {
-      cachedToken ??= fetchGoogleAccessToken(googleAccount, GOOGLE_CLOUD_SCOPE).then(
-        (r) => r.access_token,
-      );
-      return cachedToken;
-    };
 
     const deps: VoiceConsumerDeps = {
       repo: new SupabaseVoiceConsumerRepository(supabase),
@@ -127,10 +103,14 @@ export default {
         accessToken: env.META_ACCESS_TOKEN,
         graphApiVersion: platformEnv.META_GRAPH_API_VERSION,
       }),
-      sttProvider: new WhisperSpeechToTextProvider({ apiKey: env.OPENAI_API_KEY }),
-      ttsProvider: new GoogleTextToSpeechProvider({
-        getAccessToken,
-        defaultVoice: platformEnv.GOOGLE_TTS_VOICE_DEFAULT,
+      sttProvider: new ElevenLabsSpeechToTextProvider({
+        apiKey: env.ELEVENLABS_API_KEY,
+        modelId: platformEnv.ELEVENLABS_STT_MODEL_ID,
+      }),
+      ttsProvider: new ElevenLabsTextToSpeechProvider({
+        apiKey: env.ELEVENLABS_API_KEY,
+        defaultVoiceId: platformEnv.ELEVENLABS_VOICE_ID_DEFAULT,
+        modelId: platformEnv.ELEVENLABS_TTS_MODEL_ID,
       }),
       storageProvider: new R2StorageProvider(env.AUDIO_BUCKET),
       logger,
