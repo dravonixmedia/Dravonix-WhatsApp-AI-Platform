@@ -114,6 +114,63 @@ every single push (this was hit repeatedly and is the reason this pipeline
 exists). A custom token with real Queues permission does not have this
 problem, so bindings declared in `wrangler.toml` stay applied permanently.
 
+## Cloudflare Workers Builds still auto-deploying — required manual action
+
+If commit checks show `ci.yml` passing (validation only) while
+`dravonixapp`, `dravonix-whatsapp-ai-platform`, and/or `dravonix-audio` still
+show a new Cloudflare build on every push, that build is **not** coming from
+anything in this repository's GitHub Actions config. This has been verified
+directly: `.github/workflows/` contains exactly two files, `ci.yml` and
+`deploy.yml`. `ci.yml` never runs `wrangler deploy` (dry-run only, no
+Cloudflare credentials in scope). `deploy.yml` only runs on manual
+`workflow_dispatch` and is gated by the `check-ci` job and, for `production`,
+GitHub Environment reviewer approval — it never fires on `push`. There is no
+third workflow, no `cloudflare/wrangler-action`/`cloudflare/pages-action` step
+anywhere in the repo, and no repo-committed config (e.g. a bots `settings.yml`
+or `CODEOWNERS`) that could reference or trigger one. **No GitHub workflow in
+this repository is unintentionally triggering Cloudflare Workers Builds.**
+
+Workers Builds is a separate, Cloudflare-native git integration: Cloudflare's
+own "Workers & Pages" GitHub App is installed against this repository
+independently of anything in `.github/workflows/`, and it triggers its own
+build directly from GitHub's push webhook — nothing in this repo can disable
+it. It can only be turned off from the Cloudflare side, and this is a
+required manual action if the architecture above (`ci.yml` validates,
+`deploy.yml` is the only deploy path) is to actually hold:
+
+1. **Disconnect the Git build integration for all three Workers**, once each,
+   in the Cloudflare Dashboard: **Workers & Pages → `dravonixapp` → Settings →
+   Builds → Disconnect**; repeat for `dravonix-whatsapp-ai-platform` and
+   `dravonix-audio`. This removes only the git-triggered auto-build — it does
+   not unpublish, roll back, or otherwise touch the currently deployed
+   version.
+2. Once disconnected, `deploy.yml` (`workflow_dispatch` + GitHub Environment
+   approval) is the **only** path anything gets deployed through — there is
+   no second mechanism left to race it or silently re-wipe `wrangler.toml`'s
+   Queues bindings.
+3. **Check GitHub → Settings → Branches → branch protection rules → required
+   status checks.** If a Cloudflare Workers Builds check (its name varies,
+   e.g. something under "Cloudflare Pages" or the Worker's own build check)
+   is currently listed as required, remove it once the integration above is
+   disconnected — a required check that can never report again permanently
+   blocks every future merge.
+4. **The three Workers and their currently deployed routes are preserved** —
+   disconnecting the build integration is a GitHub-App-permission change on
+   Cloudflare's side, not a deploy, delete, or rollback action.
+5. **Do not delete any Worker** as part of this. `dravonixapp`,
+   `dravonix-whatsapp-ai-platform`, and `dravonix-audio` keep running exactly
+   as currently deployed.
+6. **Do not deploy production** as part of performing this disconnect — it's
+   a dashboard-only change with no interaction with `deploy.yml`.
+
+**Old check results don't retroactively clean up.** GitHub's commit-check
+list is attached permanently to the commit it ran against; disconnecting
+Workers Builds today does not remove or update the Workers Builds check
+entries already recorded against past commits — that history is immutable.
+To see a clean check list with only `ci.yml`/`deploy.yml` (and no dangling
+Cloudflare Workers Builds entry), push a new commit after disconnecting and
+look at _that_ commit's checks, not an old one's.
+
 ### One-time setup
 
 1. Create a Cloudflare API token (My Profile → API Tokens → Create Token →
@@ -131,10 +188,11 @@ problem, so bindings declared in `wrangler.toml` stay applied permanently.
    reviewers to the `production` environment so `deploy.yml` pauses for
    approval whenever `target_environment: production` is selected.
 4. **Disable Workers Builds' git integration** for `dravonixapp`,
-   `dravonix-whatsapp-ai-platform`, and `dravonix-audio` (each Worker →
-   Settings → Build → disconnect/disable). Leaving both mechanisms active
-   means both deploy on the same push — redundant, and Workers Builds' would
-   still periodically wipe the Queues bindings this pipeline exists to fix.
+   `dravonix-whatsapp-ai-platform`, and `dravonix-audio` — see "Cloudflare
+   Workers Builds still auto-deploying — required manual action" above for
+   the full step-by-step. Leaving both mechanisms active means both deploy on
+   the same push — redundant, and Workers Builds' would still periodically
+   wipe the Queues bindings this pipeline exists to fix.
 
 To deploy, go to Actions → Deploy → Run workflow, pick `staging` or
 `production`, and run it.
