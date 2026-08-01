@@ -90,12 +90,24 @@ jobs:
       # wrangler version (confirmed: `wrangler deploy --log-level debug`
       # fails with a yargs CommandLineArgsError on 3.114.17) -- these env
       # vars are the only supported way to raise Wrangler's own log verbosity.
+      # WRANGLER_LOG_PATH is deliberately NOT set here: the `runner` context
+      # is not available while evaluating jobs.<job_id>.env (only github,
+      # needs, strategy, matrix, vars, secrets, inputs are) -- `${{ runner.temp }}`
+      # in this block fails workflow parsing before Wrangler even starts. It's
+      # set instead via $GITHUB_ENV in the "Configure Wrangler diagnostics"
+      # step below, which runs inside a step where `runner` is available.
       WRANGLER_LOG: debug
       WRANGLER_LOG_SANITIZE: true
-      WRANGLER_LOG_PATH: ${{ runner.temp }}/wrangler-logs
       FORCE_COLOR: 0
     steps:
       - uses: actions/checkout@v4
+
+      - name: Configure Wrangler diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "WRANGLER_LOG_PATH=${RUNNER_TEMP}/wrangler-logs" >> "$GITHUB_ENV"
+          mkdir -p "${RUNNER_TEMP}/wrangler-logs"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -152,9 +164,10 @@ jobs:
 
       - name: Print Wrangler logs on failure
         if: failure()
+        shell: bash
         run: |
           echo "===== Wrangler debug logs ====="
-          find "${{ runner.temp }}/wrangler-logs" \
+          find "$WRANGLER_LOG_PATH" \
             -type f \
             -name '*.log' \
             -print \
