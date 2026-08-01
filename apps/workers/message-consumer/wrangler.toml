@@ -6,6 +6,11 @@ compatibility_flags = ["nodejs_compat"]
 # Secrets (set via the Cloudflare dashboard or `wrangler secret put <NAME>`,
 # never committed): SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, SUPABASE_URL,
 # ANTHROPIC_API_KEY, META_ACCESS_TOKEN.
+#
+# This top-level (unnamed environment) config is used only by local
+# `wrangler dev` -- every real deploy goes through .github/workflows/deploy.yml,
+# which always passes an explicit --env staging or --env production (see
+# those blocks below). Nothing here is ever deployed directly.
 
 [vars]
 APP_ENV = "development"
@@ -22,3 +27,38 @@ APP_ENV = "development"
 queue = "dravonix-message-queue"
 max_batch_size = 10
 max_retries = 3
+
+# ---------------------------------------------------------------------------
+# Staging -- isolated Worker and queue. Distinct resource names mean a staging
+# deploy (`wrangler deploy --env staging`) cannot touch any production
+# resource. See CLOUDFLARE_SETUP.md for the full resource-name table and the
+# staging queue creation commands.
+# ---------------------------------------------------------------------------
+[env.staging]
+name = "dravonix-whatsapp-ai-platform-staging"
+
+[env.staging.vars]
+APP_ENV = "staging"
+
+[[env.staging.queues.consumers]]
+queue = "dravonix-message-queue-staging"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "dravonix-message-queue-staging-dlq"
+
+# ---------------------------------------------------------------------------
+# Production -- the long-lived live Worker (already deployed and serving real
+# WhatsApp traffic; see TASKS.md). Mirrors the top-level config so that
+# .github/workflows/deploy.yml can always deploy with an explicit --env flag.
+# ---------------------------------------------------------------------------
+[env.production]
+name = "dravonix-whatsapp-ai-platform"
+
+[env.production.vars]
+APP_ENV = "production"
+
+[[env.production.queues.consumers]]
+queue = "dravonix-message-queue"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "dravonix-message-queue-dlq"

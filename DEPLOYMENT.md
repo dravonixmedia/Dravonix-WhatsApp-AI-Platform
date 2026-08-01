@@ -47,10 +47,15 @@ this file is the deployment sequence.
 
 ## Environments
 
-Use distinct Cloudflare environments (`wrangler.toml`'s `[env.staging]`,
-`[env.production]`) and distinct Supabase projects per environment — never
-point a staging deployment at the production database. `APP_ENV` must be set
-correctly per environment; `packages/config/src/env.ts` enforces
+`apps/api` and `apps/workers/{message-consumer,voice-consumer}`'s
+`wrangler.toml` each declare `[env.staging]`/`[env.production]` blocks with
+genuinely distinct Worker names, queues, and (for voice-consumer) R2 bucket —
+see `CLOUDFLARE_SETUP.md`'s resource-name table for the exact deployed names.
+There is no shared name between the two environments, so a staging deploy
+cannot overwrite, rebind, or otherwise touch a production resource. Use a
+distinct Supabase project per environment too (see `SUPABASE_SETUP.md`) —
+never point a staging deployment at the production database. `APP_ENV` is set
+per-environment in each `[env.*]` block; `packages/config/src/env.ts` enforces
 production-only guardrails (no dev tenant selector, no live Razorpay mode
 without a secret) based on this value.
 
@@ -81,13 +86,24 @@ deliberately separate:
 - **`deploy.yml`** is `workflow_dispatch`-only (manually triggered from the
   Actions tab, never on push) and deploys `apps/api`,
   `apps/workers/message-consumer`, and `apps/workers/voice-consumer` via
-  `wrangler deploy` with a custom-scoped `CLOUDFLARE_API_TOKEN`. It takes a
-  `target_environment` input (`staging` or `production`) that selects a
-  GitHub Environment (Settings → Environments) — configure required
-  reviewers on the `production` environment there and GitHub will pause the
-  run for manual approval before it deploys anything. This is the
-  manual-approval gate; there is no separate auto-deploying "staging"
-  pipeline.
+  `wrangler deploy --env <target_environment>` with a custom-scoped
+  `CLOUDFLARE_API_TOKEN`. It takes a `target_environment` input (`staging` or
+  `production`) that both selects which `wrangler.toml` `[env.*]` block gets
+  deployed (see "Environments" below — genuinely separate Worker/queue/bucket
+  names, not just a label) and which GitHub Environment (Settings →
+  Environments) gates the run — configure required reviewers on the
+  `production` environment there and GitHub will pause the run for manual
+  approval before it deploys anything. This is the manual-approval gate;
+  there is no separate auto-deploying "staging" pipeline.
+- Before either job in `deploy.yml` touches Cloudflare, a `check-ci` job
+  queries the GitHub Actions API for the latest completed `ci.yml` run for
+  the exact commit SHA being deployed and fails the whole workflow (via
+  `core.setFailed`) if that run is missing, still in progress, or concluded
+  with anything other than `success`. This is the automated gate satisfying
+  "never deploy a commit CI hasn't passed" — the `production` environment's
+  required-reviewer approval is a separate, human checkpoint on top of it,
+  not a substitute for it. Both gates apply regardless of which environment
+  is selected.
 
 This exists specifically because Cloudflare Workers Builds' git-integration
 auto-deploy (its own separate mechanism) uses an auto-provisioned deploy token
@@ -98,20 +114,15 @@ every single push (this was hit repeatedly and is the reason this pipeline
 exists). A custom token with real Queues permission does not have this
 problem, so bindings declared in `wrangler.toml` stay applied permanently.
 
-Note: `apps/api`/`apps/workers/*`'s `wrangler.toml` files do not yet declare
-per-environment `[env.staging]`/`[env.production]` blocks (separate Worker
-names, queues, R2 buckets — see "Environments" below), so today both
-`target_environment` choices deploy the same underlying Workers; what differs
-is which GitHub Environment's reviewers/secrets gate the run. Add the
-`[env.*]` blocks and a matching `--env` flag to the deploy commands in
-`deploy.yml` once real staging/production separation is provisioned.
-
 ### One-time setup
 
 1. Create a Cloudflare API token (My Profile → API Tokens → Create Token →
    Custom): **Account → Workers Queues → Edit**, **Account → Workers
    Scripts → Edit**, scoped to the account these Workers live in.
-2. Create `staging` and `production` environments (Settings → Environments).
+2. Create the staging queues and R2 bucket (`CLOUDFLARE_SETUP.md` §2–3) — the
+   production ones already exist. `wrangler deploy --env staging` fails with
+   "queue/bucket does not exist" until these are created.
+3. Create `staging` and `production` environments (Settings → Environments).
    Add `CLOUDFLARE_API_TOKEN` (the token above) and `CLOUDFLARE_ACCOUNT_ID`
    (Cloudflare dashboard → Workers & Pages → Overview, right sidebar) as
    environment secrets on each — as repository-level secrets if both
@@ -119,7 +130,7 @@ is which GitHub Environment's reviewers/secrets gate the run. Add the
    per-environment once separate accounts/tokens exist. Add required
    reviewers to the `production` environment so `deploy.yml` pauses for
    approval whenever `target_environment: production` is selected.
-3. **Disable Workers Builds' git integration** for `dravonixapp`,
+4. **Disable Workers Builds' git integration** for `dravonixapp`,
    `dravonix-whatsapp-ai-platform`, and `dravonix-audio` (each Worker →
    Settings → Build → disconnect/disable). Leaving both mechanisms active
    means both deploy on the same push — redundant, and Workers Builds' would

@@ -241,7 +241,8 @@ Legend: `[x]` done · `[~]` partially done / mocked pending real credentials · 
    ElevenLabs; Hindi, Arabic, and a fuller matrix of speakers/accents/audio
    conditions have not been tested.
 3. **`apps/api`, `voice-consumer`, and `message-consumer` are deployed to
-   Cloudflare** (dravonixapp, dravonix-audio, dravonix-whatsapp-ai-platform)
+   Cloudflare** (dravonixapp, dravonix-audio, dravonix-whatsapp-ai-platform —
+   the _production_ names; see `CLOUDFLARE_SETUP.md`'s resource-name table)
    and have processed real messages against the live Meta test number.
    `billing-consumer`, `knowledge-consumer`, and `notification-consumer` are
    not yet built or deployed — the packages they would call
@@ -249,11 +250,19 @@ Legend: `[x]` done · `[~]` partially done / mocked pending real credentials · 
    built and independently tested. Cloudflare Workers Builds' auto-provisioned
    CI deploy token cannot bind Queues (a confirmed platform limitation, hit
    repeatedly); this is now fixed by deploying through
-   `.github/workflows/ci.yml`'s `deploy` job with a custom-scoped
-   `CLOUDFLARE_API_TOKEN` instead (see `DEPLOYMENT.md`), which does have
-   Queues permission. Workers Builds' git integration should be disabled for
-   these three services (one-time dashboard action) so it stops deploying
-   alongside this pipeline and re-wiping bindings.
+   `.github/workflows/deploy.yml` with a custom-scoped `CLOUDFLARE_API_TOKEN`
+   instead (see `DEPLOYMENT.md`), which does have Queues permission. Workers
+   Builds' git integration should be disabled for these three services
+   (one-time dashboard action) so it stops deploying alongside this pipeline
+   and re-wiping bindings.
+   Each `wrangler.toml` now also declares an `[env.staging]` block with fully
+   separate Worker/queue/R2-bucket names (`dravonixapp-staging`,
+   `dravonix-whatsapp-ai-platform-staging`, `dravonix-audio-staging`) so a
+   staging deploy can never touch a production resource — the staging queues
+   and R2 bucket still need to be created in the Cloudflare account before the
+   first staging deploy (`CLOUDFLARE_SETUP.md` §2–3), and a second Supabase
+   project still needs to be provisioned for staging (`SUPABASE_SETUP.md` §0)
+   before staging is truly usable end to end.
 4. **apps/api has only the WhatsApp webhook and health routes.** No REST API
    exists yet for conversations, leads, knowledge, billing, team management,
    or super-admin actions — these are the next concrete step for anyone
@@ -267,12 +276,29 @@ Legend: `[x]` done · `[~]` partially done / mocked pending real credentials · 
 6. **No browser/E2E tests, no load tests, no third-party security audit.**
 7. **Meta Embedded Signup is designed for but not implemented**, pending a
    Meta Tech Provider/Solution Partner account.
-8. **CI (`.github/workflows/ci.yml`'s `deploy` job) deploys `apps/api`,
-   `voice-consumer`, and `message-consumer` to Cloudflare on every push to
-   the current working branch**, gated on lint/typecheck/test passing first,
-   using a custom-scoped `CLOUDFLARE_API_TOKEN` that can manage Queues (see
-   item 3 and `DEPLOYMENT.md`). Requires the `CLOUDFLARE_API_TOKEN` and
-   `CLOUDFLARE_ACCOUNT_ID` repository secrets to be set, and Workers Builds'
-   git integration disabled for these three services, before it's fully
-   effective. The deploy job's branch condition should be revisited once a
-   real branching/release strategy is settled on.
+8. **CI and deployment are two separate GitHub Actions workflows.**
+   `.github/workflows/ci.yml` runs on every push/PR: lint, format, typecheck,
+   unit tests (mock Meta/Claude/ElevenLabs/Razorpay providers only — no
+   provider secrets are ever set in CI), a migration-sequence validator, the
+   full RLS/tenant-isolation suite against an ephemeral `pgvector/pgvector:pg16`
+   Postgres service container spun up for the job (migrations applied fresh
+   each run, ephemeral, never a real Supabase project), and a build-verification
+   pass (`next build`, `wrangler deploy --dry-run` for both `--env staging` and
+   `--env production` of each of the three deployed Workers). It never deploys
+   anything and never touches Cloudflare credentials.
+   `.github/workflows/deploy.yml` is `workflow_dispatch`-only — never triggered
+   by a push — and deploys `apps/api`, `voice-consumer`, and `message-consumer`
+   to the environment picked at dispatch time (`staging`/`production`, each
+   with its own genuinely separate Cloudflare resources, see item 3) using a
+   custom-scoped `CLOUDFLARE_API_TOKEN` that can manage Queues. Before any
+   Cloudflare credential is touched, a `check-ci` job queries the GitHub
+   Actions API and refuses to proceed unless the latest `ci.yml` run for the
+   exact commit SHA being deployed concluded `success`; separately, the job
+   itself runs under a GitHub Environment (Settings → Environments) so
+   `production` can require human reviewer approval before it deploys.
+   Requires the `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` environment
+   secrets to be set on both the `staging` and `production` GitHub
+   Environments, required reviewers configured on `production`, the staging
+   Cloudflare queues/R2 bucket created, and Workers Builds' git integration
+   disabled for these three services, before it's fully effective — see
+   `DEPLOYMENT.md`'s "One-time setup".

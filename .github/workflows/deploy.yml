@@ -22,18 +22,63 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check-ci:
+    name: Require green CI for this commit
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    # Runs before the approval-gated deploy job below and before any
+    # Cloudflare credential is touched, so a red or pending CI run is
+    # rejected immediately regardless of target_environment. This is what
+    # actually enforces "never deploy a commit CI hasn't passed" -- the
+    # environment approval gate on the deploy job below is a *human*
+    # checkpoint, not a substitute for this automated one.
+    steps:
+      - name: Find latest CI run for ${{ github.sha }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "ci.yml",
+              head_sha: context.sha,
+            });
+
+            const completed = data.workflow_runs
+              .filter((run) => run.status === "completed")
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            if (completed.length === 0) {
+              core.setFailed(
+                `No completed CI run found for commit ${context.sha}. ` +
+                `Push this commit (or wait for its CI run to finish) before deploying.`,
+              );
+              return;
+            }
+
+            const latest = completed[0];
+            if (latest.conclusion !== "success") {
+              core.setFailed(
+                `Latest CI run for commit ${context.sha} concluded "${latest.conclusion}" ` +
+                `(${latest.html_url}), not "success". Refusing to deploy.`,
+              );
+              return;
+            }
+
+            core.info(`CI run ${latest.html_url} succeeded for commit ${context.sha}. Proceeding.`);
+
   deploy:
     name: Deploy Cloudflare Workers (${{ inputs.target_environment }})
+    needs: check-ci
     runs-on: ubuntu-latest
     environment: ${{ inputs.target_environment }}
-    # NOTE: apps/api and apps/workers/*/wrangler.toml do not yet declare
-    # per-environment [env.staging]/[env.production] blocks (separate Worker
-    # names, queues, R2 buckets — see DEPLOYMENT.md's "Environments" section).
-    # Until that split exists, both choices above deploy the same underlying
-    # Workers; what differs today is which GitHub Environment's required
-    # reviewers and secrets (CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID) gate
-    # the run. Add the wrangler.toml [env.*] blocks and a `--env` flag on the
-    # deploy commands below once real staging/production separation lands.
+    # apps/api and apps/workers/{message-consumer,voice-consumer}/wrangler.toml
+    # each declare distinct [env.staging]/[env.production] blocks -- separate
+    # Worker names, queues, and (for voice-consumer) R2 bucket, see
+    # CLOUDFLARE_SETUP.md's resource-name table. Passing --env here is what
+    # keeps a staging run from ever addressing a production resource: there is
+    # no shared name for wrangler/Cloudflare to collide on.
     steps:
       - uses: actions/checkout@v4
 
@@ -49,23 +94,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Deploy apps/api (dravonixapp)
+      - name: Deploy apps/api
         working-directory: apps/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm deploy
+        run: pnpm run deploy -- --env ${{ inputs.target_environment }}
 
-      - name: Deploy message-consumer (dravonix-whatsapp-ai-platform)
+      - name: Deploy message-consumer
         working-directory: apps/workers/message-consumer
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm deploy
+        run: pnpm run deploy -- --env ${{ inputs.target_environment }}
 
-      - name: Deploy voice-consumer (dravonix-audio)
+      - name: Deploy voice-consumer
         working-directory: apps/workers/voice-consumer
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm deploy
+        run: pnpm run deploy -- --env ${{ inputs.target_environment }}

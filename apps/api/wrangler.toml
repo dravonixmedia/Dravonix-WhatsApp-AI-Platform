@@ -7,6 +7,11 @@ compatibility_flags = ["nodejs_compat"]
 #   SUPABASE_SERVICE_ROLE_KEY, META_APP_SECRET, META_VERIFY_TOKEN
 # Non-secret vars can go in [vars] per environment, or in a .dev.vars file for
 # local `wrangler dev` (see CLOUDFLARE_SETUP.md).
+#
+# This top-level (unnamed environment) config is used only by local
+# `wrangler dev` -- every real deploy goes through .github/workflows/deploy.yml,
+# which always passes an explicit --env staging or --env production (see
+# those blocks below). Nothing here is ever deployed directly.
 
 [vars]
 APP_ENV = "development"
@@ -26,5 +31,46 @@ queue = "dravonix-message-queue"
 binding = "MESSAGE_QUEUE"
 
 [[queues.producers]]
+queue = "dravonix-voice-queue"
+binding = "VOICE_QUEUE"
+
+# ---------------------------------------------------------------------------
+# Staging -- isolated Worker, queues, and vars. Distinct resource names mean a
+# staging deploy (`wrangler deploy --env staging`) cannot touch any production
+# resource: there is no name overlap for wrangler/Cloudflare to collide on.
+# See CLOUDFLARE_SETUP.md for the full resource-name table and the queue
+# creation commands for these staging queues.
+# ---------------------------------------------------------------------------
+[env.staging]
+name = "dravonixapp-staging"
+
+[env.staging.vars]
+APP_ENV = "staging"
+
+[[env.staging.queues.producers]]
+queue = "dravonix-message-queue-staging"
+binding = "MESSAGE_QUEUE"
+
+[[env.staging.queues.producers]]
+queue = "dravonix-voice-queue-staging"
+binding = "VOICE_QUEUE"
+
+# ---------------------------------------------------------------------------
+# Production -- the long-lived live Worker (already deployed and serving real
+# WhatsApp traffic; see TASKS.md). Mirrors the top-level config so that
+# .github/workflows/deploy.yml can always deploy with an explicit --env flag
+# instead of relying on wrangler's bare (unnamed-environment) default.
+# ---------------------------------------------------------------------------
+[env.production]
+name = "dravonixapp"
+
+[env.production.vars]
+APP_ENV = "production"
+
+[[env.production.queues.producers]]
+queue = "dravonix-message-queue"
+binding = "MESSAGE_QUEUE"
+
+[[env.production.queues.producers]]
 queue = "dravonix-voice-queue"
 binding = "VOICE_QUEUE"

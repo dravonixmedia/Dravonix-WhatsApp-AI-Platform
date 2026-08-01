@@ -8,6 +8,11 @@ compatibility_flags = ["nodejs_compat"]
 # ANTHROPIC_API_KEY, META_ACCESS_TOKEN, ELEVENLABS_API_KEY (both speech-to-text
 # and text-to-speech -- see docs/architecture/adr-0005-speech-provider-architecture.md
 # for why this replaced Google STT/TTS and Whisper).
+#
+# This top-level (unnamed environment) config is used only by local
+# `wrangler dev` -- every real deploy goes through .github/workflows/deploy.yml,
+# which always passes an explicit --env staging or --env production (see
+# those blocks below). Nothing here is ever deployed directly.
 
 [vars]
 APP_ENV = "development"
@@ -28,3 +33,46 @@ bucket_name = "dravonix-audio"
 queue = "dravonix-voice-queue"
 max_batch_size = 5
 max_retries = 3
+
+# ---------------------------------------------------------------------------
+# Staging -- isolated Worker, queue, and R2 bucket. Distinct resource names
+# mean a staging deploy (`wrangler deploy --env staging`) cannot touch any
+# production resource. See CLOUDFLARE_SETUP.md for the full resource-name
+# table and the staging queue/bucket creation commands.
+# ---------------------------------------------------------------------------
+[env.staging]
+name = "dravonix-audio-staging"
+
+[env.staging.vars]
+APP_ENV = "staging"
+
+[[env.staging.r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "dravonix-audio-staging"
+
+[[env.staging.queues.consumers]]
+queue = "dravonix-voice-queue-staging"
+max_batch_size = 5
+max_retries = 3
+dead_letter_queue = "dravonix-voice-queue-staging-dlq"
+
+# ---------------------------------------------------------------------------
+# Production -- the long-lived live Worker (already deployed and serving real
+# WhatsApp traffic; see TASKS.md). Mirrors the top-level config so that
+# .github/workflows/deploy.yml can always deploy with an explicit --env flag.
+# ---------------------------------------------------------------------------
+[env.production]
+name = "dravonix-audio"
+
+[env.production.vars]
+APP_ENV = "production"
+
+[[env.production.r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "dravonix-audio"
+
+[[env.production.queues.consumers]]
+queue = "dravonix-voice-queue"
+max_batch_size = 5
+max_retries = 3
+dead_letter_queue = "dravonix-voice-queue-dlq"

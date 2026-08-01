@@ -1,5 +1,21 @@
 # SUPABASE_SETUP.md
 
+## 0. One project per environment
+
+Create **two separate Supabase projects** — never share one project between
+staging and production, and never point a staging Cloudflare Worker
+(`--env staging`, see `CLOUDFLARE_SETUP.md`) at the production project's
+credentials. Run every step below once per project.
+
+| Environment | Project ref | Notes                                                                |
+| ----------- | ----------- | -------------------------------------------------------------------- |
+| Staging     | _fill in_   | Safe to seed with `002_demo_tenant.sql`, reset, or drop and recreate |
+| Production  | _fill in_   | Already provisioned and live (see `TASKS.md`) — do not recreate      |
+
+Fill in each project's ref (Project Settings → General → Reference ID) here
+once created, so the mapping from Cloudflare environment to Supabase project
+is recorded somewhere other than someone's memory.
+
 ## 1. Create a project
 
 1. Create a project at https://supabase.com (or run Supabase locally with the
@@ -78,6 +94,14 @@ SUPABASE_DATABASE_URL=
 NEXT_PUBLIC_SUPABASE_URL=       # apps/web only, safe for the browser
 NEXT_PUBLIC_SUPABASE_ANON_KEY=  # apps/web only, safe for the browser
 ```
+
+Set these as `wrangler secret put <NAME> --env staging` / `--env production`
+(see `CLOUDFLARE_SETUP.md` §4) using each environment's **own** project's
+values — the staging Worker must never receive the production project's
+`SUPABASE_SERVICE_ROLE_KEY` or vice versa. CI (`.github/workflows/ci.yml`)
+does not set any of these; it runs migrations and RLS tests against a
+throwaway Postgres container instead (see `supabase/tests/README.md`), never
+against either real Supabase project.
 
 ## 7. Verifying Row Level Security
 

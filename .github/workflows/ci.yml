@@ -77,17 +77,23 @@ jobs:
       - name: Build verification — apps/web (Next.js)
         run: pnpm --filter @dravonix/web build
 
-      - name: Build verification — apps/api (Cloudflare Worker bundle)
+      - name: Build verification — apps/api (Cloudflare Worker bundle, staging + production)
         working-directory: apps/api
-        run: npx wrangler deploy --dry-run --outdir=/tmp/wrangler-dryrun/api
+        run: |
+          npx wrangler deploy --dry-run --env staging --outdir=/tmp/wrangler-dryrun/api-staging
+          npx wrangler deploy --dry-run --env production --outdir=/tmp/wrangler-dryrun/api-production
 
-      - name: Build verification — message-consumer (Cloudflare Worker bundle)
+      - name: Build verification — message-consumer (Cloudflare Worker bundle, staging + production)
         working-directory: apps/workers/message-consumer
-        run: npx wrangler deploy --dry-run --outdir=/tmp/wrangler-dryrun/message-consumer
+        run: |
+          npx wrangler deploy --dry-run --env staging --outdir=/tmp/wrangler-dryrun/message-consumer-staging
+          npx wrangler deploy --dry-run --env production --outdir=/tmp/wrangler-dryrun/message-consumer-production
 
-      - name: Build verification — voice-consumer (Cloudflare Worker bundle)
+      - name: Build verification — voice-consumer (Cloudflare Worker bundle, staging + production)
         working-directory: apps/workers/voice-consumer
-        run: npx wrangler deploy --dry-run --outdir=/tmp/wrangler-dryrun/voice-consumer
+        run: |
+          npx wrangler deploy --dry-run --env staging --outdir=/tmp/wrangler-dryrun/voice-consumer-staging
+          npx wrangler deploy --dry-run --env production --outdir=/tmp/wrangler-dryrun/voice-consumer-production
 
       - name: Upload logs on failure
         if: failure()
