@@ -24,6 +24,24 @@ export interface MessageConsumerDeps {
 }
 
 /**
+ * Runs a post-send bookkeeping write (recording that a message was sent) and
+ * swallows any failure instead of letting it propagate. The WhatsApp send
+ * this follows has already irreversibly happened -- if this rethrew, the
+ * whole queue job would fail and retry, re-running everything from the top
+ * (including a fresh Claude call) and sending the customer a real duplicate
+ * message for a failure that's specific to our own bookkeeping, not the send.
+ */
+async function recordOutboundSafely(log: Logger, record: () => Promise<void>): Promise<void> {
+  try {
+    await record();
+  } catch (error) {
+    log.error("Failed to record an outbound message that was already sent to the customer", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Processes a single inbound text message end to end: re-check entitlement and
  * conversation state -> retrieve tenant-scoped knowledge -> generate a
  * validated AI response -> send the reply -> apply lead updates / handover.
@@ -115,10 +133,12 @@ export async function processMessageJob(
     body: response.answer,
   });
 
-  await deps.repo.recordOutboundMessage({
-    companyId: payload.companyId,
-    conversationId: payload.conversationId,
-    body: response.answer,
-    providerMessageId: sendResult.providerMessageId,
-  });
+  await recordOutboundSafely(log, () =>
+    deps.repo.recordOutboundMessage({
+      companyId: payload.companyId,
+      conversationId: payload.conversationId,
+      body: response.answer,
+      providerMessageId: sendResult.providerMessageId,
+    }),
+  );
 }

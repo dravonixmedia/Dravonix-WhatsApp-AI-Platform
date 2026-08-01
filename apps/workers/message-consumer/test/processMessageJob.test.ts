@@ -201,6 +201,19 @@ describe("processMessageJob", () => {
     expect(whatsappProvider.sentText).toHaveLength(1);
   });
 
+  it("does not throw (and so does not trigger a queue retry that would resend the reply) when recording the outbound message fails after it was already sent", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    repo.recordOutboundMessage = async () => {
+      throw new Error("transient database error");
+    };
+
+    await expect(processMessageJob(deps, makePayload())).resolves.toBeUndefined();
+
+    // The reply must have gone out exactly once -- a bookkeeping failure
+    // after a successful send must never cause a retry/resend.
+    expect(whatsappProvider.sentText).toHaveLength(1);
+  });
+
   it("applies lead updates extracted from the AI response", async () => {
     aiProvider.respond = () =>
       JSON.stringify({

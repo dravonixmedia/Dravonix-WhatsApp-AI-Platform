@@ -46,6 +46,24 @@ function toSttLanguageCode(code: string): string {
 }
 
 /**
+ * Runs a post-send bookkeeping write (recording that a message was sent) and
+ * swallows any failure instead of letting it propagate. The WhatsApp send
+ * this follows has already irreversibly happened -- if this rethrew, the
+ * whole queue job would fail and retry, re-running everything from the top
+ * (including a fresh Claude call) and sending the customer a real duplicate
+ * message for a failure that's specific to our own bookkeeping, not the send.
+ */
+async function recordOutboundSafely(log: Logger, record: () => Promise<void>): Promise<void> {
+  try {
+    await record();
+  } catch (error) {
+    log.error("Failed to record an outbound message that was already sent to the customer", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Processes a single inbound voice note end to end: download the audio from
  * WhatsApp -> store it -> transcribe -> (same AI pipeline as text messages) ->
  * resolve reply mode -> reply with text and/or synthesized voice.
@@ -92,12 +110,14 @@ export async function processVoiceJob(
         toWaId: context.waId,
         body: notice,
       });
-      await deps.repo.recordOutboundTextMessage({
-        companyId: payload.companyId,
-        conversationId: payload.conversationId,
-        body: notice,
-        providerMessageId: sendResult.providerMessageId,
-      });
+      await recordOutboundSafely(log, () =>
+        deps.repo.recordOutboundTextMessage({
+          companyId: payload.companyId,
+          conversationId: payload.conversationId,
+          body: notice,
+          providerMessageId: sendResult.providerMessageId,
+        }),
+      );
       return;
     }
     throw error;
@@ -181,12 +201,14 @@ export async function processVoiceJob(
       toWaId: context.waId,
       body: notice,
     });
-    await deps.repo.recordOutboundTextMessage({
-      companyId: payload.companyId,
-      conversationId: payload.conversationId,
-      body: notice,
-      providerMessageId: sendResult.providerMessageId,
-    });
+    await recordOutboundSafely(log, () =>
+      deps.repo.recordOutboundTextMessage({
+        companyId: payload.companyId,
+        conversationId: payload.conversationId,
+        body: notice,
+        providerMessageId: sendResult.providerMessageId,
+      }),
+    );
     return;
   }
 
@@ -270,12 +292,14 @@ export async function processVoiceJob(
       toWaId: context.waId,
       body: response.answer,
     });
-    await deps.repo.recordOutboundTextMessage({
-      companyId: payload.companyId,
-      conversationId: payload.conversationId,
-      body: response.answer,
-      providerMessageId: sendResult.providerMessageId,
-    });
+    await recordOutboundSafely(log, () =>
+      deps.repo.recordOutboundTextMessage({
+        companyId: payload.companyId,
+        conversationId: payload.conversationId,
+        body: response.answer,
+        providerMessageId: sendResult.providerMessageId,
+      }),
+    );
   }
 
   if (replyMode.mode === "voice_only" || replyMode.mode === "text_and_voice") {

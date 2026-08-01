@@ -187,6 +187,20 @@ describe("processVoiceJob", () => {
     expect(repo.recordedOutboundVoice).toHaveLength(1);
   });
 
+  it("does not throw (and so does not trigger a queue retry that would resend the reply) when recording the main text reply fails after it was already sent", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    repo.recordOutboundTextMessage = async () => {
+      throw new Error("transient database error");
+    };
+
+    await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
+
+    // The reply must have gone out exactly once -- a bookkeeping failure
+    // after a successful send must never cause a retry/resend.
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(1);
+  });
+
   it("degrades to the already-sent text reply without throwing when text-to-speech fails", async () => {
     const deps = makeDeps(activeEntitlementSnapshot());
     deps.ttsProvider = {
@@ -247,6 +261,20 @@ describe("processVoiceJob", () => {
     expect(aiProvider.calls).toHaveLength(0);
   });
 
+  it("does not throw when recording the not-entitled notice fails after it was already sent", async () => {
+    const deps = makeDeps(
+      activeEntitlementSnapshot({
+        features: { voice_enabled: { isEnabled: false, numericLimit: null } },
+      }),
+    );
+    repo.recordOutboundTextMessage = async () => {
+      throw new Error("transient database error");
+    };
+
+    await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
+    expect(whatsappProvider.sentText).toHaveLength(1);
+  });
+
   it("sends a text-only notice and escalates when speech-to-text produces no transcript", async () => {
     sttProvider.fixedText = "";
     repo.context = baseConversationContext({
@@ -261,6 +289,20 @@ describe("processVoiceJob", () => {
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentAudio).toHaveLength(0);
     expect(aiProvider.calls).toHaveLength(0);
+  });
+
+  it("does not throw when recording the speech-to-text-failed notice fails after it was already sent", async () => {
+    sttProvider.fixedText = "";
+    repo.context = baseConversationContext({
+      voiceSettings: { ...baseConversationContext().voiceSettings, fallbackBehavior: "escalate" },
+    });
+    repo.recordOutboundTextMessage = async () => {
+      throw new Error("transient database error");
+    };
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
+    expect(whatsappProvider.sentText).toHaveLength(1);
   });
 
   it("sends a text-only notice without escalating when fallback behavior is text_only_with_notice", async () => {
