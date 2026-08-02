@@ -106,6 +106,44 @@ jobs:
           done
           echo "OK: only migration-history metadata commands are planned (projects list, link, migration list, migration repair --status applied). No migration SQL will be executed."
 
+      - name: Validate required Supabase credentials are present
+        # Fail-fast, before installing the CLI or calling `supabase link`.
+        # Presence is checked with a plain `-z` (empty-string) test and
+        # never echoed -- GitHub Actions leaves an unset secret as an empty
+        # string rather than erroring, so this is the only reliable way to
+        # detect "not configured" short of trying to use it. No length,
+        # hash, or partial value of either secret is ever printed.
+        run: |
+          set -euo pipefail
+          missing=0
+
+          if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+            echo "::error::SUPABASE_ACCESS_TOKEN is not set on the staging GitHub Environment (Settings -> Environments -> staging -> Secrets). Aborting before supabase link."
+            missing=1
+          else
+            echo "OK: SUPABASE_ACCESS_TOKEN is present (value not shown)."
+          fi
+
+          if [[ -z "${SUPABASE_DB_PASSWORD:-}" ]]; then
+            echo "::error::SUPABASE_DB_PASSWORD is not set on the staging GitHub Environment (Settings -> Environments -> staging -> Secrets). Aborting before supabase link."
+            missing=1
+          else
+            echo "OK: SUPABASE_DB_PASSWORD is present (value not shown)."
+          fi
+
+          if [[ "${SUPABASE_PROJECT_ID:-}" != "lshfkxirfbjwlklqwqnf" ]]; then
+            echo "::error::SUPABASE_PROJECT_ID does not exactly equal the confirmed staging project ref lshfkxirfbjwlklqwqnf (check the staging GitHub Environment's SUPABASE_PROJECT_ID variable). Aborting before supabase link."
+            missing=1
+          else
+            echo "OK: SUPABASE_PROJECT_ID exactly equals lshfkxirfbjwlklqwqnf."
+          fi
+
+          if [[ "$missing" -ne 0 ]]; then
+            echo "::error::One or more required staging credentials/variables are missing or incorrect. Aborting before supabase link."
+            exit 1
+          fi
+          echo "All required credentials/variables validated."
+
       - uses: supabase/setup-cli@v1
         with:
           version: 2.111.0
