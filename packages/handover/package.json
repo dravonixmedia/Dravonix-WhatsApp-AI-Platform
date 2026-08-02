@@ -1,0 +1,21 @@
+{
+  "name": "@dravonix/handover",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dravonix/billing": "workspace:*",
+    "@dravonix/core": "workspace:*",
+    "@dravonix/database": "workspace:*",
+    "@dravonix/whatsapp": "workspace:*",
+    "@supabase/supabase-js": "^2.47.10"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

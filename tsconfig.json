@@ -9,6 +9,7 @@
       "@dravonix/database": ["packages/database/src/index.ts"],
       "@dravonix/auth": ["packages/auth/src/index.ts"],
       "@dravonix/tenant": ["packages/tenant/src/index.ts"],
+      "@dravonix/handover": ["packages/handover/src/index.ts"],
       "@dravonix/whatsapp": ["packages/whatsapp/src/index.ts"],
       "@dravonix/ai": ["packages/ai/src/index.ts"],
       "@dravonix/speech": ["packages/speech/src/index.ts"],
