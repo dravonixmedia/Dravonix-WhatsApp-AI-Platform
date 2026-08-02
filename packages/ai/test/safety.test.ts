@@ -57,4 +57,61 @@ describe("applySafetyRules", () => {
     const result = applySafetyRules(response);
     expect(result.handoverReason).toBe("customer_request");
   });
+
+  it("strips an unauthorized human-follow-up promise when requiresHuman is false", () => {
+    const response = baseResponse({
+      answer: "Sure, we can help with that. Our team will also follow up with you shortly.",
+      requiresHuman: false,
+    });
+    const result = applySafetyRules(response);
+    expect(result.answer).not.toMatch(/follow up/i);
+    expect(result.answer).toBe("Sure, we can help with that.");
+    expect(result.requiresHuman).toBe(false);
+  });
+
+  it("leaves a genuine human-follow-up promise untouched when requiresHuman is true", () => {
+    const response = baseResponse({
+      answer: "I've passed this to our team -- a team member will follow up with you shortly.",
+      requiresHuman: true,
+      handoverReason: "customer_request",
+    });
+    const result = applySafetyRules(response);
+    expect(result.answer).toContain("follow up");
+  });
+
+  it("leaves an answer with no follow-up promise unchanged", () => {
+    const response = baseResponse({
+      answer: "We'd love to help with your website project!",
+      requiresHuman: false,
+    });
+    const result = applySafetyRules(response);
+    expect(result).toEqual(response);
+  });
+
+  it("strips a stale voice-unsupported claim when the company has voice enabled", () => {
+    const response = baseResponse({
+      answer:
+        "We're unable to listen to or transcribe voice messages on our end. We offer website " +
+        "development and AI automation.",
+    });
+    const result = applySafetyRules(response, { voiceEnabled: true });
+    expect(result.answer).not.toMatch(/unable to (listen|transcribe)/i);
+    expect(result.answer).toBe("We offer website development and AI automation.");
+  });
+
+  it("defaults to treating voice as enabled when no context is passed", () => {
+    const response = baseResponse({
+      answer: "Sorry, we can't process voice messages. We offer website development.",
+    });
+    const result = applySafetyRules(response);
+    expect(result.answer).not.toMatch(/can'?t process voice/i);
+  });
+
+  it("leaves a voice-unsupported claim untouched when the company actually has voice disabled", () => {
+    const response = baseResponse({
+      answer: "Sorry, we can't process voice messages here. We offer website development.",
+    });
+    const result = applySafetyRules(response, { voiceEnabled: false });
+    expect(result.answer).toContain("can't process voice messages");
+  });
 });

@@ -33,6 +33,7 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
       companyResult,
       settingsResult,
       aiSettingsResult,
+      voiceSettingsResult,
       phoneNumberResult,
       preferenceResult,
       leadResult,
@@ -43,6 +44,11 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
       this.client
         .from("ai_settings")
         .select("required_disclaimers")
+        .eq("company_id", companyId)
+        .maybeSingle(),
+      this.client
+        .from("voice_settings")
+        .select("is_enabled")
         .eq("company_id", companyId)
         .maybeSingle(),
       conversation.whatsapp_phone_number_id
@@ -83,6 +89,7 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
     if (companyResult.error) throw companyResult.error;
     if (settingsResult.error) throw settingsResult.error;
     if (aiSettingsResult.error) throw aiSettingsResult.error;
+    if (voiceSettingsResult.error) throw voiceSettingsResult.error;
     if (phoneNumberResult.error) throw phoneNumberResult.error;
     if (preferenceResult.error) throw preferenceResult.error;
     if (leadResult.error) throw leadResult.error;
@@ -113,6 +120,7 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
       handoverRules: [],
       confidenceThreshold: Number(settings.confidence_threshold),
       staticFallbackMessage: settings.static_fallback_message,
+      voiceEnabled: voiceSettingsResult.data?.is_enabled ?? false,
     };
 
     const memory: ConversationMemoryContext = {

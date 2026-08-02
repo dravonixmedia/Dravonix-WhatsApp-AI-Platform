@@ -41,6 +41,7 @@ function baseConversationContext(
       handoverRules: [],
       confidenceThreshold: 0.55,
       staticFallbackMessage: "Automated assistance is temporarily unavailable.",
+      voiceEnabled: true,
     },
     memory: {
       recentMessages: [],
