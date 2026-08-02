@@ -87,6 +87,36 @@ describe("handleWhatsAppWebhookVerification", () => {
     });
     expect(result.status).toBe(403);
   });
+
+  it("returns 400 when hub.mode is missing", () => {
+    const { deps } = makeDeps();
+    const result = handleWhatsAppWebhookVerification(deps, {
+      mode: null,
+      verifyToken: VERIFY_TOKEN,
+      challenge: "abc123",
+    });
+    expect(result.status).toBe(400);
+  });
+
+  it("returns 400 when hub.verify_token is missing", () => {
+    const { deps } = makeDeps();
+    const result = handleWhatsAppWebhookVerification(deps, {
+      mode: "subscribe",
+      verifyToken: null,
+      challenge: "abc123",
+    });
+    expect(result.status).toBe(400);
+  });
+
+  it("returns 400 when hub.challenge is missing", () => {
+    const { deps } = makeDeps();
+    const result = handleWhatsAppWebhookVerification(deps, {
+      mode: "subscribe",
+      verifyToken: VERIFY_TOKEN,
+      challenge: null,
+    });
+    expect(result.status).toBe(400);
+  });
 });
 
 describe("handleWhatsAppWebhookPost", () => {

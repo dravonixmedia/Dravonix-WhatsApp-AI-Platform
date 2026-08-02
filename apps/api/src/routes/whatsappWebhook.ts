@@ -14,7 +14,7 @@ export function whatsappWebhookRoutes(deps: WhatsAppWebhookDeps): Hono {
       verifyToken: c.req.query("hub.verify_token") ?? null,
       challenge: c.req.query("hub.challenge") ?? null,
     });
-    return c.text(result.body, result.status as 200 | 403);
+    return c.text(result.body, result.status as 200 | 400 | 403);
   });
 
   app.post("/webhooks/whatsapp", async (c) => {

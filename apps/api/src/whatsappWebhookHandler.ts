@@ -34,6 +34,12 @@ export function handleWhatsAppWebhookVerification(
   deps: Pick<WhatsAppWebhookDeps, "verifyToken">,
   query: { mode: string | null; verifyToken: string | null; challenge: string | null },
 ): HttpResult {
+  // Meta always sends all three params on a real verification request; a
+  // request missing one entirely is a malformed/incomplete request (400),
+  // distinct from one that supplies a wrong hub.verify_token (403).
+  if (!query.mode || !query.verifyToken || !query.challenge) {
+    return { status: 400, body: "missing hub.mode, hub.verify_token, or hub.challenge" };
+  }
   const challenge = verifyMetaWebhookChallenge(query, deps.verifyToken);
   if (challenge === null) {
     return { status: 403, body: "verification failed" };

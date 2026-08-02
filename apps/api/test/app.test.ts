@@ -65,6 +65,12 @@ describe("GET /webhooks/whatsapp", () => {
     );
     expect(response.status).toBe(403);
   });
+
+  it("returns 400 when required hub.* query parameters are missing", async () => {
+    const { app } = makeApp();
+    const response = await app.request("/webhooks/whatsapp?hub.mode=subscribe");
+    expect(response.status).toBe(400);
+  });
 });
 
 describe("POST /webhooks/whatsapp", () => {
@@ -119,5 +125,24 @@ describe("POST /webhooks/whatsapp", () => {
     });
     expect(response.status).toBe(401);
     expect(messageQueue.sent).toHaveLength(0);
+  });
+
+  it("rejects a request with an incorrect signature value", async () => {
+    const { app, messageQueue } = makeApp();
+    const response = await app.request("/webhooks/whatsapp", {
+      method: "POST",
+      headers: { "x-hub-signature-256": "sha256=deadbeef", "content-type": "application/json" },
+      body: JSON.stringify({ object: "whatsapp_business_account", entry: [] }),
+    });
+    expect(response.status).toBe(401);
+    expect(messageQueue.sent).toHaveLength(0);
+  });
+});
+
+describe("unknown routes", () => {
+  it("returns 404 for a route that doesn't exist", async () => {
+    const { app } = makeApp();
+    const response = await app.request("/webhooks/meta");
+    expect(response.status).toBe(404);
   });
 });
