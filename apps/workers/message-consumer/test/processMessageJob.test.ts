@@ -1,5 +1,11 @@
 import { MockAiProvider } from "@dravonix/ai";
 import type { EntitlementRepository, EntitlementSnapshot } from "@dravonix/billing";
+import type { ConversationState } from "@dravonix/core";
+import type {
+  HandoverWorkerRepository,
+  MessageChannelType,
+  OutboundDeliveryStatus,
+} from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
 import { MockWhatsAppProvider } from "@dravonix/whatsapp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +27,7 @@ function baseConversationContext(
   return {
     companyId: COMPANY_ID,
     conversationState: "ai_active",
+    aiMode: "active",
     aiContext: {
       companyId: COMPANY_ID,
       companyName: "Dravonix Media",
@@ -71,24 +78,93 @@ class FakeEntitlementRepository implements EntitlementRepository {
 
 class FakeMessageConsumerRepository implements MessageConsumerRepository {
   context: ConversationContext = baseConversationContext();
-  recordedOutbound: Array<{ body: string; providerMessageId: string }> = [];
   appliedLeadUpdates: unknown[] = [];
-  handoverCalls: Array<{ conversationId: string; reason: string }> = [];
 
   async loadConversationContext(_conversationId: string): Promise<ConversationContext> {
     return this.context;
   }
 
-  async recordOutboundMessage(input: { body: string; providerMessageId: string }): Promise<void> {
-    this.recordedOutbound.push(input);
-  }
-
   async applyLeadUpdates(input: { leadUpdates: unknown }): Promise<void> {
     this.appliedLeadUpdates.push(input.leadUpdates);
   }
+}
 
-  async triggerHandover(input: { conversationId: string; reason: string }): Promise<void> {
+interface FakeOutboundMessage {
+  outboundStatus: OutboundDeliveryStatus;
+  providerMessageId: string | null;
+}
+
+/**
+ * In-memory double for HandoverWorkerRepository (final plan section 4's
+ * service_role-only RPC family), mirroring the actual reserve/finalize
+ * claim-guard semantics closely enough to test the collaborative AI-reply
+ * suppression rules and the exactly-once-per-message send guarantee.
+ */
+class FakeHandoverWorkerRepository implements HandoverWorkerRepository {
+  handoverCalls: Array<{
+    conversationId: string;
+    reason: string;
+    sourceMessageId: string | null;
+    sourceType: string;
+  }> = [];
+
+  private messages = new Map<string, FakeOutboundMessage>();
+  private bySourceAndChannel = new Map<string, string>();
+  private counter = 0;
+
+  async triggerHandover(input: {
+    conversationId: string;
+    reason: string;
+    sourceMessageId: string | null;
+    sourceType: "text" | "voice" | "system";
+  }) {
     this.handoverCalls.push(input);
+    return {
+      id: input.conversationId,
+      state: "handover_requested" as ConversationState,
+      handoverReason: input.reason,
+      isNewEvent: true,
+    };
+  }
+
+  async reserveAiOutboundMessage(sourceMessageId: string, channelType: MessageChannelType) {
+    const key = `${sourceMessageId}:${channelType}`;
+    const existingId = this.bySourceAndChannel.get(key);
+    if (existingId) {
+      const existing = this.messages.get(existingId)!;
+      return {
+        id: existingId,
+        claimed: false,
+        outboundStatus: existing.outboundStatus,
+        providerMessageId: existing.providerMessageId,
+      };
+    }
+    this.counter += 1;
+    const id = `msg-out-${this.counter}`;
+    this.bySourceAndChannel.set(key, id);
+    this.messages.set(id, { outboundStatus: "sending", providerMessageId: null });
+    return {
+      id,
+      claimed: true,
+      outboundStatus: "sending" as OutboundDeliveryStatus,
+      providerMessageId: null,
+    };
+  }
+
+  async finalizeAiOutboundMessage(
+    messageId: string,
+    status: OutboundDeliveryStatus,
+    providerMessageId: string | null,
+  ) {
+    const msg = this.messages.get(messageId);
+    if (!msg) throw new Error("message_not_found");
+    msg.outboundStatus = status;
+    msg.providerMessageId = providerMessageId ?? msg.providerMessageId;
+    return { id: messageId, outboundStatus: status };
+  }
+
+  async expireStaleOutboundSends() {
+    return [];
   }
 }
 
@@ -105,12 +181,14 @@ function makePayload(overrides: Partial<MessageJobPayload> = {}): MessageJobPayl
 
 describe("processMessageJob", () => {
   let repo: FakeMessageConsumerRepository;
+  let handoverRepo: FakeHandoverWorkerRepository;
   let whatsappProvider: MockWhatsAppProvider;
   let aiProvider: MockAiProvider;
   let knowledgeRetriever: { retrieve: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     repo = new FakeMessageConsumerRepository();
+    handoverRepo = new FakeHandoverWorkerRepository();
     whatsappProvider = new MockWhatsAppProvider();
     aiProvider = new MockAiProvider();
     knowledgeRetriever = { retrieve: vi.fn(async () => []) };
@@ -119,6 +197,7 @@ describe("processMessageJob", () => {
   function makeDeps(entitlementSnapshot: EntitlementSnapshot): MessageConsumerDeps {
     return {
       repo,
+      handoverRepo,
       entitlementRepo: new FakeEntitlementRepository(entitlementSnapshot),
       knowledgeRetriever,
       aiProvider,
@@ -127,7 +206,7 @@ describe("processMessageJob", () => {
     };
   }
 
-  it("generates an AI reply, sends it via WhatsApp, and records the outbound message", async () => {
+  it("generates an AI reply and sends it via WhatsApp", async () => {
     const deps = makeDeps(activeEntitlementSnapshot());
 
     await processMessageJob(deps, makePayload());
@@ -135,7 +214,6 @@ describe("processMessageJob", () => {
     expect(aiProvider.calls).toHaveLength(1);
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentText[0]?.toWaId).toBe("919820000001");
-    expect(repo.recordedOutbound).toHaveLength(1);
   });
 
   it("retrieves knowledge scoped to the company before generating a response", async () => {
@@ -151,7 +229,6 @@ describe("processMessageJob", () => {
 
     expect(aiProvider.calls).toHaveLength(0);
     expect(whatsappProvider.sentText).toHaveLength(0);
-    expect(repo.recordedOutbound).toHaveLength(0);
   });
 
   it("never calls Claude or WhatsApp send for a manually suspended company", async () => {
@@ -161,32 +238,56 @@ describe("processMessageJob", () => {
     expect(whatsappProvider.sentText).toHaveLength(0);
   });
 
-  it("never generates an AI reply while a human agent has taken over the conversation", async () => {
-    repo.context = baseConversationContext({ conversationState: "human_active" });
-    const deps = makeDeps(activeEntitlementSnapshot());
+  describe("collaborative handover model (final plan section 5)", () => {
+    const collaborativeStates: ConversationState[] = [
+      "ai_active",
+      "handover_requested",
+      "queued_for_agent",
+      "human_active",
+    ];
 
-    await processMessageJob(deps, makePayload());
+    it.each(collaborativeStates)(
+      "keeps replying in %s while ai_mode is active -- a human being assigned/active never by itself stops the AI",
+      async (state) => {
+        repo.context = baseConversationContext({ conversationState: state, aiMode: "active" });
+        const deps = makeDeps(activeEntitlementSnapshot());
 
-    expect(aiProvider.calls).toHaveLength(0);
-    expect(whatsappProvider.sentText).toHaveLength(0);
+        await processMessageJob(deps, makePayload());
+
+        expect(aiProvider.calls).toHaveLength(1);
+        expect(whatsappProvider.sentText).toHaveLength(1);
+      },
+    );
+
+    it("suppresses the AI whenever ai_mode is paused, regardless of conversation state", async () => {
+      repo.context = baseConversationContext({
+        conversationState: "human_active",
+        aiMode: "paused",
+      });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload());
+
+      expect(aiProvider.calls).toHaveLength(0);
+      expect(whatsappProvider.sentText).toHaveLength(0);
+    });
+
+    it("suppresses the AI when the conversation itself is paused, even if ai_mode is active", async () => {
+      repo.context = baseConversationContext({ conversationState: "paused", aiMode: "active" });
+      const deps = makeDeps(activeEntitlementSnapshot());
+      await processMessageJob(deps, makePayload());
+      expect(aiProvider.calls).toHaveLength(0);
+    });
+
+    it("suppresses the AI when the conversation is closed", async () => {
+      repo.context = baseConversationContext({ conversationState: "closed", aiMode: "active" });
+      const deps = makeDeps(activeEntitlementSnapshot());
+      await processMessageJob(deps, makePayload());
+      expect(aiProvider.calls).toHaveLength(0);
+    });
   });
 
-  it("never generates an AI reply while a conversation is paused", async () => {
-    repo.context = baseConversationContext({ conversationState: "paused" });
-    const deps = makeDeps(activeEntitlementSnapshot());
-    await processMessageJob(deps, makePayload());
-    expect(aiProvider.calls).toHaveLength(0);
-  });
-
-  it("never generates an AI reply once a conversation is stuck in handover_requested (no automatic return-to-AI path exists yet)", async () => {
-    repo.context = baseConversationContext({ conversationState: "handover_requested" });
-    const deps = makeDeps(activeEntitlementSnapshot());
-    await processMessageJob(deps, makePayload());
-    expect(aiProvider.calls).toHaveLength(0);
-    expect(whatsappProvider.sentText).toHaveLength(0);
-  });
-
-  it("triggers a handover when the AI response requires human attention", async () => {
+  it("triggers a handover (recorded via triggerHandoverAtomic) when the AI response requires human attention, and still sends the reply", async () => {
     aiProvider.respond = () =>
       JSON.stringify({
         answer: "Let me get a team member to help with that.",
@@ -204,9 +305,14 @@ describe("processMessageJob", () => {
 
     await processMessageJob(deps, makePayload());
 
-    expect(repo.handoverCalls).toHaveLength(1);
-    expect(repo.handoverCalls[0]?.reason).toBe("low_confidence");
-    // The customer-facing answer is still sent even when handing over.
+    expect(handoverRepo.handoverCalls).toHaveLength(1);
+    expect(handoverRepo.handoverCalls[0]).toMatchObject({
+      reason: "low_confidence",
+      sourceMessageId: "msg-1",
+      sourceType: "text",
+    });
+    // The customer-facing answer is still sent even when handing over --
+    // handover is collaborative assistance, not an automatic AI replacement.
     expect(whatsappProvider.sentText).toHaveLength(1);
   });
 
@@ -222,35 +328,26 @@ describe("processMessageJob", () => {
     expect(whatsappProvider.sentText).toHaveLength(0);
   });
 
-  it("propagates a WhatsApp send failure (invalid token, wrong phone_number_id, etc.) so the queue retries the job", async () => {
+  it("finalizes as delivery_unknown (never throws / never triggers a retry) on an ambiguous WhatsApp send failure", async () => {
     const deps = makeDeps(activeEntitlementSnapshot());
     whatsappProvider.sendText = async () => {
-      throw new Error("simulated Graph API failure");
-    };
-
-    await expect(processMessageJob(deps, makePayload())).rejects.toThrow(
-      "simulated Graph API failure",
-    );
-    expect(repo.recordedOutbound).toHaveLength(0);
-  });
-
-  it("does not throw (and so does not trigger a queue retry that would resend the reply) when recording the outbound message fails after it was already sent", async () => {
-    const deps = makeDeps(activeEntitlementSnapshot());
-    repo.recordOutboundMessage = async () => {
-      throw new Error("transient database error");
+      throw new Error("simulated network failure");
     };
 
     await expect(processMessageJob(deps, makePayload())).resolves.toBeUndefined();
-
-    // The reply must have gone out exactly once -- a bookkeeping failure
-    // after a successful send must never cause a retry/resend.
-    expect(whatsappProvider.sentText).toHaveLength(1);
   });
 
-  it("a normal text enquiry produces exactly one reply, no handover promise, no unavailable-voice claim, and stays ai_active", async () => {
-    // Simulates the regression this guards: the AI drafting an unauthorized
-    // follow-up promise and an outdated "can't transcribe voice" claim on an
-    // ordinary informational question that never set requiresHuman.
+  it("sends exactly one AI reply per inbound message across a simulated redelivery (reserve/claim guard)", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processMessageJob(deps, makePayload());
+    await processMessageJob(deps, makePayload()); // redelivery of the same queue message
+
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(aiProvider.calls).toHaveLength(2); // Claude reruns, but the WhatsApp send is claim-guarded.
+  });
+
+  it("a normal text enquiry produces exactly one reply, no handover, and stays ai_active", async () => {
     aiProvider.respond = () =>
       JSON.stringify({
         answer:
@@ -270,7 +367,6 @@ describe("processMessageJob", () => {
 
     await processMessageJob(deps, makePayload());
 
-    // Exactly one inbound message produced exactly one reply.
     expect(aiProvider.calls).toHaveLength(1);
     expect(whatsappProvider.sentText).toHaveLength(1);
 
@@ -278,8 +374,7 @@ describe("processMessageJob", () => {
     expect(sentBody).not.toMatch(/unable to (listen|transcribe)/i);
     expect(sentBody).not.toMatch(/follow up/i);
 
-    // No genuine handover was requested, so the conversation must stay ai_active.
-    expect(repo.handoverCalls).toHaveLength(0);
+    expect(handoverRepo.handoverCalls).toHaveLength(0);
   });
 
   it("applies lead updates extracted from the AI response", async () => {

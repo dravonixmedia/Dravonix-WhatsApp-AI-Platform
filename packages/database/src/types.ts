@@ -86,7 +86,8 @@ export interface ConversationRow {
 }
 
 /** Human Handover Inbox: outbound-message reserve/claim/send/finalize lifecycle status. */
-export type OutboundDeliveryStatus = "reserved" | "sending" | "sent" | "send_failed" | "delivery_unknown";
+export type OutboundDeliveryStatus =
+  "reserved" | "sending" | "sent" | "send_failed" | "delivery_unknown";
 
 export interface MessageRow {
   id: string;

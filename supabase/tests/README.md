@@ -19,15 +19,15 @@ files make that possible without the full Supabase stack:
   session. **Never applied to a real Supabase project** — Supabase already
   provides the real versions of these.
 - `support/roles_create.sql` — creates non-superuser `authenticated`/`anon`/
-  `service_role` roles (run *before* any migration), and sets
+  `service_role` roles (run _before_ any migration), and sets
   `alter default privileges ... grant execute on functions to authenticated,
-  anon` so every function a migration creates is executable by them by
+anon` so every function a migration creates is executable by them by
   default, exactly like on a real Supabase project. This must run before the
   migrations because `00000000000012_human_handover.sql` grants/revokes
   execute on these roles by name for its own functions, and those role-name
   references would fail to resolve if the roles didn't already exist.
 - `support/roles.sql` — grants broad TABLE privileges to those roles (run
-  *after* all migrations, since `grant ... on all tables in schema public`
+  _after_ all migrations, since `grant ... on all tables in schema public`
   only affects tables that exist at the time the statement runs). This
   matters because Postgres RLS is bypassed for superusers and table owners;
   the migrations are applied by a superuser, so the test file explicitly

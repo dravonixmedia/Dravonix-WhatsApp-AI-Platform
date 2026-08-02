@@ -130,6 +130,9 @@ importers:
       '@dravonix/database':
         specifier: workspace:*
         version: link:../../../packages/database
+      '@dravonix/handover':
+        specifier: workspace:*
+        version: link:../../../packages/handover
       '@dravonix/knowledge':
         specifier: workspace:*
         version: link:../../../packages/knowledge
@@ -167,6 +170,9 @@ importers:
       '@dravonix/database':
         specifier: workspace:*
         version: link:../../../packages/database
+      '@dravonix/handover':
+        specifier: workspace:*
+        version: link:../../../packages/handover
       '@dravonix/knowledge':
         specifier: workspace:*
         version: link:../../../packages/knowledge

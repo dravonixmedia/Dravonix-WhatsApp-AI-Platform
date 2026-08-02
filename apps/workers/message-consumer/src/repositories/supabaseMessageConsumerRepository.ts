@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
-import type { ConversationState } from "@dravonix/core";
+import type { AiMode, ConversationState } from "@dravonix/core";
 import type { ConversationContext, MessageConsumerRepository } from "../repository.js";
 
 const RECENT_MESSAGE_LIMIT = 10;
@@ -17,7 +17,7 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
     const { data: conversation, error: conversationError } = await this.client
       .from("conversations")
       .select(
-        "company_id, contact_id, state, unresolved_questions, whatsapp_phone_number_id, contacts (whatsapp_wa_id, last_detected_language)",
+        "company_id, contact_id, state, ai_mode, unresolved_questions, whatsapp_phone_number_id, contacts (whatsapp_wa_id, last_detected_language)",
       )
       .eq("id", conversationId)
       .single();
@@ -141,35 +141,12 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
     return {
       companyId,
       conversationState: conversation.state as ConversationState,
+      aiMode: conversation.ai_mode as AiMode,
       aiContext,
       memory,
       waId: contact.whatsapp_wa_id,
       phoneNumberId,
     };
-  }
-
-  async recordOutboundMessage(input: {
-    companyId: string;
-    conversationId: string;
-    body: string;
-    providerMessageId: string;
-  }): Promise<void> {
-    const { error } = await this.client.from("messages").insert({
-      company_id: input.companyId,
-      conversation_id: input.conversationId,
-      direction: "outbound",
-      channel_type: "text",
-      sender_type: "ai",
-      provider_message_id: input.providerMessageId,
-      body: input.body,
-    });
-    if (error) throw error;
-
-    const { error: updateError } = await this.client
-      .from("conversations")
-      .update({ last_message_at: new Date().toISOString() })
-      .eq("id", input.conversationId);
-    if (updateError) throw updateError;
   }
 
   async applyLeadUpdates(input: {
@@ -210,14 +187,6 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
       conversation_id: input.conversationId,
       ...patch,
     });
-    if (error) throw error;
-  }
-
-  async triggerHandover(input: { conversationId: string; reason: string }): Promise<void> {
-    const { error } = await this.client
-      .from("conversations")
-      .update({ state: "handover_requested", handover_reason: input.reason })
-      .eq("id", input.conversationId);
     if (error) throw error;
   }
 }

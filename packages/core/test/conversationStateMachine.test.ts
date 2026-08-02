@@ -85,7 +85,12 @@ describe("conversation state machine", () => {
     const modes: AiMode[] = ["active", "paused"];
 
     it("allows AI replies in ai_active, handover_requested, queued_for_agent, and human_active when ai_mode is active", () => {
-      for (const state of ["ai_active", "handover_requested", "queued_for_agent", "human_active"] as const) {
+      for (const state of [
+        "ai_active",
+        "handover_requested",
+        "queued_for_agent",
+        "human_active",
+      ] as const) {
         expect(isAiReplyAllowed(state, "active")).toBe(true);
       }
     });

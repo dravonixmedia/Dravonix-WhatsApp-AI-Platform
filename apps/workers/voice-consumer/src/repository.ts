@@ -1,5 +1,5 @@
 import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
-import type { ConversationState } from "@dravonix/core";
+import type { AiMode, ConversationState } from "@dravonix/core";
 import type { ReplyModeSetting } from "@dravonix/speech";
 
 export interface VoiceSettings {
@@ -16,6 +16,8 @@ export interface VoiceSettings {
 export interface VoiceConversationContext {
   companyId: string;
   conversationState: ConversationState;
+  /** Human Handover Inbox: AI automation mode, independent of conversationState -- see isAiReplyAllowed. */
+  aiMode: AiMode;
   aiContext: CompanyAiContext;
   memory: ConversationMemoryContext;
   waId: string;
@@ -23,6 +25,15 @@ export interface VoiceConversationContext {
   voiceSettings: VoiceSettings;
 }
 
+/**
+ * Handover-triggering and the base outbound `messages` row lifecycle have
+ * moved to @dravonix/handover's HandoverWorkerRepository (triggerHandoverAtomic,
+ * reserve/finalizeAiOutboundMessage) -- this repository now only covers what
+ * remains voice-specific: conversation context, inbound audio/transcription
+ * bookkeeping, the media_files/generated_audio rows for an outbound voice
+ * reply (linked to a `messages` row that reserve/finalizeAiOutboundMessage
+ * already created), and lead updates.
+ */
 export interface VoiceConsumerRepository {
   loadConversationContext(conversationId: string): Promise<VoiceConversationContext>;
 
@@ -47,24 +58,17 @@ export interface VoiceConsumerRepository {
     languageConfidence: number | null;
   }): Promise<void>;
 
-  recordOutboundTextMessage(input: {
+  /** Records media_files + generated_audio for a `messages` row already created via finalizeAiOutboundMessage(channelType: "audio"). */
+  recordGeneratedAudioMetadata(input: {
     companyId: string;
-    conversationId: string;
-    body: string;
-    providerMessageId: string;
-  }): Promise<void>;
-
-  recordOutboundVoiceMessage(input: {
-    companyId: string;
-    conversationId: string;
-    body: string;
-    providerMessageId: string;
+    messageId: string;
     storageKey: string;
     mimeType: string;
     sizeBytes: number;
     durationSeconds: number | null;
     voiceId: string | null;
     language: string;
+    sourceText: string;
     retentionExpiresAt: Date;
   }): Promise<void>;
 
@@ -73,6 +77,4 @@ export interface VoiceConsumerRepository {
     conversationId: string;
     leadUpdates: LeadUpdates;
   }): Promise<void>;
-
-  triggerHandover(input: { conversationId: string; reason: string }): Promise<void>;
 }

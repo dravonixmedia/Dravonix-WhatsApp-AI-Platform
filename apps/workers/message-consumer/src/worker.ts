@@ -1,6 +1,7 @@
 import { AnthropicProvider } from "@dravonix/ai";
 import { loadEnv } from "@dravonix/config";
 import { createServiceRoleClient } from "@dravonix/database";
+import { SupabaseHandoverWorkerRepository } from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
 import { PostgresKnowledgeRetriever } from "@dravonix/knowledge";
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
@@ -77,6 +78,7 @@ export default {
 
     const deps: MessageConsumerDeps = {
       repo: new SupabaseMessageConsumerRepository(supabase),
+      handoverRepo: new SupabaseHandoverWorkerRepository(supabase),
       entitlementRepo: new SupabaseEntitlementRepository(supabase),
       // minRelevance lowered from the 0.15 default: raw ts_rank scores for
       // short chunks against OR-matched natural-language queries (see

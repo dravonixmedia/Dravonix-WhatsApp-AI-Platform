@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
-import type { ConversationState } from "@dravonix/core";
+import type { AiMode, ConversationState } from "@dravonix/core";
 import type { VoiceConsumerRepository, VoiceConversationContext } from "../repository.js";
 
 const RECENT_MESSAGE_LIMIT = 10;
@@ -19,7 +19,7 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
     const { data: conversation, error: conversationError } = await this.client
       .from("conversations")
       .select(
-        "company_id, contact_id, state, unresolved_questions, whatsapp_phone_number_id, contacts (whatsapp_wa_id, last_detected_language)",
+        "company_id, contact_id, state, ai_mode, unresolved_questions, whatsapp_phone_number_id, contacts (whatsapp_wa_id, last_detected_language)",
       )
       .eq("id", conversationId)
       .single();
@@ -140,6 +140,7 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
     return {
       companyId,
       conversationState: conversation.state as ConversationState,
+      aiMode: conversation.ai_mode as AiMode,
       aiContext,
       memory,
       waId: contact.whatsapp_wa_id,
@@ -211,64 +212,24 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
     if (messageUpdateError) throw messageUpdateError;
   }
 
-  async recordOutboundTextMessage(input: {
+  async recordGeneratedAudioMetadata(input: {
     companyId: string;
-    conversationId: string;
-    body: string;
-    providerMessageId: string;
-  }): Promise<void> {
-    const { error } = await this.client.from("messages").insert({
-      company_id: input.companyId,
-      conversation_id: input.conversationId,
-      direction: "outbound",
-      channel_type: "text",
-      sender_type: "ai",
-      provider_message_id: input.providerMessageId,
-      body: input.body,
-    });
-    if (error) throw error;
-
-    const { error: updateError } = await this.client
-      .from("conversations")
-      .update({ last_message_at: new Date().toISOString() })
-      .eq("id", input.conversationId);
-    if (updateError) throw updateError;
-  }
-
-  async recordOutboundVoiceMessage(input: {
-    companyId: string;
-    conversationId: string;
-    body: string;
-    providerMessageId: string;
+    messageId: string;
     storageKey: string;
     mimeType: string;
     sizeBytes: number;
     durationSeconds: number | null;
     voiceId: string | null;
     language: string;
+    sourceText: string;
     retentionExpiresAt: Date;
   }): Promise<void> {
-    const { data: message, error: messageError } = await this.client
-      .from("messages")
-      .insert({
-        company_id: input.companyId,
-        conversation_id: input.conversationId,
-        direction: "outbound",
-        channel_type: "audio",
-        sender_type: "ai",
-        provider_message_id: input.providerMessageId,
-        body: input.body,
-      })
-      .select("id")
-      .single();
-    if (messageError) throw messageError;
-
     const { data: mediaFile, error: mediaError } = await this.client
       .from("media_files")
       .insert({
         company_id: input.companyId,
         kind: "outbound_audio",
-        message_id: message.id,
+        message_id: input.messageId,
         storage_key: input.storageKey,
         mime_type: input.mimeType,
         size_bytes: input.sizeBytes,
@@ -281,20 +242,14 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
 
     const { error: generatedAudioError } = await this.client.from("generated_audio").insert({
       company_id: input.companyId,
-      message_id: message.id,
+      message_id: input.messageId,
       media_file_id: mediaFile.id,
       provider: "google",
       voice_id: input.voiceId,
       language: input.language,
-      source_text: input.body,
+      source_text: input.sourceText,
     });
     if (generatedAudioError) throw generatedAudioError;
-
-    const { error: updateError } = await this.client
-      .from("conversations")
-      .update({ last_message_at: new Date().toISOString() })
-      .eq("id", input.conversationId);
-    if (updateError) throw updateError;
   }
 
   async applyLeadUpdates(input: {
@@ -334,14 +289,6 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
       conversation_id: input.conversationId,
       ...patch,
     });
-    if (error) throw error;
-  }
-
-  async triggerHandover(input: { conversationId: string; reason: string }): Promise<void> {
-    const { error } = await this.client
-      .from("conversations")
-      .update({ state: "handover_requested", handover_reason: input.reason })
-      .eq("id", input.conversationId);
     if (error) throw error;
   }
 }

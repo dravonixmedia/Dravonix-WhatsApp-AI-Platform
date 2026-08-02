@@ -1,6 +1,12 @@
 import { generateValidatedResponse, type AiProvider } from "@dravonix/ai";
 import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravonix/billing";
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
+import {
+  classifySendError,
+  sendAiOutboundMessage,
+  triggerHandoverAtomic,
+  type HandoverWorkerRepository,
+} from "@dravonix/handover";
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
 import type { Logger } from "@dravonix/observability";
 import {
@@ -23,6 +29,7 @@ export interface VoiceJobPayload {
 
 export interface VoiceConsumerDeps {
   repo: VoiceConsumerRepository;
+  handoverRepo: HandoverWorkerRepository;
   entitlementRepo: EntitlementRepository;
   knowledgeRetriever: KnowledgeRetriever;
   aiProvider: AiProvider;
@@ -46,19 +53,35 @@ function toSttLanguageCode(code: string): string {
 }
 
 /**
- * Runs a post-send bookkeeping write (recording that a message was sent) and
- * swallows any failure instead of letting it propagate. The WhatsApp send
- * this follows has already irreversibly happened -- if this rethrew, the
- * whole queue job would fail and retry, re-running everything from the top
- * (including a fresh Claude call) and sending the customer a real duplicate
- * message for a failure that's specific to our own bookkeeping, not the send.
+ * Sends a text notice tied to the inbound voice message via the same
+ * reserve -> send -> finalize lifecycle as any other AI text reply (final
+ * plan section 12), so a redelivered voice-processing job can't double-send
+ * one of these notices either.
  */
-async function recordOutboundSafely(log: Logger, record: () => Promise<void>): Promise<void> {
+async function sendTextNotice(
+  deps: VoiceConsumerDeps,
+  payload: VoiceJobPayload,
+  context: { phoneNumberId: string; waId: string },
+  log: Logger,
+  notice: string,
+): Promise<void> {
   try {
-    await record();
+    await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "whatsapp_send");
   } catch (error) {
-    log.error("Failed to record an outbound message that was already sent to the customer", {
-      error: error instanceof Error ? error.message : String(error),
+    if (error instanceof EntitlementDeniedError) return;
+    throw error;
+  }
+
+  const result = await sendAiOutboundMessage(deps.handoverRepo, deps.whatsappProvider, {
+    sourceMessageId: payload.messageId,
+    channelType: "text",
+    phoneNumberId: context.phoneNumberId,
+    toWaId: context.waId,
+    body: notice,
+  });
+  if (result.alreadyHandled) {
+    log.info("Skipped notice send: already reserved/sent for this message", {
+      outboundStatus: result.outboundStatus,
     });
   }
 }
@@ -69,8 +92,9 @@ async function recordOutboundSafely(log: Logger, record: () => Promise<void>): P
  * resolve reply mode -> reply with text and/or synthesized voice.
  *
  * Mirrors apps/workers/message-consumer/src/processMessageJob.ts's structure
- * and enforcement rules (ai_active gating, entitlement checks before every
- * paid-provider call) so voice and text messages behave consistently.
+ * and enforcement rules (collaborative ai_mode gating, entitlement checks
+ * before every paid-provider call, reserve/claim/finalize outbound lifecycle)
+ * so voice and text messages behave consistently.
  */
 export async function processVoiceJob(
   deps: VoiceConsumerDeps,
@@ -82,9 +106,10 @@ export async function processVoiceJob(
   });
   const context = await deps.repo.loadConversationContext(payload.conversationId);
 
-  if (!isAiReplyAllowed(context.conversationState)) {
-    log.info("Skipping AI reply: conversation is not in ai_active state", {
+  if (!isAiReplyAllowed(context.conversationState, context.aiMode)) {
+    log.info("Skipping AI reply: suppressed by conversation state or ai_mode", {
       state: context.conversationState,
+      aiMode: context.aiMode,
     });
     return;
   }
@@ -95,28 +120,13 @@ export async function processVoiceJob(
     if (error instanceof EntitlementDeniedError) {
       log.warn("Blocked speech-to-text call: company not entitled", { reason: error.reason });
       // Voice isn't available on this plan/state at all -- tell the customer
-      // rather than leaving their voice note unanswered (unless WhatsApp
-      // sending itself is also blocked, e.g. a suspended company).
-      try {
-        await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "whatsapp_send");
-      } catch (sendError) {
-        if (sendError instanceof EntitlementDeniedError) return;
-        throw sendError;
-      }
-      const notice =
-        "Voice messages aren't available on this account right now. Could you send that as text instead?";
-      const sendResult = await deps.whatsappProvider.sendText({
-        phoneNumberId: context.phoneNumberId,
-        toWaId: context.waId,
-        body: notice,
-      });
-      await recordOutboundSafely(log, () =>
-        deps.repo.recordOutboundTextMessage({
-          companyId: payload.companyId,
-          conversationId: payload.conversationId,
-          body: notice,
-          providerMessageId: sendResult.providerMessageId,
-        }),
+      // rather than leaving their voice note unanswered.
+      await sendTextNotice(
+        deps,
+        payload,
+        context,
+        log,
+        "Voice messages aren't available on this account right now. Could you send that as text instead?",
       );
       return;
     }
@@ -179,35 +189,23 @@ export async function processVoiceJob(
       sizeBytes: audioBytes.byteLength,
     };
     if (context.voiceSettings.fallbackBehavior === "escalate") {
-      await deps.repo.triggerHandover({
+      await triggerHandoverAtomic(deps.handoverRepo, {
         conversationId: payload.conversationId,
         reason: "speech_to_text_failed",
+        sourceMessageId: payload.messageId,
+        sourceType: "voice",
       });
       log.warn("Speech-to-text produced no transcript; escalated to a human", diagnostics);
     } else {
       log.warn("Speech-to-text produced no transcript; sent a text-only notice", diagnostics);
     }
 
-    try {
-      await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "whatsapp_send");
-    } catch (error) {
-      if (error instanceof EntitlementDeniedError) return;
-      throw error;
-    }
-    const notice =
-      "Sorry, I couldn't understand that voice note clearly. Could you try again, or send it as text?";
-    const sendResult = await deps.whatsappProvider.sendText({
-      phoneNumberId: context.phoneNumberId,
-      toWaId: context.waId,
-      body: notice,
-    });
-    await recordOutboundSafely(log, () =>
-      deps.repo.recordOutboundTextMessage({
-        companyId: payload.companyId,
-        conversationId: payload.conversationId,
-        body: notice,
-        providerMessageId: sendResult.providerMessageId,
-      }),
+    await sendTextNotice(
+      deps,
+      payload,
+      context,
+      log,
+      "Sorry, I couldn't understand that voice note clearly. Could you try again, or send it as text?",
     );
     return;
   }
@@ -233,9 +231,15 @@ export async function processVoiceJob(
   }
 
   if (response.requiresHuman) {
-    await deps.repo.triggerHandover({
+    const reason = response.handoverReason ?? "ai_requested_handover";
+    log.warn("Triggering handover (AI keeps replying collaboratively unless explicitly paused)", {
+      reason,
+    });
+    await triggerHandoverAtomic(deps.handoverRepo, {
       conversationId: payload.conversationId,
-      reason: response.handoverReason ?? "ai_requested_handover",
+      reason,
+      sourceMessageId: payload.messageId,
+      sourceType: "voice",
     });
   }
 
@@ -287,22 +291,36 @@ export async function processVoiceJob(
   const replyLanguage = transcription.detectedLanguageCode ?? primaryLanguage;
 
   if (replyMode.mode === "text_only" || replyMode.mode === "text_and_voice") {
-    const sendResult = await deps.whatsappProvider.sendText({
+    const outboundResult = await sendAiOutboundMessage(deps.handoverRepo, deps.whatsappProvider, {
+      sourceMessageId: payload.messageId,
+      channelType: "text",
       phoneNumberId: context.phoneNumberId,
       toWaId: context.waId,
       body: response.answer,
     });
-    await recordOutboundSafely(log, () =>
-      deps.repo.recordOutboundTextMessage({
-        companyId: payload.companyId,
-        conversationId: payload.conversationId,
-        body: response.answer,
-        providerMessageId: sendResult.providerMessageId,
-      }),
-    );
+    if (outboundResult.alreadyHandled) {
+      log.info("Skipped text reply send: already reserved/sent for this message", {
+        outboundStatus: outboundResult.outboundStatus,
+      });
+    }
   }
 
   if (replyMode.mode === "voice_only" || replyMode.mode === "text_and_voice") {
+    // Reserved before synthesizing (rather than using sendAiOutboundMessage's
+    // generic helper) so a redelivered job that already produced a voice
+    // reply for this message skips the paid TTS/upload work entirely instead
+    // of only skipping the final WhatsApp send.
+    const audioReservation = await deps.handoverRepo.reserveAiOutboundMessage(
+      payload.messageId,
+      "audio",
+    );
+    if (!audioReservation.claimed) {
+      log.info("Skipped voice reply synthesis: already reserved/sent for this message", {
+        outboundStatus: audioReservation.outboundStatus,
+      });
+      return;
+    }
+
     try {
       await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "text_to_speech");
 
@@ -334,17 +352,22 @@ export async function processVoiceJob(
         contentType: synthesized.mimeType,
       });
 
-      await deps.repo.recordOutboundVoiceMessage({
+      await deps.handoverRepo.finalizeAiOutboundMessage(
+        audioReservation.id,
+        "sent",
+        sendResult.providerMessageId,
+        response.answer,
+      );
+      await deps.repo.recordGeneratedAudioMetadata({
         companyId: payload.companyId,
-        conversationId: payload.conversationId,
-        body: response.answer,
-        providerMessageId: sendResult.providerMessageId,
+        messageId: audioReservation.id,
         storageKey: outboundStorageKey,
         mimeType: synthesized.mimeType,
         sizeBytes: synthesized.audio.byteLength,
         durationSeconds: null,
         voiceId: voiceId ?? null,
         language: replyLanguage,
+        sourceText: response.answer,
         retentionExpiresAt: computeRetentionExpiry(new Date(), context.voiceSettings.retentionDays),
       });
     } catch (error) {
@@ -352,17 +375,24 @@ export async function processVoiceJob(
         log.warn("Blocked text-to-speech call: company not entitled", { reason: error.reason });
         return;
       }
-      // A TTS provider failure here must not throw: the text reply above (if
-      // this mode included one) has already been sent and recorded. Rethrowing
-      // would fail the whole queue job and cause a retry that re-runs
-      // everything from the top -- including re-transcribing the audio and
-      // re-sending that same text reply again, duplicating it to the customer
-      // for a failure that's specific to voice synthesis. Degrade to the
-      // text-only outcome instead.
-      log.error("Text-to-speech failed; falling back to the text-only reply already sent", {
+      // A TTS/upload/send failure here must not throw: the text reply above
+      // (if this mode included one) has already been sent. Rethrowing would
+      // fail the whole queue job and cause a retry that re-runs everything
+      // from the top -- including re-transcribing the audio. Classify and
+      // finalize the audio reservation instead, mirroring sendAiOutboundMessage.
+      const classification = classifySendError(error);
+      await deps.handoverRepo.finalizeAiOutboundMessage(
+        audioReservation.id,
+        classification.status,
+        null,
+        null,
+        classification.errorCode,
+        classification.retryable,
+      );
+      log.error("Voice reply failed; text-only reply (if any) already sent", {
+        outboundStatus: classification.status,
         error: error instanceof Error ? error.message : String(error),
       });
-      return;
     }
   }
 }

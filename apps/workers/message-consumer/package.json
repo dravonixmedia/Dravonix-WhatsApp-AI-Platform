@@ -16,6 +16,7 @@
     "@dravonix/config": "workspace:*",
     "@dravonix/core": "workspace:*",
     "@dravonix/database": "workspace:*",
+    "@dravonix/handover": "workspace:*",
     "@dravonix/knowledge": "workspace:*",
     "@dravonix/observability": "workspace:*",
     "@dravonix/whatsapp": "workspace:*",

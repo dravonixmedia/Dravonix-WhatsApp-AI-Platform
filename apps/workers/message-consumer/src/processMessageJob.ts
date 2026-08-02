@@ -1,6 +1,11 @@
 import { generateValidatedResponse, type AiProvider } from "@dravonix/ai";
 import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravonix/billing";
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
+import {
+  sendAiOutboundMessage,
+  triggerHandoverAtomic,
+  type HandoverWorkerRepository,
+} from "@dravonix/handover";
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
 import type { Logger } from "@dravonix/observability";
 import { WhatsAppProviderError, type WhatsAppProvider } from "@dravonix/whatsapp";
@@ -27,29 +32,12 @@ export interface MessageJobPayload {
 
 export interface MessageConsumerDeps {
   repo: MessageConsumerRepository;
+  handoverRepo: HandoverWorkerRepository;
   entitlementRepo: EntitlementRepository;
   knowledgeRetriever: KnowledgeRetriever;
   aiProvider: AiProvider;
   whatsappProvider: WhatsAppProvider;
   logger: Logger;
-}
-
-/**
- * Runs a post-send bookkeeping write (recording that a message was sent) and
- * swallows any failure instead of letting it propagate. The WhatsApp send
- * this follows has already irreversibly happened -- if this rethrew, the
- * whole queue job would fail and retry, re-running everything from the top
- * (including a fresh Claude call) and sending the customer a real duplicate
- * message for a failure that's specific to our own bookkeeping, not the send.
- */
-async function recordOutboundSafely(log: Logger, record: () => Promise<void>): Promise<void> {
-  try {
-    await record();
-  } catch (error) {
-    log.error("Failed to record an outbound message that was already sent to the customer", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 /**
@@ -77,16 +65,16 @@ export async function processMessageJob(
   const context = await deps.repo.loadConversationContext(payload.conversationId);
   log.debug("Loaded conversation context", { state: context.conversationState });
 
-  if (!isAiReplyAllowed(context.conversationState)) {
-    // A conversation in handover_requested/queued_for_agent/human_active/paused
-    // never automatically returns to ai_active on its own (there is currently
-    // no agent_assigned/agent_returns_to_ai code path wired up in apps/api) --
-    // every future message on this same conversation will keep hitting this
-    // branch silently until a human/operator moves it back. Logged at warn
-    // (not info) specifically so this doesn't look like routine, expected
-    // behavior when tailing logs.
-    log.warn("Skipping AI reply: conversation is not in ai_active state", {
+  if (!isAiReplyAllowed(context.conversationState, context.aiMode)) {
+    // Collaborative handover model (Human Handover Inbox final plan section 5):
+    // a human being assigned/active does NOT by itself stop the AI -- this only
+    // skips when the conversation itself is paused/closed, or an employee has
+    // explicitly paused the AI (ai_mode='paused'). Logged at warn (not info)
+    // specifically so this doesn't look like routine, expected behavior when
+    // tailing logs.
+    log.warn("Skipping AI reply: suppressed by conversation state or ai_mode", {
       state: context.conversationState,
+      aiMode: context.aiMode,
     });
     return;
   }
@@ -130,12 +118,15 @@ export async function processMessageJob(
   }
 
   if (response.requiresHuman) {
-    log.warn("Triggering handover: conversation will stop receiving automatic AI replies", {
-      reason: response.handoverReason ?? "ai_requested_handover",
+    const reason = response.handoverReason ?? "ai_requested_handover";
+    log.warn("Triggering handover (AI keeps replying collaboratively unless explicitly paused)", {
+      reason,
     });
-    await deps.repo.triggerHandover({
+    await triggerHandoverAtomic(deps.handoverRepo, {
       conversationId: payload.conversationId,
-      reason: response.handoverReason ?? "ai_requested_handover",
+      reason,
+      sourceMessageId: payload.messageId,
+      sourceType: "text",
     });
   }
 
@@ -157,25 +148,30 @@ export async function processMessageJob(
     throw error;
   }
 
-  let sendResult: Awaited<ReturnType<WhatsAppProvider["sendText"]>>;
-  try {
-    sendResult = await deps.whatsappProvider.sendText({
-      phoneNumberId: context.phoneNumberId,
-      toWaId: context.waId,
-      body: response.answer,
-    });
-  } catch (error) {
-    log.error("Outbound WhatsApp send failed", safeErrorDetails(error));
-    throw error;
-  }
-  log.info("Outbound WhatsApp message sent", { providerMessageId: sendResult.providerMessageId });
+  const outboundResult = await sendAiOutboundMessage(deps.handoverRepo, deps.whatsappProvider, {
+    sourceMessageId: payload.messageId,
+    channelType: "text",
+    phoneNumberId: context.phoneNumberId,
+    toWaId: context.waId,
+    body: response.answer,
+  });
 
-  await recordOutboundSafely(log, () =>
-    deps.repo.recordOutboundMessage({
-      companyId: payload.companyId,
-      conversationId: payload.conversationId,
-      body: response.answer,
-      providerMessageId: sendResult.providerMessageId,
-    }),
-  );
+  if (outboundResult.alreadyHandled) {
+    // This exact inbound message already produced a text reply (a redelivered
+    // queue message, or a retry after a prior success) -- the
+    // (source_message_id, channel_type) unique constraint plus the guarded
+    // claim already prevented a second WhatsApp call; nothing left to do.
+    log.info("Skipped AI reply send: already reserved/sent for this message", {
+      outboundStatus: outboundResult.outboundStatus,
+    });
+    return;
+  }
+
+  if (outboundResult.outboundStatus === "sent") {
+    log.info("Outbound WhatsApp message sent", { messageId: outboundResult.messageId });
+  } else {
+    log.error("Outbound WhatsApp send failed or is unconfirmed", {
+      outboundStatus: outboundResult.outboundStatus,
+    });
+  }
 }

@@ -1,6 +1,7 @@
 import { AnthropicProvider } from "@dravonix/ai";
 import { loadEnv } from "@dravonix/config";
 import { createServiceRoleClient } from "@dravonix/database";
+import { SupabaseHandoverWorkerRepository } from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
 import { PostgresKnowledgeRetriever } from "@dravonix/knowledge";
 import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider } from "@dravonix/speech";
@@ -89,6 +90,7 @@ export default {
 
     const deps: VoiceConsumerDeps = {
       repo: new SupabaseVoiceConsumerRepository(supabase),
+      handoverRepo: new SupabaseHandoverWorkerRepository(supabase),
       entitlementRepo: new SupabaseEntitlementRepository(supabase),
       knowledgeRetriever: new PostgresKnowledgeRetriever(
         new SupabaseKnowledgeChunkRepository(supabase),

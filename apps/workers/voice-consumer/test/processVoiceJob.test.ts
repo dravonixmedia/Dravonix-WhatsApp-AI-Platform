@@ -1,5 +1,11 @@
 import { MockAiProvider } from "@dravonix/ai";
 import type { EntitlementRepository, EntitlementSnapshot } from "@dravonix/billing";
+import type { ConversationState } from "@dravonix/core";
+import type {
+  HandoverWorkerRepository,
+  MessageChannelType,
+  OutboundDeliveryStatus,
+} from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
 import { MockSpeechToTextProvider, MockTextToSpeechProvider } from "@dravonix/speech";
 import { MockStorageProvider } from "@dravonix/storage";
@@ -23,6 +29,7 @@ function baseConversationContext(
   return {
     companyId: COMPANY_ID,
     conversationState: "ai_active",
+    aiMode: "active",
     aiContext: {
       companyId: COMPANY_ID,
       companyName: "Dravonix Media",
@@ -88,10 +95,8 @@ class FakeVoiceConsumerRepository implements VoiceConsumerRepository {
   context: VoiceConversationContext = baseConversationContext();
   recordedInboundAudio: unknown[] = [];
   recordedTranscriptions: unknown[] = [];
-  recordedOutboundText: Array<{ body: string; providerMessageId: string }> = [];
-  recordedOutboundVoice: unknown[] = [];
+  recordedGeneratedAudio: unknown[] = [];
   appliedLeadUpdates: unknown[] = [];
-  handoverCalls: Array<{ conversationId: string; reason: string }> = [];
 
   async loadConversationContext(_conversationId: string): Promise<VoiceConversationContext> {
     return this.context;
@@ -106,23 +111,101 @@ class FakeVoiceConsumerRepository implements VoiceConsumerRepository {
     this.recordedTranscriptions.push(input);
   }
 
-  async recordOutboundTextMessage(input: {
-    body: string;
-    providerMessageId: string;
-  }): Promise<void> {
-    this.recordedOutboundText.push(input);
-  }
-
-  async recordOutboundVoiceMessage(input: unknown): Promise<void> {
-    this.recordedOutboundVoice.push(input);
+  async recordGeneratedAudioMetadata(input: unknown): Promise<void> {
+    this.recordedGeneratedAudio.push(input);
   }
 
   async applyLeadUpdates(input: { leadUpdates: unknown }): Promise<void> {
     this.appliedLeadUpdates.push(input.leadUpdates);
   }
+}
 
-  async triggerHandover(input: { conversationId: string; reason: string }): Promise<void> {
+interface FakeOutboundMessage {
+  outboundStatus: OutboundDeliveryStatus;
+  providerMessageId: string | null;
+}
+
+/**
+ * In-memory double for HandoverWorkerRepository, mirroring
+ * apps/workers/message-consumer/test/processMessageJob.test.ts's fake --
+ * replicates the claim-guard semantics closely enough to test the
+ * collaborative AI-reply suppression rules and the exactly-once-per-message-
+ * per-channel send guarantee (final plan section 12), including that a
+ * redelivery skips paid TTS synthesis entirely, not just the WhatsApp send.
+ */
+class FakeHandoverWorkerRepository implements HandoverWorkerRepository {
+  handoverCalls: Array<{
+    conversationId: string;
+    reason: string;
+    sourceMessageId: string | null;
+    sourceType: string;
+  }> = [];
+
+  private messages = new Map<string, FakeOutboundMessage>();
+  private bySourceAndChannel = new Map<string, string>();
+  private counter = 0;
+
+  async triggerHandover(input: {
+    conversationId: string;
+    reason: string;
+    sourceMessageId: string | null;
+    sourceType: "text" | "voice" | "system";
+  }) {
     this.handoverCalls.push(input);
+    return {
+      id: input.conversationId,
+      state: "handover_requested" as ConversationState,
+      handoverReason: input.reason,
+      isNewEvent: true,
+    };
+  }
+
+  async reserveAiOutboundMessage(sourceMessageId: string, channelType: MessageChannelType) {
+    const key = `${sourceMessageId}:${channelType}`;
+    const existingId = this.bySourceAndChannel.get(key);
+    if (existingId) {
+      const existing = this.messages.get(existingId)!;
+      return {
+        id: existingId,
+        claimed: false,
+        outboundStatus: existing.outboundStatus,
+        providerMessageId: existing.providerMessageId,
+      };
+    }
+    this.counter += 1;
+    const id = `msg-out-${this.counter}`;
+    this.bySourceAndChannel.set(key, id);
+    this.messages.set(id, { outboundStatus: "sending", providerMessageId: null });
+    return {
+      id,
+      claimed: true,
+      outboundStatus: "sending" as OutboundDeliveryStatus,
+      providerMessageId: null,
+    };
+  }
+
+  async finalizeAiOutboundMessage(
+    messageId: string,
+    status: OutboundDeliveryStatus,
+    providerMessageId: string | null,
+  ) {
+    const msg = this.messages.get(messageId);
+    if (!msg) throw new Error("message_not_found");
+    msg.outboundStatus = status;
+    msg.providerMessageId = providerMessageId ?? msg.providerMessageId;
+    return { id: messageId, outboundStatus: status };
+  }
+
+  getOutboundStatus(
+    sourceMessageId: string,
+    channelType: MessageChannelType,
+  ): OutboundDeliveryStatus | undefined {
+    const id = this.bySourceAndChannel.get(`${sourceMessageId}:${channelType}`);
+    return id ? this.messages.get(id)?.outboundStatus : undefined;
+  }
+
+  async expireStaleOutboundSends() {
+    return [];
   }
 }
 
@@ -140,6 +223,7 @@ function makePayload(overrides: Partial<VoiceJobPayload> = {}): VoiceJobPayload 
 
 describe("processVoiceJob", () => {
   let repo: FakeVoiceConsumerRepository;
+  let handoverRepo: FakeHandoverWorkerRepository;
   let whatsappProvider: MockWhatsAppProvider;
   let aiProvider: MockAiProvider;
   let sttProvider: MockSpeechToTextProvider;
@@ -149,6 +233,7 @@ describe("processVoiceJob", () => {
 
   beforeEach(() => {
     repo = new FakeVoiceConsumerRepository();
+    handoverRepo = new FakeHandoverWorkerRepository();
     whatsappProvider = new MockWhatsAppProvider();
     aiProvider = new MockAiProvider();
     sttProvider = new MockSpeechToTextProvider();
@@ -160,6 +245,7 @@ describe("processVoiceJob", () => {
   function makeDeps(entitlementSnapshot: EntitlementSnapshot): VoiceConsumerDeps {
     return {
       repo,
+      handoverRepo,
       entitlementRepo: new FakeEntitlementRepository(entitlementSnapshot),
       knowledgeRetriever,
       aiProvider,
@@ -178,47 +264,43 @@ describe("processVoiceJob", () => {
 
     expect(repo.recordedInboundAudio).toHaveLength(1);
     expect(repo.recordedTranscriptions).toHaveLength(1);
-    // Recorded provider must reflect the actual injected STT provider, not a
-    // hardcoded vendor name that could drift out of sync with it.
     expect(repo.recordedTranscriptions[0]).toMatchObject({ provider: sttProvider.providerName });
     expect(aiProvider.calls).toHaveLength(1);
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentAudio).toHaveLength(1);
-    expect(repo.recordedOutboundText).toHaveLength(1);
-    expect(repo.recordedOutboundVoice).toHaveLength(1);
+    expect(repo.recordedGeneratedAudio).toHaveLength(1);
+    expect(handoverRepo.getOutboundStatus("msg-1", "text")).toBe("sent");
+    expect(handoverRepo.getOutboundStatus("msg-1", "audio")).toBe("sent");
   });
 
-  it("does not throw (and so does not trigger a queue retry that would resend the reply) when recording the main text reply fails after it was already sent", async () => {
+  it("sends exactly one text and one voice reply per inbound message across a simulated redelivery, without re-synthesizing", async () => {
+    const synthesizeSpy = vi.spyOn(ttsProvider, "synthesize");
     const deps = makeDeps(activeEntitlementSnapshot());
-    repo.recordOutboundTextMessage = async () => {
-      throw new Error("transient database error");
-    };
 
-    await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
+    await processVoiceJob(deps, makePayload());
+    await processVoiceJob(deps, makePayload()); // redelivery of the same queue message
 
-    // The reply must have gone out exactly once -- a bookkeeping failure
-    // after a successful send must never cause a retry/resend.
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentAudio).toHaveLength(1);
+    // TTS synthesis itself must not be re-attempted on redelivery, not just the send.
+    expect(synthesizeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("degrades to the already-sent text reply without throwing when text-to-speech fails", async () => {
+  it("finalizes the voice reply as delivery_unknown (never throws) when TTS/upload/send fails ambiguously", async () => {
     const deps = makeDeps(activeEntitlementSnapshot());
     deps.ttsProvider = {
       synthesize: async () => {
-        throw new Error(
-          "ElevenLabs text-to-speech request failed with status 402: payment_required",
-        );
+        throw new Error("network timeout");
       },
     };
 
     await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
 
-    // The text reply must have gone out exactly once -- a TTS failure must
-    // never cause the whole job to retry and re-send it.
+    // The text reply must have gone out exactly once -- a voice-reply failure
+    // must never cause the whole job to retry and re-send it.
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentAudio).toHaveLength(0);
-    expect(repo.recordedOutboundVoice).toHaveLength(0);
+    expect(handoverRepo.getOutboundStatus("msg-1", "audio")).toBe("delivery_unknown");
   });
 
   it("retrieves knowledge scoped to the company using the transcribed text", async () => {
@@ -237,14 +319,32 @@ describe("processVoiceJob", () => {
     expect(whatsappProvider.sentAudio).toHaveLength(0);
   });
 
-  it("never processes a voice note while a human agent has taken over the conversation", async () => {
-    repo.context = baseConversationContext({ conversationState: "human_active" });
-    const deps = makeDeps(activeEntitlementSnapshot());
+  describe("collaborative handover model (final plan section 5)", () => {
+    it("keeps processing voice notes during human_active when ai_mode is active", async () => {
+      repo.context = baseConversationContext({
+        conversationState: "human_active",
+        aiMode: "active",
+      });
+      const deps = makeDeps(activeEntitlementSnapshot());
 
-    await processVoiceJob(deps, makePayload());
+      await processVoiceJob(deps, makePayload());
 
-    expect(repo.recordedInboundAudio).toHaveLength(0);
-    expect(aiProvider.calls).toHaveLength(0);
+      expect(repo.recordedInboundAudio).toHaveLength(1);
+      expect(aiProvider.calls).toHaveLength(1);
+    });
+
+    it("suppresses voice processing whenever ai_mode is paused, regardless of conversation state", async () => {
+      repo.context = baseConversationContext({
+        conversationState: "human_active",
+        aiMode: "paused",
+      });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(repo.recordedInboundAudio).toHaveLength(0);
+      expect(aiProvider.calls).toHaveLength(0);
+    });
   });
 
   it("sends a text-only notice instead of going silent when voice is not entitled by the plan", async () => {
@@ -262,20 +362,6 @@ describe("processVoiceJob", () => {
     expect(aiProvider.calls).toHaveLength(0);
   });
 
-  it("does not throw when recording the not-entitled notice fails after it was already sent", async () => {
-    const deps = makeDeps(
-      activeEntitlementSnapshot({
-        features: { voice_enabled: { isEnabled: false, numericLimit: null } },
-      }),
-    );
-    repo.recordOutboundTextMessage = async () => {
-      throw new Error("transient database error");
-    };
-
-    await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
-    expect(whatsappProvider.sentText).toHaveLength(1);
-  });
-
   it("sends a text-only notice and escalates when speech-to-text produces no transcript", async () => {
     sttProvider.fixedText = "";
     repo.context = baseConversationContext({
@@ -285,25 +371,15 @@ describe("processVoiceJob", () => {
 
     await processVoiceJob(deps, makePayload());
 
-    expect(repo.handoverCalls).toHaveLength(1);
-    expect(repo.handoverCalls[0]?.reason).toBe("speech_to_text_failed");
+    expect(handoverRepo.handoverCalls).toHaveLength(1);
+    expect(handoverRepo.handoverCalls[0]).toMatchObject({
+      reason: "speech_to_text_failed",
+      sourceMessageId: "msg-1",
+      sourceType: "voice",
+    });
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentAudio).toHaveLength(0);
     expect(aiProvider.calls).toHaveLength(0);
-  });
-
-  it("does not throw when recording the speech-to-text-failed notice fails after it was already sent", async () => {
-    sttProvider.fixedText = "";
-    repo.context = baseConversationContext({
-      voiceSettings: { ...baseConversationContext().voiceSettings, fallbackBehavior: "escalate" },
-    });
-    repo.recordOutboundTextMessage = async () => {
-      throw new Error("transient database error");
-    };
-    const deps = makeDeps(activeEntitlementSnapshot());
-
-    await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
-    expect(whatsappProvider.sentText).toHaveLength(1);
   });
 
   it("sends a text-only notice without escalating when fallback behavior is text_only_with_notice", async () => {
@@ -318,11 +394,11 @@ describe("processVoiceJob", () => {
 
     await processVoiceJob(deps, makePayload());
 
-    expect(repo.handoverCalls).toHaveLength(0);
+    expect(handoverRepo.handoverCalls).toHaveLength(0);
     expect(whatsappProvider.sentText).toHaveLength(1);
   });
 
-  it("triggers a handover when the AI response requires human attention", async () => {
+  it("triggers a handover (sourceType: voice) when the AI response requires human attention", async () => {
     aiProvider.respond = () =>
       JSON.stringify({
         answer: "Let me get a team member to help with that.",
@@ -340,8 +416,11 @@ describe("processVoiceJob", () => {
 
     await processVoiceJob(deps, makePayload());
 
-    expect(repo.handoverCalls).toHaveLength(1);
-    expect(repo.handoverCalls[0]?.reason).toBe("low_confidence");
+    expect(handoverRepo.handoverCalls).toHaveLength(1);
+    expect(handoverRepo.handoverCalls[0]).toMatchObject({
+      reason: "low_confidence",
+      sourceType: "voice",
+    });
     // The customer-facing answer is still sent even when handing over.
     expect(whatsappProvider.sentText).toHaveLength(1);
   });
