@@ -21,6 +21,7 @@ export function makeInput(overrides: Partial<AiGenerationInput> = {}): AiGenerat
       confidenceThreshold: 0.55,
       staticFallbackMessage:
         "Automated assistance is temporarily unavailable. Our team will respond as soon as possible.",
+      voiceEnabled: true,
     },
     memory: {
       recentMessages: [],

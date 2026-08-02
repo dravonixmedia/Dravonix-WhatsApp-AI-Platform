@@ -37,7 +37,9 @@ export class AnthropicProvider implements AiProvider {
         // with an empty body; Claude's API rejects any message with empty
         // content outright (400: "user messages must have non-empty content"),
         // which would otherwise hard-fail every future turn in the conversation.
-        content: m.body.trim() ? m.body : "[voice message with no transcript available]",
+        content: m.body.trim()
+          ? m.body
+          : "[voice message: transcript unavailable for this one message]",
       })),
       { role: "user", content: input.customerMessage },
     ];

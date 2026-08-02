@@ -65,4 +65,33 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt(company, memory, knowledge);
     expect(prompt).toMatch(/ONLY a single JSON object/);
   });
+
+  it("states voice notes can be listened to and transcribed when the company has voice enabled", () => {
+    const { company, memory, knowledge } = makeInput();
+    const prompt = buildSystemPrompt({ ...company, voiceEnabled: true }, memory, knowledge);
+    expect(prompt).toMatch(/can listen to and understand supported whatsapp voice notes/i);
+    expect(prompt).toMatch(/never tell a customer that voice messages can'?t be listened to/i);
+    expect(prompt).not.toMatch(/unable to (listen|transcribe)/i);
+  });
+
+  it("never tells the model to claim a general inability to process voice when voice is disabled either", () => {
+    const { company, memory, knowledge } = makeInput();
+    const prompt = buildSystemPrompt({ ...company, voiceEnabled: false }, memory, knowledge);
+    expect(prompt).not.toMatch(/unable to (listen|transcribe)/i);
+  });
+
+  it("instructs the model to only promise human follow-up when requiresHuman is true for that response", () => {
+    const { company, memory, knowledge } = makeInput();
+    const prompt = buildSystemPrompt(company, memory, knowledge);
+    expect(prompt).toMatch(
+      /only say that a team member or human will follow up[\s\S]*requireshuman is true/i,
+    );
+    expect(prompt).toMatch(/never promise staff\s+follow-up/i);
+  });
+
+  it("instructs the model to never reveal the underlying AI/speech provider vendor names to the customer", () => {
+    const { company, memory, knowledge } = makeInput();
+    const prompt = buildSystemPrompt(company, memory, knowledge);
+    expect(prompt).toMatch(/never name or describe the underlying ai/i);
+  });
 });

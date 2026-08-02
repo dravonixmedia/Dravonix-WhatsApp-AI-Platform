@@ -39,6 +39,7 @@ function baseConversationContext(
       handoverRules: [],
       confidenceThreshold: 0.55,
       staticFallbackMessage: "Automated assistance is temporarily unavailable.",
+      voiceEnabled: true,
     },
     memory: {
       recentMessages: [],
@@ -244,6 +245,41 @@ describe("processMessageJob", () => {
     // The reply must have gone out exactly once -- a bookkeeping failure
     // after a successful send must never cause a retry/resend.
     expect(whatsappProvider.sentText).toHaveLength(1);
+  });
+
+  it("a normal text enquiry produces exactly one reply, no handover promise, no unavailable-voice claim, and stays ai_active", async () => {
+    // Simulates the regression this guards: the AI drafting an unauthorized
+    // follow-up promise and an outdated "can't transcribe voice" claim on an
+    // ordinary informational question that never set requiresHuman.
+    aiProvider.respond = () =>
+      JSON.stringify({
+        answer:
+          "We're unable to listen to or transcribe voice messages on our end. Our team will also " +
+          "follow up with you shortly. In the meantime, we offer website development and AI automation.",
+        language: "en",
+        intent: "general_enquiry",
+        confidence: 0.9,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processMessageJob(deps, makePayload());
+
+    // Exactly one inbound message produced exactly one reply.
+    expect(aiProvider.calls).toHaveLength(1);
+    expect(whatsappProvider.sentText).toHaveLength(1);
+
+    const sentBody = whatsappProvider.sentText[0]?.body ?? "";
+    expect(sentBody).not.toMatch(/unable to (listen|transcribe)/i);
+    expect(sentBody).not.toMatch(/follow up/i);
+
+    // No genuine handover was requested, so the conversation must stay ai_active.
+    expect(repo.handoverCalls).toHaveLength(0);
   });
 
   it("applies lead updates extracted from the AI response", async () => {

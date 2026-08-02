@@ -16,6 +16,8 @@ export interface CompanyAiContext {
   handoverRules: string[];
   confidenceThreshold: number;
   staticFallbackMessage: string;
+  /** Whether this company has speech-to-text/text-to-speech enabled (voice_settings.is_enabled). */
+  voiceEnabled: boolean;
 }
 
 export interface ConversationMemoryContext {
