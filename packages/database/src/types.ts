@@ -64,6 +64,9 @@ export interface WhatsappPhoneNumberRow {
 export type ConversationState =
   "ai_active" | "handover_requested" | "queued_for_agent" | "human_active" | "paused" | "closed";
 
+/** Human Handover Inbox: AI automation mode, independent of ConversationState (see packages/core). */
+export type ConversationAiMode = "active" | "paused";
+
 export interface ConversationRow {
   id: string;
   company_id: string;
@@ -75,9 +78,15 @@ export interface ConversationRow {
   unresolved_questions: string[];
   handover_reason: string | null;
   assigned_member_id: string | null;
+  state_changed_at: string;
+  ai_mode: ConversationAiMode;
+  handover_last_read_at: string | null;
   created_at: string;
   updated_at: string;
 }
+
+/** Human Handover Inbox: outbound-message reserve/claim/send/finalize lifecycle status. */
+export type OutboundDeliveryStatus = "reserved" | "sending" | "sent" | "send_failed" | "delivery_unknown";
 
 export interface MessageRow {
   id: string;
@@ -93,6 +102,14 @@ export interface MessageRow {
   language_confidence: number | null;
   reply_mode: string | null;
   ai_structured_response: Record<string, unknown> | null;
+  idempotency_key: string | null;
+  outbound_status: OutboundDeliveryStatus | null;
+  source_message_id: string | null;
+  send_claimed_at: string | null;
+  send_lease_expires_at: string | null;
+  send_attempt_count: number;
+  last_send_error_code: string | null;
+  retryable: boolean | null;
   created_at: string;
 }
 
