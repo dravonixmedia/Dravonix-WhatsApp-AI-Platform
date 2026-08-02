@@ -22,8 +22,14 @@ describe("loadEnv", () => {
     );
   });
 
-  it("disables the dev tenant selector outside development even if the flag is true", () => {
-    const env = loadEnv({ APP_ENV: "staging", DEV_TENANT_SELECTOR_ENABLED: "true" });
+  it("rejects DEV_TENANT_SELECTOR_ENABLED=true in staging (Human Handover Inbox final plan section 15)", () => {
+    expect(() => loadEnv({ APP_ENV: "staging", DEV_TENANT_SELECTOR_ENABLED: "true" })).toThrow(
+      /DEV_TENANT_SELECTOR_ENABLED/,
+    );
+  });
+
+  it("disables the dev tenant selector outside development even where the flag is merely computed, not rejected", () => {
+    const env = loadEnv({ APP_ENV: "test", DEV_TENANT_SELECTOR_ENABLED: "true" });
     expect(env.devTenantSelectorEnabled).toBe(false);
   });
 

@@ -1,7 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@dravonix/config"],
+  transpilePackages: [
+    "@dravonix/billing",
+    "@dravonix/config",
+    "@dravonix/core",
+    "@dravonix/database",
+    "@dravonix/handover",
+    "@dravonix/tenant",
+    "@dravonix/whatsapp",
+  ],
   webpack: (config) => {
     // packages/* source uses explicit ".js" extensions on relative imports
     // (TypeScript's "Bundler" moduleResolution convention, resolved to the

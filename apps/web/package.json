@@ -9,7 +9,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dravonix/billing": "workspace:*",
     "@dravonix/config": "workspace:*",
+    "@dravonix/core": "workspace:*",
+    "@dravonix/database": "workspace:*",
+    "@dravonix/handover": "workspace:*",
+    "@dravonix/tenant": "workspace:*",
+    "@dravonix/whatsapp": "workspace:*",
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.47.10",
     "next": "^15.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

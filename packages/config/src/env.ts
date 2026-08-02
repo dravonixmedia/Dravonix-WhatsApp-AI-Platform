@@ -110,9 +110,14 @@ export function loadEnv(source: Record<string, string | undefined>): PlatformEnv
   const raw = parsed.data;
   const isProduction = raw.APP_ENV === "production";
 
-  if (isProduction && raw.DEV_TENANT_SELECTOR_ENABLED) {
+  if ((isProduction || raw.APP_ENV === "staging") && raw.DEV_TENANT_SELECTOR_ENABLED) {
+    // Human Handover Inbox final plan section 15: this must be impossible to
+    // activate outside development, not merely computed as disabled --
+    // `devTenantSelectorEnabled` already can never be true in staging/
+    // production, but a misconfigured deploy that sets this flag should fail
+    // loudly at startup rather than silently no-op.
     throw new EnvValidationError(
-      "  - DEV_TENANT_SELECTOR_ENABLED must not be true when APP_ENV=production",
+      `  - DEV_TENANT_SELECTOR_ENABLED must not be true when APP_ENV=${raw.APP_ENV}`,
     );
   }
 

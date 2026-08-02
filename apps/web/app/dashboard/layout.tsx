@@ -1,5 +1,18 @@
+import { countHandoverBadge, SupabaseHandoverRepository } from "@dravonix/handover";
 import Link from "next/link";
 import { platformBrand } from "@dravonix/config";
+import { logoutAction } from "../../lib/actions/auth.js";
+import { switchCompanyAction } from "../../lib/actions/company.js";
+import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js";
+import { createServerSupabaseClient } from "../../lib/supabase/server.js";
+
+// Every /dashboard/* route depends on the request's session cookie (real
+// Supabase Auth, Human Handover Inbox final plan section 15) -- never
+// statically prerenderable, and forcing this explicitly (rather than relying
+// on Next's automatic dynamic-API detection) keeps a build from crashing when
+// SUPABASE_URL/SUPABASE_ANON_KEY aren't configured (e.g. in CI, which never
+// sets real provider secrets by design -- see .github/workflows/ci.yml).
+export const dynamic = "force-dynamic";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Overview" },
@@ -10,7 +23,50 @@ const NAV_ITEMS = [
   { href: "/dashboard/settings", label: "Settings" },
 ];
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+function NoCompanyAccessPage() {
+  return (
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <div className="dvx-card" style={{ maxWidth: 420, textAlign: "center" }}>
+        <h1 style={{ fontSize: "1.1rem" }}>No company access</h1>
+        <p className="dvx-muted">
+          Your account isn&apos;t an active member of any company yet. Ask an administrator to
+          invite you, then reload this page.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  let session;
+  try {
+    session = await getDashboardSession();
+  } catch (error) {
+    if (error instanceof NoCompanyAccessError) {
+      return <NoCompanyAccessPage />;
+    }
+    throw error;
+  }
+
+  if (!session) {
+    // middleware.ts already redirects unauthenticated /dashboard/* requests
+    // to /login -- this is defense in depth only, never expected in practice.
+    return <NoCompanyAccessPage />;
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const handoverBadgeCount = await countHandoverBadge(
+    new SupabaseHandoverRepository(supabase),
+    session.activeCompanyId,
+  );
+
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
       <aside
@@ -19,14 +75,47 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           flexShrink: 0,
           borderRight: "1px solid var(--dravonix-border)",
           padding: "1.5rem 1rem",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
         <div style={{ fontWeight: 700, fontSize: "1.1rem", marginBottom: "0.25rem" }}>
           {platformBrand.dashboard.subheading}
         </div>
-        <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "1.5rem" }}>
+        <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "1rem" }}>
           {platformBrand.companyName}
         </div>
+
+        {session.memberships.length > 1 ? (
+          <form
+            action={async (formData) => {
+              "use server";
+              await switchCompanyAction(String(formData.get("companyId")));
+            }}
+            style={{ marginBottom: "1rem", display: "flex", gap: "0.35rem" }}
+          >
+            <select
+              name="companyId"
+              defaultValue={session.activeCompanyId}
+              className="dvx-input"
+              style={{ flex: 1, fontSize: "0.85rem" }}
+            >
+              {session.memberships.map((m) => (
+                <option key={m.companyId} value={m.companyId}>
+                  {m.companyName || m.companySlug}
+                </option>
+              ))}
+            </select>
+            <button className="dvx-button" type="submit" style={{ fontSize: "0.8rem" }}>
+              Switch
+            </button>
+          </form>
+        ) : (
+          <div className="dvx-muted" style={{ fontSize: "0.8rem", marginBottom: "1rem" }}>
+            {session.memberships[0]?.companyName}
+          </div>
+        )}
+
         <nav style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
           {NAV_ITEMS.map((item) => (
             <Link
@@ -42,7 +131,45 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {item.label}
             </Link>
           ))}
+          <Link
+            href="/dashboard/handover"
+            style={{
+              padding: "0.5rem 0.75rem",
+              borderRadius: 8,
+              fontSize: "0.9rem",
+              textDecoration: "none",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>Human Handover</span>
+            {handoverBadgeCount > 0 ? (
+              <span
+                style={{
+                  background: "#dc2626",
+                  color: "white",
+                  borderRadius: 999,
+                  fontSize: "0.7rem",
+                  padding: "0.05rem 0.45rem",
+                }}
+              >
+                {handoverBadgeCount}
+              </span>
+            ) : null}
+          </Link>
         </nav>
+
+        <div style={{ marginTop: "auto", paddingTop: "1rem" }}>
+          <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
+            {session.email}
+          </div>
+          <form action={logoutAction}>
+            <button className="dvx-button" type="submit" style={{ width: "100%" }}>
+              Sign out
+            </button>
+          </form>
+        </div>
       </aside>
       <main style={{ flex: 1, padding: "2rem" }}>{children}</main>
     </div>
