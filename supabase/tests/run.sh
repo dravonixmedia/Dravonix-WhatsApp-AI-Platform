@@ -44,13 +44,16 @@ run_file "$MIGRATIONS_DIR/00000000000001_extensions.sql"
 echo "Applying local auth shim (provides auth.users/auth.uid() outside real Supabase)..."
 run_file "$ROOT_DIR/supabase/tests/support/supabase_local_shim.sql"
 
+echo "Creating restricted authenticated/anon/service_role roles..."
+run_file "$ROOT_DIR/supabase/tests/support/roles_create.sql"
+
 echo "Applying remaining migrations..."
 for f in "$MIGRATIONS_DIR"/*.sql; do
   [[ "$(basename "$f")" == "00000000000001_extensions.sql" ]] && continue
   run_file "$f"
 done
 
-echo "Creating restricted authenticated/anon roles..."
+echo "Granting table privileges to authenticated/anon/service_role..."
 run_file "$ROOT_DIR/supabase/tests/support/roles.sql"
 
 echo "Running RLS tenant-isolation assertions..."
