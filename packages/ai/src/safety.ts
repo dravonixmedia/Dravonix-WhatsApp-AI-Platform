@@ -73,39 +73,84 @@ function stripVoiceUnavailableClaim(answer: string, voiceEnabled: boolean): stri
   return stripped.length > 0 ? stripped : answer;
 }
 
+const VOICE_RELATED_HANDOVER_REASON_PATTERN =
+  /\b(voice messages?|voice notes?|voice mails?|audio messages?|transcripts?|transcriptions?|speech.to.text)\b/i;
+
+/**
+ * A text message's own content can never be "an unreadable voice note" -- so
+ * if a *text* enquiry is being escalated with a reason that cites voice
+ * messages or transcripts, that reason can only be leaking in from stale
+ * conversation history (an earlier voice note elsewhere in the thread), not
+ * from anything in the message actually being answered right now. This is
+ * exactly the regression that let an old, already-handled voice-transcript
+ * issue keep re-triggering handover on unrelated new text enquiries.
+ */
+function isStaleVoiceEscalation(
+  requiresHuman: boolean,
+  handoverReason: string | null,
+  currentMessageIsVoice: boolean,
+): boolean {
+  if (currentMessageIsVoice || !requiresHuman) return false;
+  return VOICE_RELATED_HANDOVER_REASON_PATTERN.test(handoverReason ?? "");
+}
+
 export interface SafetyContext {
   /** Whether this company has voice (speech-to-text/text-to-speech) enabled. Defaults to true. */
   voiceEnabled?: boolean;
+  /** Whether the message being answered right now is itself a voice note. Defaults to false (text). */
+  currentMessageIsVoice?: boolean;
 }
 
 /**
  * Applies structural safety rules to an already schema-valid AI response,
- * returning a possibly-modified copy. Forces requiresHuman=true (and records a
- * handoverReason) when the answer appears to make a pricing/availability/hours
- * claim without citing any knowledgeSourceIds. Also strips a stale
- * voice-unsupported claim (when voice is actually enabled) and an unauthorized
- * promise of human follow-up when no genuine handover (requiresHuman=true) is
- * being triggered for this response.
+ * returning a possibly-modified copy.
+ *  - Forces requiresHuman=true (and records a handoverReason) when the answer
+ *    appears to make a pricing/availability/hours claim without citing any
+ *    knowledgeSourceIds.
+ *  - Suppresses an escalation on a text enquiry whose only stated reason is a
+ *    stale voice/transcript issue from earlier history (see
+ *    isStaleVoiceEscalation) -- requiresHuman must reflect the current
+ *    message only.
+ *  - Strips a stale voice-unsupported claim from the answer (when voice is
+ *    actually enabled) and an unauthorized promise of human follow-up when no
+ *    genuine handover (requiresHuman=true) is being triggered for this
+ *    response.
  */
 export function applySafetyRules(
   response: AiStructuredResponse,
   context: SafetyContext = {},
 ): AiStructuredResponse {
-  const hasGrounding = response.knowledgeSourceIds.length > 0;
+  let requiresHuman = response.requiresHuman;
+  let handoverReason = response.handoverReason;
+  let confidence = response.confidence;
 
+  const hasGrounding = response.knowledgeSourceIds.length > 0;
   if (!hasGrounding && containsUngroundedClaim(response.answer)) {
-    return {
-      ...response,
-      requiresHuman: true,
-      handoverReason: response.handoverReason ?? "missing_knowledge_grounding",
-      confidence: Math.min(response.confidence, 0.4),
-    };
+    requiresHuman = true;
+    handoverReason = handoverReason ?? "missing_knowledge_grounding";
+    confidence = Math.min(confidence, 0.4);
+  }
+
+  if (
+    isStaleVoiceEscalation(requiresHuman, handoverReason, context.currentMessageIsVoice ?? false)
+  ) {
+    requiresHuman = false;
+    handoverReason = null;
   }
 
   let answer = stripVoiceUnavailableClaim(response.answer, context.voiceEnabled ?? true);
-  if (!response.requiresHuman) {
+  if (!requiresHuman) {
     answer = stripUnauthorizedFollowUpPromise(answer);
   }
 
-  return answer === response.answer ? response : { ...response, answer };
+  if (
+    requiresHuman === response.requiresHuman &&
+    handoverReason === response.handoverReason &&
+    confidence === response.confidence &&
+    answer === response.answer
+  ) {
+    return response;
+  }
+
+  return { ...response, requiresHuman, handoverReason, confidence, answer };
 }

@@ -2,7 +2,7 @@ import { generateValidatedResponse, type AiProvider } from "@dravonix/ai";
 import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravonix/billing";
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
-import type { Logger } from "@dravonix/observability";
+import { logHandoverTrigger, type Logger } from "@dravonix/observability";
 import {
   resolveReplyMode,
   type SpeechToTextProvider,
@@ -155,9 +155,11 @@ export async function processVoiceJob(
   };
 
   let transcription = await deps.sttProvider.transcribe(sttInput);
+  let sttAttemptCount = 1;
 
   if (!transcription.text.trim() && context.voiceSettings.fallbackBehavior === "retry_once") {
     transcription = await deps.sttProvider.transcribe(sttInput);
+    sttAttemptCount = 2;
   }
 
   await deps.repo.recordTranscription({
@@ -179,6 +181,14 @@ export async function processVoiceJob(
       sizeBytes: audioBytes.byteLength,
     };
     if (context.voiceSettings.fallbackBehavior === "escalate") {
+      logHandoverTrigger(log, {
+        conversationId: payload.conversationId,
+        messageId: payload.messageId,
+        reasonCode: "speech_to_text_failed",
+        source: "voice_failure",
+        validationAttemptCount: sttAttemptCount,
+        previousState: context.conversationState,
+      });
       await deps.repo.triggerHandover({
         conversationId: payload.conversationId,
         reason: "speech_to_text_failed",
@@ -214,7 +224,7 @@ export async function processVoiceJob(
 
   const knowledge = await deps.knowledgeRetriever.retrieve(payload.companyId, transcription.text);
 
-  const { response, usedFallback } = await generateValidatedResponse(
+  const { response, usedFallback, repaired } = await generateValidatedResponse(
     {
       provider: deps.aiProvider,
       onValidationFailure: (details) =>
@@ -225,6 +235,7 @@ export async function processVoiceJob(
       memory: context.memory,
       knowledge,
       customerMessage: transcription.text,
+      currentMessageChannel: "audio",
     },
   );
 
@@ -233,9 +244,18 @@ export async function processVoiceJob(
   }
 
   if (response.requiresHuman) {
+    const reasonCode = response.handoverReason ?? "ai_requested_handover";
+    logHandoverTrigger(log, {
+      conversationId: payload.conversationId,
+      messageId: payload.messageId,
+      reasonCode,
+      source: usedFallback ? "validation_fallback" : "claude",
+      validationAttemptCount: repaired ? 2 : 1,
+      previousState: context.conversationState,
+    });
     await deps.repo.triggerHandover({
       conversationId: payload.conversationId,
-      reason: response.handoverReason ?? "ai_requested_handover",
+      reason: reasonCode,
     });
   }
 

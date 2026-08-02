@@ -210,6 +210,52 @@ describe("processMessageJob", () => {
     expect(whatsappProvider.sentText).toHaveLength(1);
   });
 
+  it("does not re-escalate a normal text enquiry after a conversation with a stale voice-transcript failure was returned to ai_active", async () => {
+    // Exact regression sequence: an earlier voice note in this conversation
+    // has no transcript (empty body, as processVoiceJob/anthropicProvider
+    // store it) and had previously triggered a handover; a human then
+    // returned the conversation to ai_active. The next message is an
+    // ordinary text enquiry, but (as actually observed in staging) Claude's
+    // reasoning can still be anchored on that stale voice history and set
+    // requiresHuman=true again, citing it. That must not create a new
+    // handover, and must not stop the reply from going out.
+    repo.context = baseConversationContext({
+      conversationState: "ai_active",
+      memory: {
+        recentMessages: [
+          { role: "customer", body: "" }, // the old, transcript-less voice note
+          { role: "ai", body: "Sorry, I couldn't understand that voice note clearly." },
+        ],
+        summary: null,
+        leadState: {},
+        unresolvedQuestions: [],
+        customerReplyPreference: null,
+        lastDetectedLanguage: null,
+      },
+    });
+    aiProvider.respond = () =>
+      JSON.stringify({
+        answer: "Thanks for reaching out -- let me get someone to help.",
+        language: "en",
+        intent: "general_enquiry",
+        confidence: 0.4,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: true,
+        handoverReason:
+          "Customer has sent multiple voice messages (unreadable) and repeated greetings, indicating urgency.",
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processMessageJob(deps, makePayload({ body: "Hi, what services do you offer?" }));
+
+    expect(aiProvider.calls).toHaveLength(1);
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(repo.handoverCalls).toHaveLength(0);
+  });
+
   it("propagates a Claude request failure (auth error, network error, etc.) so the queue retries the job", async () => {
     const deps = makeDeps(activeEntitlementSnapshot());
     aiProvider.respond = () => {

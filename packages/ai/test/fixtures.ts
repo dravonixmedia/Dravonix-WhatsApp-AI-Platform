@@ -33,6 +33,7 @@ export function makeInput(overrides: Partial<AiGenerationInput> = {}): AiGenerat
     },
     knowledge: [],
     customerMessage: "Hi, what services do you offer?",
+    currentMessageChannel: "text",
     ...overrides,
   };
 }

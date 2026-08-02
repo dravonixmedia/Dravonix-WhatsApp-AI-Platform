@@ -41,6 +41,14 @@ export interface AiGenerationInput {
   memory: ConversationMemoryContext;
   knowledge: RetrievedKnowledgeSnippet[];
   customerMessage: string;
+  /**
+   * The channel of the message actually being answered right now. Used as a
+   * structural signal so a stale voice-transcript issue from an earlier
+   * message in history can never justify escalating a *current* text
+   * enquiry -- a text message's own content can never be "an unreadable
+   * voice note".
+   */
+  currentMessageChannel: "text" | "audio";
 }
 
 export interface AiUsage {

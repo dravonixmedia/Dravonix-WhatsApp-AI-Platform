@@ -2,7 +2,7 @@ import { generateValidatedResponse, type AiProvider } from "@dravonix/ai";
 import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravonix/billing";
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
-import type { Logger } from "@dravonix/observability";
+import { logHandoverTrigger, type Logger } from "@dravonix/observability";
 import { WhatsAppProviderError, type WhatsAppProvider } from "@dravonix/whatsapp";
 import type { MessageConsumerRepository } from "./repository.js";
 
@@ -106,8 +106,9 @@ export async function processMessageJob(
 
   let response: Awaited<ReturnType<typeof generateValidatedResponse>>["response"];
   let usedFallback: boolean;
+  let repaired: boolean;
   try {
-    ({ response, usedFallback } = await generateValidatedResponse(
+    ({ response, usedFallback, repaired } = await generateValidatedResponse(
       {
         provider: deps.aiProvider,
         onValidationFailure: (details) =>
@@ -118,6 +119,7 @@ export async function processMessageJob(
         memory: context.memory,
         knowledge,
         customerMessage: payload.body,
+        currentMessageChannel: "text",
       },
     ));
   } catch (error) {
@@ -130,12 +132,18 @@ export async function processMessageJob(
   }
 
   if (response.requiresHuman) {
-    log.warn("Triggering handover: conversation will stop receiving automatic AI replies", {
-      reason: response.handoverReason ?? "ai_requested_handover",
+    const reasonCode = response.handoverReason ?? "ai_requested_handover";
+    logHandoverTrigger(log, {
+      conversationId: payload.conversationId,
+      messageId: payload.messageId,
+      reasonCode,
+      source: usedFallback ? "validation_fallback" : "claude",
+      validationAttemptCount: repaired ? 2 : 1,
+      previousState: context.conversationState,
     });
     await deps.repo.triggerHandover({
       conversationId: payload.conversationId,
-      reason: response.handoverReason ?? "ai_requested_handover",
+      reason: reasonCode,
     });
   }
 

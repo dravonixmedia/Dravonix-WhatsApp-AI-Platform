@@ -79,12 +79,17 @@ export async function generateValidatedResponse(
   deps: OrchestrationDependencies,
   input: AiGenerationInput,
 ): Promise<OrchestrationResult> {
+  const safetyContext = {
+    voiceEnabled: input.company.voiceEnabled,
+    currentMessageIsVoice: input.currentMessageChannel === "audio",
+  };
+
   const first = await deps.provider.generate(input);
   const firstParsed = tryParse(first.rawText);
 
   if (firstParsed) {
     return {
-      response: applySafetyRules(firstParsed, { voiceEnabled: input.company.voiceEnabled }),
+      response: applySafetyRules(firstParsed, safetyContext),
       usage: first.usage,
       repaired: false,
       usedFallback: false,
@@ -102,7 +107,7 @@ export async function generateValidatedResponse(
 
   if (repairParsed) {
     return {
-      response: applySafetyRules(repairParsed, { voiceEnabled: input.company.voiceEnabled }),
+      response: applySafetyRules(repairParsed, safetyContext),
       usage: combinedUsage,
       repaired: true,
       usedFallback: false,

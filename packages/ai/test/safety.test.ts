@@ -114,4 +114,54 @@ describe("applySafetyRules", () => {
     const result = applySafetyRules(response, { voiceEnabled: false });
     expect(result.answer).toContain("can't process voice messages");
   });
+
+  it("suppresses an escalation on a text enquiry whose reason cites stale voice/transcript history", () => {
+    // Reproduces the exact regression: a conversation was returned to
+    // ai_active, then an ordinary new text message re-triggered handover
+    // because Claude's reasoning was still anchored on an old, unrelated
+    // voice message elsewhere in the conversation history.
+    const response = baseResponse({
+      answer: "Thanks for reaching out -- let me get someone to help.",
+      requiresHuman: true,
+      handoverReason:
+        "Customer has sent multiple voice messages (unreadable) and repeated greetings, indicating urgency.",
+    });
+    const result = applySafetyRules(response, { currentMessageIsVoice: false });
+    expect(result.requiresHuman).toBe(false);
+    expect(result.handoverReason).toBeNull();
+  });
+
+  it("does not suppress a genuine escalation when the current message actually is a voice note", () => {
+    const response = baseResponse({
+      answer: "Let me get a team member to help with that.",
+      requiresHuman: true,
+      handoverReason: "Customer's voice message could not be transcribed after a retry.",
+    });
+    const result = applySafetyRules(response, { currentMessageIsVoice: true });
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe(
+      "Customer's voice message could not be transcribed after a retry.",
+    );
+  });
+
+  it("does not suppress a text-enquiry escalation for an unrelated, non-voice reason", () => {
+    const response = baseResponse({
+      answer: "Let me get a team member to help with that.",
+      requiresHuman: true,
+      handoverReason: "customer_request",
+    });
+    const result = applySafetyRules(response, { currentMessageIsVoice: false });
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe("customer_request");
+  });
+
+  it("defaults currentMessageIsVoice to false, still suppressing a stale voice reason when omitted", () => {
+    const response = baseResponse({
+      answer: "Let me get a team member to help with that.",
+      requiresHuman: true,
+      handoverReason: "Repeated unreadable voice notes from this customer.",
+    });
+    const result = applySafetyRules(response);
+    expect(result.requiresHuman).toBe(false);
+  });
 });
