@@ -95,3 +95,16 @@ provider calls occur for a suspended company.
 See `TASKS.md`'s "Outstanding limitations" section — no real production
 credentials, deployment, or third-party penetration test have been performed
 in this development session.
+
+### Database hardening follow-up (tracked, not yet done)
+
+Supabase's advisor lint against the staging project surfaced a set of
+WARN-level findings, deliberately left untouched pending a dedicated pass
+(see `TASKS.md` item 10): several `SECURITY DEFINER` RPC functions
+(`current_company_ids`, `current_platform_role`, `has_company_permission`,
+`is_company_member`, `is_platform_staff`) are callable via PostgREST by the
+`anon`/`authenticated` roles, and `set_updated_at`/`search_knowledge_chunks`
+plus the `pg_trgm`/`vector` extensions have mutable-search-path/public-schema
+warnings. None of these were introduced or modified by this inspection;
+evaluate and fix as a standalone hardening task rather than bundling with
+migration/deployment work.

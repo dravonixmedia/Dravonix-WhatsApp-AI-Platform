@@ -302,3 +302,29 @@ Legend: `[x]` done · `[~]` partially done / mocked pending real credentials · 
    Cloudflare queues/R2 bucket created, and Workers Builds' git integration
    disabled for these three services, before it's fully effective — see
    `DEPLOYMENT.md`'s "One-time setup".
+9. **Staging Supabase project confirmed** (`lshfkxirfbjwlklqwqnf`,
+   `SUPABASE_SETUP.md` §0) — its existing messages/webhook_events/media_files/
+   transcriptions/contacts/leads are dev/test records from the Meta test
+   number, not real client data. Its schema is functionally current through
+   migration 11 (verified directly: table presence, installed extensions, and
+   `search_knowledge_chunks`'s live definition all match), but was applied via
+   direct `psql`, not `supabase db push` — the `supabase_migrations` tracking
+   schema doesn't exist on this project at all. A reconciliation
+   (`supabase migration repair --status applied` for versions 1–11, see
+   `SUPABASE_SETUP.md` §3a) is proposed but **not yet executed**, pending
+   explicit approval — do not run `db push`/`apply_migration`/migration 12
+   against this project until it is.
+10. **Database security hardening, not yet done** (found via `get_advisors`
+    against the staging project, deliberately left untouched this session):
+    5 `SECURITY DEFINER` RPC functions (`current_company_ids`,
+    `current_platform_role`, `has_company_permission`, `is_company_member`,
+    `is_platform_staff`) are callable by `anon`/`authenticated` roles via
+    PostgREST, and `set_updated_at`/`search_knowledge_chunks` plus the
+    `pg_trgm`/`vector` extensions have mutable-search-path/public-schema
+    warnings. All WARN-level, not investigated for actual exploitability yet.
+    Also noticed in passing: `generated_audio.provider` is hardcoded to
+    `"google"` in `apps/workers/voice-consumer/src/repositories/
+supabaseVoiceConsumerRepository.ts` regardless of which TTS provider
+    actually ran (ElevenLabs is the real default per ADR-0005) — a
+    data-correctness bug, not a functional blocker, tracked here rather than
+    fixed since it wasn't in scope of the inspection that found it.

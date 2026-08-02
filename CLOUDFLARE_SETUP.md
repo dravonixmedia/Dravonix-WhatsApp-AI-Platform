@@ -19,17 +19,17 @@ production resource for Cloudflare or `wrangler` to collide on. This is the
 exact set of names that exist (or need to be created) in the Cloudflare
 account — keep this table up to date if any of them change.
 
-| Resource                         | Staging                                    | Production (live)                          |
-| -------------------------------- | ------------------------------------------ | ------------------------------------------ |
-| API Worker                       | `dravonixapp-staging`                      | `dravonixapp`                              |
-| Message consumer Worker          | `dravonix-whatsapp-ai-platform-staging`    | `dravonix-whatsapp-ai-platform`            |
-| Voice consumer Worker            | `dravonix-audio-staging`                   | `dravonix-audio`                           |
-| Message queue                    | `dravonix-message-queue-staging`           | `dravonix-message-queue`                   |
-| Message queue DLQ                | `dravonix-message-queue-staging-dlq`       | `dravonix-message-queue-dlq`               |
-| Voice queue                      | `dravonix-voice-queue-staging`             | `dravonix-voice-queue`                     |
-| Voice queue DLQ                  | `dravonix-voice-queue-staging-dlq`         | `dravonix-voice-queue-dlq`                 |
-| Audio R2 bucket (`AUDIO_BUCKET`) | `dravonix-audio-staging`                   | `dravonix-audio`                           |
-| Supabase project                 | separate project — see `SUPABASE_SETUP.md` | separate project — see `SUPABASE_SETUP.md` |
+| Resource                         | Staging                                                  | Production (live)                          |
+| -------------------------------- | -------------------------------------------------------- | ------------------------------------------ |
+| API Worker                       | `dravonixapp-staging`                                    | `dravonixapp`                              |
+| Message consumer Worker          | `dravonix-whatsapp-ai-platform-staging`                  | `dravonix-whatsapp-ai-platform`            |
+| Voice consumer Worker            | `dravonix-audio-staging`                                 | `dravonix-audio`                           |
+| Message queue                    | `dravonix-message-queue-staging`                         | `dravonix-message-queue`                   |
+| Message queue DLQ                | `dravonix-message-queue-staging-dlq`                     | `dravonix-message-queue-dlq`               |
+| Voice queue                      | `dravonix-voice-queue-staging`                           | `dravonix-voice-queue`                     |
+| Voice queue DLQ                  | `dravonix-voice-queue-staging-dlq`                       | `dravonix-voice-queue-dlq`                 |
+| Audio R2 bucket (`AUDIO_BUCKET`) | `dravonix-audio-staging`                                 | `dravonix-audio`                           |
+| Supabase project                 | `lshfkxirfbjwlklqwqnf` — see `SUPABASE_SETUP.md` §0, §3a | separate project — see `SUPABASE_SETUP.md` |
 
 The production Worker names/queues above are already deployed and serving
 real WhatsApp traffic (see `TASKS.md`); this document does not rename them.

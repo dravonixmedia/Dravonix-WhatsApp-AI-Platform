@@ -7,10 +7,10 @@ staging and production, and never point a staging Cloudflare Worker
 (`--env staging`, see `CLOUDFLARE_SETUP.md`) at the production project's
 credentials. Run every step below once per project.
 
-| Environment | Project ref | Notes                                                                |
-| ----------- | ----------- | -------------------------------------------------------------------- |
-| Staging     | _fill in_   | Safe to seed with `002_demo_tenant.sql`, reset, or drop and recreate |
-| Production  | _fill in_   | Already provisioned and live (see `TASKS.md`) — do not recreate      |
+| Environment | Project ref                                      | Notes                                                                                                                                                                                                                                                                                                                                         |
+| ----------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Staging     | `lshfkxirfbjwlklqwqnf` (dravonixmedia's Project) | Confirmed staging as of this writing. Existing rows (messages, webhook_events, media_files, transcriptions, contacts, leads) are dev/test records created through the Meta test number — **not real client data**. See §3a: schema is current through migration 11, but the CLI's own migration-history bookkeeping was never populated here. |
+| Production  | _fill in_                                        | Already provisioned and live (see `TASKS.md`) — do not recreate                                                                                                                                                                                                                                                                               |
 
 Fill in each project's ref (Project Settings → General → Reference ID) here
 once created, so the mapping from Cloudflare environment to Supabase project
@@ -54,6 +54,49 @@ done
 
 All nine migration files have been verified against a real local Postgres 16 +
 pgvector instance with zero errors (see `DATABASE.md`).
+
+## 3a. Migration history reconciliation — required before migration 12 (staging)
+
+**Status on the staging project (`lshfkxirfbjwlklqwqnf`) as of this writing:**
+migrations `00000000000001` through `00000000000011` were applied directly
+against Postgres (the `psql` method in §3 above), not through
+`supabase db push` — confirmed by inspecting the live database directly:
+every table from all 11 migrations exists, installed extensions match
+migration 1 exactly, and `search_knowledge_chunks`'s live function body
+matches migration 11's rewrite verbatim (not migration 10's superseded
+version). The schema is **functionally current through migration 11**.
+
+However, the `supabase_migrations` schema — the table Supabase's own tooling
+(`supabase migration list`, `db push`) reads to know what's already
+applied — does not exist on this project at all. The CLI has no record of
+any of these 11 migrations, even though their effects are all present.
+
+**⚠️ Do not run `supabase db push` or `apply_migration` against staging
+until this is reconciled.** With no tracked history, either would treat all
+11 migrations as pending and try to re-run them — `create table` in
+migrations 2–9 has no `if not exists` guard, so this would fail immediately
+with "relation already exists" rather than silently succeeding. This applies
+to migration 12 too: a new migration can't be safely pushed until the CLI
+agrees the first 11 are already applied.
+
+**Proposed reconciliation (not yet executed — requires explicit approval):**
+
+```bash
+supabase link --project-ref lshfkxirfbjwlklqwqnf
+supabase migration repair --status applied \
+  00000000000001 00000000000002 00000000000003 00000000000004 \
+  00000000000005 00000000000006 00000000000007 00000000000008 \
+  00000000000009 00000000000010 00000000000011 \
+  --linked
+```
+
+`migration repair --status applied` only writes rows into
+`supabase_migrations.schema_migrations` recording each version as applied —
+it does not execute any of the migrations' SQL, so it cannot touch existing
+tables, rows, or the current schema. After it runs, `supabase migration
+list` should show all 11 as applied both locally and remotely with no diff,
+and only then is `supabase db push` (for migration 12+) safe to run against
+this project.
 
 ## 4. Seed data
 
