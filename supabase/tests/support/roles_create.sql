@@ -33,3 +33,14 @@ $$;
 -- later blanket "grant execute on all functions" (previously in roles.sql,
 -- applied after all migrations) silently re-granting them.
 alter default privileges in schema public grant execute on functions to authenticated, anon;
+
+-- Same reasoning, for TABLES: every table created from this point forward
+-- (every migration's tables, including handover_events) automatically gets
+-- these baseline privileges at creation time, so migration 12's own
+-- `revoke insert, update, delete on handover_events from public, anon,
+-- authenticated` is the final, authoritative word -- a later blanket
+-- "grant ... on all tables in schema public" (run post-migration, as the
+-- old roles.sql did) would otherwise silently re-grant direct write access
+-- to a table whose only allowed write path is a SECURITY DEFINER function.
+alter default privileges in schema public grant select, insert, update, delete on tables to authenticated, service_role;
+alter default privileges in schema public grant select, insert, update on tables to anon;

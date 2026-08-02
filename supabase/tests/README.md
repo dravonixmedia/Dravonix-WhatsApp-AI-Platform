@@ -7,6 +7,17 @@ companies, cross-tenant reads on contacts/messages/knowledge/leads/invoices, a
 disabled member who loses access immediately, an anonymous caller who sees nothing,
 and platform support staff who can read across tenants.
 
+`rls_handover.sql` is the equivalent suite for the Human Handover Inbox
+(migration `00000000000012_human_handover.sql`, final plan section 18):
+`handover_events`' RLS/no-direct-write hardening, the human-reply assignment/
+override authorization chain, outbound-message lease/claim concurrency,
+`reconcile_outbound_message`'s status/authorization rules,
+`trigger_handover`'s idempotency (including surviving a full state cycle back
+to `ai_active` -- the bug an earlier revision of this migration had),
+`expire_stale_outbound_sends`, and a hardening sweep asserting all 13 new
+functions have an empty `search_path` and the exact execute-privilege grants
+their trust family requires.
+
 It runs against a real Postgres instance (any Postgres 16 with the `vector`
 extension available — the `pgvector/pgvector:pg16` Docker image, or
 `postgresql-16-pgvector` on Debian/Ubuntu), not just against Supabase. Two support
@@ -26,17 +37,21 @@ anon` so every function a migration creates is executable by them by
   migrations because `00000000000012_human_handover.sql` grants/revokes
   execute on these roles by name for its own functions, and those role-name
   references would fail to resolve if the roles didn't already exist.
-- `support/roles.sql` — grants broad TABLE privileges to those roles (run
-  _after_ all migrations, since `grant ... on all tables in schema public`
-  only affects tables that exist at the time the statement runs). This
-  matters because Postgres RLS is bypassed for superusers and table owners;
-  the migrations are applied by a superuser, so the test file explicitly
-  `SET LOCAL ROLE authenticated` before running any assertion, otherwise the
-  test would silently pass even with RLS disabled. It deliberately does not
-  also grant function execute privileges (that's `roles_create.sql`'s job) --
-  a blanket post-migration function grant would silently undo migration 12's
-  own per-function `revoke ... from authenticated` statements for its
-  service_role-only RPCs.
+  `roles_create.sql` sets the equivalent `alter default privileges ... on
+tables` for the same reason: migration 12's `revoke insert, update,
+delete on handover_events from public, anon, authenticated` must be the
+  final word for that table too.
+- `support/roles.sql` — grants schema `usage` plus `auth`-schema table reads
+  (run _after_ all migrations, for consistency, though nothing in it is
+  actually migration-order-sensitive). This matters because Postgres RLS is
+  bypassed for superusers and table owners; the migrations are applied by a
+  superuser, so the test file explicitly `SET LOCAL ROLE authenticated`
+  before running any assertion, otherwise the test would silently pass even
+  with RLS disabled. It deliberately does not grant any blanket
+  `public`-schema table or function privilege (that's `roles_create.sql`'s
+  per-object-creation-time job) -- a blanket post-migration grant here would
+  silently undo migration 12's own revokes for its service_role-only
+  functions and for direct writes to `handover_events`.
 
 ## Running locally
 

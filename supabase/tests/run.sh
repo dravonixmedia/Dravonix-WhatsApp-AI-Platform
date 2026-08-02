@@ -59,4 +59,7 @@ run_file "$ROOT_DIR/supabase/tests/support/roles.sql"
 echo "Running RLS tenant-isolation assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_tenant_isolation.sql"
 
-echo "All RLS tenant-isolation tests passed."
+echo "Running Human Handover Inbox RLS/RPC hardening assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_handover.sql"
+
+echo "All RLS tests passed."

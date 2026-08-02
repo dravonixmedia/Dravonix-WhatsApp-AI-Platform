@@ -355,11 +355,11 @@ begin
         send_claimed_at = now(),
         send_lease_expires_at = now() + interval '2 minutes',
         send_attempt_count = public.messages.send_attempt_count + 1
-    where source_message_id = p_source_message_id and channel_type = p_channel_type
+    where public.messages.source_message_id = p_source_message_id and public.messages.channel_type = p_channel_type
       and (
-        outbound_status = 'reserved'
-        or (outbound_status = 'send_failed' and retryable = true)
-        or (outbound_status = 'sending' and send_lease_expires_at < now())
+        public.messages.outbound_status = 'reserved'
+        or (public.messages.outbound_status = 'send_failed' and public.messages.retryable = true)
+        or (public.messages.outbound_status = 'sending' and public.messages.send_lease_expires_at < now())
       )
     returning public.messages.id, public.messages.outbound_status, public.messages.provider_message_id
     into v_id, v_status, v_provider_message_id;
@@ -503,11 +503,11 @@ begin
         send_claimed_at = now(),
         send_lease_expires_at = now() + interval '2 minutes',
         send_attempt_count = public.messages.send_attempt_count + 1
-    where idempotency_key = v_key
+    where public.messages.idempotency_key = v_key
       and (
-        outbound_status = 'reserved'
-        or (outbound_status = 'send_failed' and retryable = true)
-        or (outbound_status = 'sending' and send_lease_expires_at < now())
+        public.messages.outbound_status = 'reserved'
+        or (public.messages.outbound_status = 'send_failed' and public.messages.retryable = true)
+        or (public.messages.outbound_status = 'sending' and public.messages.send_lease_expires_at < now())
       )
     returning public.messages.id, public.messages.outbound_status, public.messages.provider_message_id
     into v_id, v_status, v_provider_message_id;
