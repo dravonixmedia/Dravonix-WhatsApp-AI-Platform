@@ -84,7 +84,7 @@ export async function generateValidatedResponse(
 
   if (firstParsed) {
     return {
-      response: applySafetyRules(firstParsed),
+      response: applySafetyRules(firstParsed, { voiceEnabled: input.company.voiceEnabled }),
       usage: first.usage,
       repaired: false,
       usedFallback: false,
@@ -102,7 +102,7 @@ export async function generateValidatedResponse(
 
   if (repairParsed) {
     return {
-      response: applySafetyRules(repairParsed),
+      response: applySafetyRules(repairParsed, { voiceEnabled: input.company.voiceEnabled }),
       usage: combinedUsage,
       repaired: true,
       usedFallback: false,

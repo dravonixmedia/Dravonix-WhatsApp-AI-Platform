@@ -119,6 +119,7 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
       handoverRules: [],
       confidenceThreshold: Number(settings.confidence_threshold),
       staticFallbackMessage: settings.static_fallback_message,
+      voiceEnabled: voiceSettings.is_enabled,
     };
 
     const memory: ConversationMemoryContext = {
