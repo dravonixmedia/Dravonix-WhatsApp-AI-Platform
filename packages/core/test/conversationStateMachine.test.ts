@@ -41,4 +41,22 @@ describe("conversation state machine", () => {
   it("allows reopening a closed conversation back into ai_active", () => {
     expect(applyConversationEvent("closed", "conversation_reopened")).toBe("ai_active");
   });
+
+  it("has no direct handover_requested -> ai_active transition (must go through human_active first)", () => {
+    // Documents a real gap found while diagnosing a staging incident: a
+    // conversation that lands in handover_requested (e.g. via the AI's safe
+    // fallback after repeated validation failure) can only return to
+    // ai_active by first being assigned to an agent (agent_assigned ->
+    // human_active) and then handed back (agent_returns_to_ai). There is no
+    // shortcut straight from handover_requested to ai_active today.
+    expect(() => applyConversationEvent("handover_requested", "agent_returns_to_ai")).toThrow(
+      InvalidStateTransitionError,
+    );
+  });
+
+  it("returns to ai_active from human_active after being routed through handover_requested", () => {
+    const afterHandover = applyConversationEvent("ai_active", "handover_triggered");
+    const afterAssignment = applyConversationEvent(afterHandover, "agent_assigned");
+    expect(applyConversationEvent(afterAssignment, "agent_returns_to_ai")).toBe("ai_active");
+  });
 });

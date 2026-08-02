@@ -94,6 +94,21 @@ create or replace function test_assert(description text, condition boolean) retu
   end;
   $$;
 
+-- ---------------------------------------------------------------------------
+-- Conversation default state: the fixture conversations above were inserted
+-- without specifying `state`, so this exercises the schema's actual default
+-- rather than an application-level assumption. New conversations must start
+-- ai_active (Master Prompt section 16) -- diagnosed in a staging incident
+-- where a conversation got stuck outside ai_active with no automatic way
+-- back in; confirming the *default* is correct rules that out as the cause
+-- of any future recurrence.
+-- ---------------------------------------------------------------------------
+
+select test_assert(
+  'A newly inserted conversation defaults to ai_active',
+  (select state from conversations where id = 'd0000000-0000-0000-0000-00000000000a') = 'ai_active'
+);
+
 -- All fixtures are in place. From here on, run as the restricted `authenticated`
 -- role (non-owner, non-superuser) so RLS is actually enforced, matching how
 -- Supabase's PostgREST/Realtime connections operate against real data.
