@@ -102,7 +102,7 @@ create or replace function test_assert_raises(description text, sql_text text, e
   $$;
 
 -- ---------------------------------------------------------------------------
--- Hardening sweep: every one of migration 12's 13 new functions must have an
+-- Hardening sweep: every one of migration 12's 16 SECURITY DEFINER functions must have an
 -- empty search_path and the exact execute-privilege grants its trust family
 -- requires (final plan section 4/17) -- run once, as superuser, before
 -- switching to the restricted `authenticated` role below.
@@ -451,6 +451,51 @@ begin
   end;
 end;
 $$;
+
+-- The trusted service_role path (what apps/web's reconcileAiOutboundMessage
+-- Server Action uses -- see packages/handover/src/reconcileAiOutboundMessage.ts)
+-- can actually reconcile the AI message, and touches only the intended row.
+reset role;
+insert into messages (id, company_id, conversation_id, direction, channel_type, sender_type, source_message_id, outbound_status, body)
+  values ('f0000001-1000-0000-0000-000000000002', 'aaaaaaaa-1000-0000-0000-000000000001', 'd0000001-1000-0000-0000-000000000003', 'outbound', 'audio', 'ai', 'e0000001-1000-0000-0000-000000000004', 'delivery_unknown', 'a second, untouched AI reply');
+set local role service_role;
+-- A real service_role call never carries a JWT `sub` claim at all -- clear
+-- the simulated one (test_set_current_user's `request.jwt.claim.sub` GUC is
+-- session-level, not transaction-local, so it survives a bare role switch)
+-- so auth.uid() actually evaluates to NULL here, matching production.
+select test_clear_current_user();
+
+do $$
+declare
+  v_ai_message_id uuid := 'f0000001-1000-0000-0000-000000000001';
+  v_other_message_id uuid := 'f0000001-1000-0000-0000-000000000002';
+  v_status outbound_delivery_status;
+  v_other_status outbound_delivery_status;
+begin
+  select outbound_status into v_status from reconcile_outbound_message(v_ai_message_id, 'confirm_sent', 'wamid.AI_RECONCILED', 'confirmed via Meta dashboard');
+  if v_status <> 'sent' then
+    raise exception 'ASSERTION FAILED: expected sent, got %', v_status;
+  end if;
+
+  select outbound_status into v_other_status from messages where id = v_other_message_id;
+  if v_other_status <> 'delivery_unknown' then
+    raise exception 'ASSERTION FAILED: reconciling one AI message must never touch a different message (got %)', v_other_status;
+  end if;
+
+  if not exists (
+    select 1 from audit_logs
+    where action = 'handover.outbound_reconciled'
+      and target_id = v_ai_message_id::text
+      and actor_type = 'system'
+      and actor_user_id is null
+  ) then
+    raise exception 'ASSERTION FAILED: the RPC''s own audit row for an AI-message reconciliation must be system-attributed (no per-employee owner exists at the RPC layer)';
+  end if;
+  raise notice 'OK: service_role can reconcile an AI message, touches only that message, and is audited as a system action';
+end;
+$$;
+
+set local role authenticated;
 
 -- ---------------------------------------------------------------------------
 -- End human assistance / Pause AI never touch each other's fields (final

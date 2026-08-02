@@ -6,5 +6,7 @@ export * from "./repository.js";
 export * from "./outboundMessage.js";
 export * from "./triggerHandoverAtomic.js";
 export * from "./service.js";
+export * from "./reconcileAiOutboundMessage.js";
 export * from "./repositories/supabaseHandoverRepository.js";
 export * from "./repositories/supabaseHandoverWorkerRepository.js";
+export * from "./repositories/supabaseAuditLogWriter.js";

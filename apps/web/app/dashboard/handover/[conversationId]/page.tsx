@@ -13,6 +13,7 @@ import {
 } from "../../../../lib/actions/handover.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
+import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
 import { ReplyComposer } from "./ReplyComposer.js";
 
 function ActionButton({ children }: { children: React.ReactNode }) {
@@ -146,31 +147,45 @@ export default async function ConversationDetailPage({
               </div>
               <div>{message.body}</div>
               {needsReconcile ? (
-                <div style={{ display: "flex", gap: "0.3rem", marginTop: "0.4rem" }}>
-                  <form
-                    action={async () => {
-                      "use server";
-                      await reconcileOutboundMessageAction(
-                        message.id,
-                        conversationId,
-                        "confirm_sent",
-                      );
-                    }}
-                  >
-                    <ActionButton>Confirm sent</ActionButton>
-                  </form>
-                  <form
-                    action={async () => {
-                      "use server";
-                      await reconcileOutboundMessageAction(
-                        message.id,
-                        conversationId,
-                        "confirm_not_sent",
-                      );
-                    }}
-                  >
-                    <ActionButton>Confirm not sent</ActionButton>
-                  </form>
+                <div style={{ marginTop: "0.4rem" }}>
+                  <p style={{ color: "#b45309", fontSize: "0.75rem", margin: "0 0 0.3rem" }}>
+                    {message.outboundStatus === "delivery_unknown"
+                      ? "Delivery could not be confirmed -- manual reconciliation required."
+                      : "This send failed."}
+                  </p>
+                  {message.senderType === "ai" ? (
+                    <ReconcileAiMessageForm
+                      messageId={message.id}
+                      conversationId={conversationId}
+                    />
+                  ) : (
+                    <div style={{ display: "flex", gap: "0.3rem" }}>
+                      <form
+                        action={async () => {
+                          "use server";
+                          await reconcileOutboundMessageAction(
+                            message.id,
+                            conversationId,
+                            "confirm_sent",
+                          );
+                        }}
+                      >
+                        <ActionButton>Confirm sent</ActionButton>
+                      </form>
+                      <form
+                        action={async () => {
+                          "use server";
+                          await reconcileOutboundMessageAction(
+                            message.id,
+                            conversationId,
+                            "confirm_not_sent",
+                          );
+                        }}
+                      >
+                        <ActionButton>Confirm not sent</ActionButton>
+                      </form>
+                    </div>
+                  )}
                 </div>
               ) : null}
             </div>

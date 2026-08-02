@@ -12,6 +12,8 @@
     "@dravonix/billing": "workspace:*",
     "@dravonix/core": "workspace:*",
     "@dravonix/database": "workspace:*",
+    "@dravonix/observability": "workspace:*",
+    "@dravonix/tenant": "workspace:*",
     "@dravonix/whatsapp": "workspace:*",
     "@supabase/supabase-js": "^2.47.10"
   },

@@ -1,9 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { HandoverWorkerRepository } from "../repository.js";
+import type { HandoverWorkerRepository, OutboundMessageForReconciliation } from "../repository.js";
 import type {
   ExpiredOutboundMessage,
   HandoverConversationSummary,
   MessageChannelType,
+  MessageSenderType,
   OutboundDeliveryStatus,
   OutboundFinalizeResult,
   OutboundReservation,
@@ -116,5 +117,42 @@ export class SupabaseHandoverWorkerRepository implements HandoverWorkerRepositor
       companyId: row.company_id,
       senderType: row.sender_type as ExpiredOutboundMessage["senderType"],
     }));
+  }
+
+  async getMessageForReconciliation(
+    messageId: string,
+  ): Promise<OutboundMessageForReconciliation | null> {
+    const { data, error } = await this.client
+      .from("messages")
+      .select("id, company_id, sender_type, outbound_status")
+      .eq("id", messageId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return null;
+    return {
+      id: data.id,
+      companyId: data.company_id,
+      senderType: data.sender_type as MessageSenderType,
+      outboundStatus: data.outbound_status as OutboundDeliveryStatus | null,
+    };
+  }
+
+  async reconcileOutboundMessage(
+    messageId: string,
+    resolution: "confirm_sent" | "confirm_not_sent",
+    providerMessageId: string | null = null,
+    reason: string | null = null,
+  ): Promise<OutboundFinalizeResult> {
+    const row = await callRpc<{ id: string; outbound_status: OutboundDeliveryStatus }>(
+      this.client,
+      "reconcile_outbound_message",
+      {
+        p_message_id: messageId,
+        p_resolution: resolution,
+        p_provider_message_id: providerMessageId,
+        p_reason: reason,
+      },
+    );
+    return { id: row.id, outboundStatus: row.outbound_status };
   }
 }

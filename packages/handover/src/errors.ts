@@ -79,6 +79,24 @@ export class HandoverInvalidSourceTypeError extends AppError {
   }
 }
 
+/**
+ * Thrown by reconcileAiOutboundMessage (the trusted, server-only AI-message
+ * reconciliation path) when the target message was not sent by the AI --
+ * human-agent messages must go through the ordinary authenticated
+ * reconcileOutboundMessage path instead, never this service-role-only one.
+ */
+export class HandoverNotAnAiMessageError extends AppError {
+  constructor(
+    public readonly messageId: string,
+    public readonly actualSenderType: string,
+  ) {
+    super(
+      "not_an_ai_message",
+      `Message ${messageId} was not sent by the AI (sender_type: ${actualSenderType}) -- use the ordinary reconciliation action instead`,
+    );
+  }
+}
+
 const RPC_ERROR_CODES = [
   "unauthorized",
   "not_a_member",

@@ -5,10 +5,19 @@ import type {
   HandoverInboxItem,
   HandoverInboxListInput,
   MessageChannelType,
+  MessageSenderType,
   OutboundDeliveryStatus,
   OutboundFinalizeResult,
   OutboundReservation,
 } from "./types.js";
+
+/** Minimal projection needed to authorize an AI-message reconciliation request before invoking the trusted RPC. */
+export interface OutboundMessageForReconciliation {
+  id: string;
+  companyId: string;
+  senderType: MessageSenderType;
+  outboundStatus: OutboundDeliveryStatus | null;
+}
 
 /**
  * Dashboard-facing repository -- backed by an `authenticated`-scoped Supabase
@@ -97,4 +106,26 @@ export interface HandoverWorkerRepository {
 
   /** Calls expire_stale_outbound_sends(); returns the messages it flipped to delivery_unknown. */
   expireStaleOutboundSends(): Promise<ExpiredOutboundMessage[]>;
+
+  /**
+   * Reads a message's company/sender_type/outbound_status directly (bypasses
+   * RLS, since this runs on the service_role client) -- used to authorize an
+   * AI-message reconciliation request (tenant + sender_type checks) BEFORE
+   * calling reconcileOutboundMessage, since the RLS the authenticated path
+   * would normally rely on does not apply here. Returns null if no such
+   * message exists.
+   */
+  getMessageForReconciliation(messageId: string): Promise<OutboundMessageForReconciliation | null>;
+
+  /**
+   * Calls reconcile_outbound_message as service_role -- the only role
+   * migration 12 permits to reconcile an AI-authored message (auth.uid()
+   * must be null). Never callable with an authenticated-user client.
+   */
+  reconcileOutboundMessage(
+    messageId: string,
+    resolution: "confirm_sent" | "confirm_not_sent",
+    providerMessageId?: string | null,
+    reason?: string | null,
+  ): Promise<OutboundFinalizeResult>;
 }
