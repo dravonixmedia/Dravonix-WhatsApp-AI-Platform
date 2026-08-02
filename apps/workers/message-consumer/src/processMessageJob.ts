@@ -3,8 +3,19 @@ import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravon
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
 import type { Logger } from "@dravonix/observability";
-import type { WhatsAppProvider } from "@dravonix/whatsapp";
+import { WhatsAppProviderError, type WhatsAppProvider } from "@dravonix/whatsapp";
 import type { MessageConsumerRepository } from "./repository.js";
+
+/** Never includes a message body, prompt content, or any provider credential. */
+function safeErrorDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof WhatsAppProviderError) {
+    return { errorType: "WhatsAppProviderError", status: error.status, errorCode: error.errorCode };
+  }
+  if (error instanceof Error) {
+    return { errorType: error.name, message: error.message };
+  }
+  return { errorType: "unknown" };
+}
 
 export interface MessageJobPayload {
   companyId: string;
@@ -64,9 +75,17 @@ export async function processMessageJob(
     conversationId: payload.conversationId,
   });
   const context = await deps.repo.loadConversationContext(payload.conversationId);
+  log.debug("Loaded conversation context", { state: context.conversationState });
 
   if (!isAiReplyAllowed(context.conversationState)) {
-    log.info("Skipping AI reply: conversation is not in ai_active state", {
+    // A conversation in handover_requested/queued_for_agent/human_active/paused
+    // never automatically returns to ai_active on its own (there is currently
+    // no agent_assigned/agent_returns_to_ai code path wired up in apps/api) --
+    // every future message on this same conversation will keep hitting this
+    // branch silently until a human/operator moves it back. Logged at warn
+    // (not info) specifically so this doesn't look like routine, expected
+    // behavior when tailing logs.
+    log.warn("Skipping AI reply: conversation is not in ai_active state", {
       state: context.conversationState,
     });
     return;
@@ -83,26 +102,37 @@ export async function processMessageJob(
   }
 
   const knowledge = await deps.knowledgeRetriever.retrieve(payload.companyId, payload.body);
+  log.debug("Retrieved knowledge chunks", { chunkCount: knowledge.length });
 
-  const { response, usedFallback } = await generateValidatedResponse(
-    {
-      provider: deps.aiProvider,
-      onValidationFailure: (details) =>
-        log.error("AI structured response failed validation twice", details),
-    },
-    {
-      company: context.aiContext,
-      memory: context.memory,
-      knowledge,
-      customerMessage: payload.body,
-    },
-  );
+  let response: Awaited<ReturnType<typeof generateValidatedResponse>>["response"];
+  let usedFallback: boolean;
+  try {
+    ({ response, usedFallback } = await generateValidatedResponse(
+      {
+        provider: deps.aiProvider,
+        onValidationFailure: (details) =>
+          log.error("AI structured response failed validation twice", details),
+      },
+      {
+        company: context.aiContext,
+        memory: context.memory,
+        knowledge,
+        customerMessage: payload.body,
+      },
+    ));
+  } catch (error) {
+    log.error("Claude request failed", safeErrorDetails(error));
+    throw error;
+  }
 
   if (usedFallback) {
     log.warn("Used safe static fallback response after repeated AI validation failure");
   }
 
   if (response.requiresHuman) {
+    log.warn("Triggering handover: conversation will stop receiving automatic AI replies", {
+      reason: response.handoverReason ?? "ai_requested_handover",
+    });
     await deps.repo.triggerHandover({
       conversationId: payload.conversationId,
       reason: response.handoverReason ?? "ai_requested_handover",
@@ -127,11 +157,18 @@ export async function processMessageJob(
     throw error;
   }
 
-  const sendResult = await deps.whatsappProvider.sendText({
-    phoneNumberId: context.phoneNumberId,
-    toWaId: context.waId,
-    body: response.answer,
-  });
+  let sendResult: Awaited<ReturnType<WhatsAppProvider["sendText"]>>;
+  try {
+    sendResult = await deps.whatsappProvider.sendText({
+      phoneNumberId: context.phoneNumberId,
+      toWaId: context.waId,
+      body: response.answer,
+    });
+  } catch (error) {
+    log.error("Outbound WhatsApp send failed", safeErrorDetails(error));
+    throw error;
+  }
+  log.info("Outbound WhatsApp message sent", { providerMessageId: sendResult.providerMessageId });
 
   await recordOutboundSafely(log, () =>
     deps.repo.recordOutboundMessage({

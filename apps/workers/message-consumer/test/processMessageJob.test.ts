@@ -177,6 +177,14 @@ describe("processMessageJob", () => {
     expect(aiProvider.calls).toHaveLength(0);
   });
 
+  it("never generates an AI reply once a conversation is stuck in handover_requested (no automatic return-to-AI path exists yet)", async () => {
+    repo.context = baseConversationContext({ conversationState: "handover_requested" });
+    const deps = makeDeps(activeEntitlementSnapshot());
+    await processMessageJob(deps, makePayload());
+    expect(aiProvider.calls).toHaveLength(0);
+    expect(whatsappProvider.sentText).toHaveLength(0);
+  });
+
   it("triggers a handover when the AI response requires human attention", async () => {
     aiProvider.respond = () =>
       JSON.stringify({
@@ -199,6 +207,30 @@ describe("processMessageJob", () => {
     expect(repo.handoverCalls[0]?.reason).toBe("low_confidence");
     // The customer-facing answer is still sent even when handing over.
     expect(whatsappProvider.sentText).toHaveLength(1);
+  });
+
+  it("propagates a Claude request failure (auth error, network error, etc.) so the queue retries the job", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    aiProvider.respond = () => {
+      throw new Error("simulated Anthropic authentication failure");
+    };
+
+    await expect(processMessageJob(deps, makePayload())).rejects.toThrow(
+      "simulated Anthropic authentication failure",
+    );
+    expect(whatsappProvider.sentText).toHaveLength(0);
+  });
+
+  it("propagates a WhatsApp send failure (invalid token, wrong phone_number_id, etc.) so the queue retries the job", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    whatsappProvider.sendText = async () => {
+      throw new Error("simulated Graph API failure");
+    };
+
+    await expect(processMessageJob(deps, makePayload())).rejects.toThrow(
+      "simulated Graph API failure",
+    );
+    expect(repo.recordedOutbound).toHaveLength(0);
   });
 
   it("does not throw (and so does not trigger a queue retry that would resend the reply) when recording the outbound message fails after it was already sent", async () => {
