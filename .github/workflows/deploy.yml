@@ -146,7 +146,8 @@ jobs:
         run: |
           for toml in apps/api/wrangler.toml \
                       apps/workers/message-consumer/wrangler.toml \
-                      apps/workers/voice-consumer/wrangler.toml; do
+                      apps/workers/voice-consumer/wrangler.toml \
+                      apps/workers/outbound-reconciler/wrangler.toml; do
             bash scripts/verify-wrangler-env-bindings.sh "$toml" "${{ inputs.target_environment }}"
           done
 
@@ -161,6 +162,10 @@ jobs:
       - name: Deploy voice-consumer
         working-directory: apps/workers/voice-consumer
         run: bash ../../../scripts/deploy-with-diagnostics.sh "${{ inputs.target_environment }}" apps/workers/voice-consumer
+
+      - name: Deploy outbound-reconciler
+        working-directory: apps/workers/outbound-reconciler
+        run: bash ../../../scripts/deploy-with-diagnostics.sh "${{ inputs.target_environment }}" apps/workers/outbound-reconciler
 
       - name: Print Wrangler logs on failure
         if: failure()

@@ -1,0 +1,52 @@
+name = "dravonix-outbound-reconciler"
+main = "src/worker.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Secrets (set via the Cloudflare dashboard or `wrangler secret put <NAME>`,
+# never committed): SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, SUPABASE_URL.
+#
+# This top-level (unnamed environment) config is used only by local
+# `wrangler dev` -- every real deploy goes through .github/workflows/deploy.yml,
+# which always passes an explicit --env staging or --env production (see
+# those blocks below). Nothing here is ever deployed directly.
+#
+# Human Handover Inbox final plan section 14: sweeps outbound messages whose
+# sending lease has expired (a WhatsApp send was claimed but never confirmed
+# sent/failed within the lease window) to delivery_unknown, so a crashed/
+# hung worker can never leave a message silently stuck in "sending" forever.
+# Calls expire_stale_outbound_sends() only -- never sends or resends a
+# WhatsApp message itself (Postgres functions can't make HTTP calls, and this
+# Worker doesn't hold a WhatsApp provider at all).
+
+[vars]
+APP_ENV = "development"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+# ---------------------------------------------------------------------------
+# Staging -- isolated Worker. No queue/R2 resources needed (this Worker only
+# calls one RPC on a schedule), so unlike message-consumer/voice-consumer
+# there's no queue name to duplicate here -- just a distinct Worker name.
+# ---------------------------------------------------------------------------
+[env.staging]
+name = "dravonix-outbound-reconciler-staging"
+
+[env.staging.vars]
+APP_ENV = "staging"
+
+[env.staging.triggers]
+crons = ["*/5 * * * *"]
+
+# ---------------------------------------------------------------------------
+# Production
+# ---------------------------------------------------------------------------
+[env.production]
+name = "dravonix-outbound-reconciler"
+
+[env.production.vars]
+APP_ENV = "production"
+
+[env.production.triggers]
+crons = ["*/5 * * * *"]

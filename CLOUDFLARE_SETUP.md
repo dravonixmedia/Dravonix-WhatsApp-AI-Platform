@@ -2,13 +2,13 @@
 
 ## Resources needed
 
-| Resource                         | Used by                                                                                   | Purpose                                                       |
-| -------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Workers                          | `apps/api`, `apps/workers/*`                                                              | HTTP API + queue consumers                                    |
-| Queues                           | `apps/api` (producer), `apps/workers/*` (consumers)                                       | async message/voice/billing/knowledge/notification processing |
-| R2 bucket                        | `apps/workers/voice-consumer`, `apps/workers/knowledge-consumer` (via `packages/storage`) | temporary audio + processed media                             |
-| Pages (or Workers static assets) | `apps/web`                                                                                | Next.js dashboard hosting                                     |
-| Cron Triggers                    | `apps/workers/billing-consumer`                                                           | grace-period checks, usage aggregation, retention cleanup     |
+| Resource                         | Used by                                                                                   | Purpose                                                                                                               |
+| -------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Workers                          | `apps/api`, `apps/workers/*`                                                              | HTTP API + queue consumers                                                                                            |
+| Queues                           | `apps/api` (producer), `apps/workers/*` (consumers)                                       | async message/voice/billing/knowledge/notification processing                                                         |
+| R2 bucket                        | `apps/workers/voice-consumer`, `apps/workers/knowledge-consumer` (via `packages/storage`) | temporary audio + processed media                                                                                     |
+| Pages (or Workers static assets) | `apps/web`                                                                                | Next.js dashboard hosting                                                                                             |
+| Cron Triggers                    | `apps/workers/billing-consumer`, `apps/workers/outbound-reconciler`                       | grace-period checks, usage aggregation, retention cleanup, outbound-message lease-expiry sweep (Human Handover Inbox) |
 
 ## Deployed resource names (staging vs production)
 
@@ -24,6 +24,7 @@ account — keep this table up to date if any of them change.
 | API Worker                       | `dravonixapp-staging`                                    | `dravonixapp`                              |
 | Message consumer Worker          | `dravonix-whatsapp-ai-platform-staging`                  | `dravonix-whatsapp-ai-platform`            |
 | Voice consumer Worker            | `dravonix-audio-staging`                                 | `dravonix-audio`                           |
+| Outbound reconciler Worker       | `dravonix-outbound-reconciler-staging`                   | `dravonix-outbound-reconciler`             |
 | Message queue                    | `dravonix-message-queue-staging`                         | `dravonix-message-queue`                   |
 | Message queue DLQ                | `dravonix-message-queue-staging-dlq`                     | `dravonix-message-queue-dlq`               |
 | Voice queue                      | `dravonix-voice-queue-staging`                           | `dravonix-voice-queue`                     |
@@ -107,7 +108,7 @@ bound by any deployed Worker):
 npx wrangler r2 bucket create dravonix-media-dev
 ```
 
-## 4. Deploy apps/api, message-consumer, voice-consumer
+## 4. Deploy apps/api, message-consumer, voice-consumer, outbound-reconciler
 
 Deployment is not run by hand — it goes through
 `.github/workflows/deploy.yml` (`workflow_dispatch`, `target_environment:
@@ -115,7 +116,7 @@ staging|production`; see `DEPLOYMENT.md`). To run the equivalent manually
 against a given environment:
 
 ```bash
-cd apps/api   # or apps/workers/message-consumer, apps/workers/voice-consumer
+cd apps/api   # or apps/workers/message-consumer, apps/workers/voice-consumer, apps/workers/outbound-reconciler
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
 npx wrangler secret put META_APP_SECRET --env staging
 npx wrangler secret put META_VERIFY_TOKEN --env staging

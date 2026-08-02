@@ -95,6 +95,12 @@ jobs:
           npx wrangler deploy --dry-run --env staging --outdir=/tmp/wrangler-dryrun/voice-consumer-staging
           npx wrangler deploy --dry-run --env production --outdir=/tmp/wrangler-dryrun/voice-consumer-production
 
+      - name: Build verification — outbound-reconciler (Cloudflare Worker bundle, staging + production)
+        working-directory: apps/workers/outbound-reconciler
+        run: |
+          npx wrangler deploy --dry-run --env staging --outdir=/tmp/wrangler-dryrun/outbound-reconciler-staging
+          npx wrangler deploy --dry-run --env production --outdir=/tmp/wrangler-dryrun/outbound-reconciler-production
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

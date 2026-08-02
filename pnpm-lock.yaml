@@ -153,6 +153,31 @@ importers:
         specifier: ^3.99.0
         version: 3.114.17
 
+  apps/workers/outbound-reconciler:
+    dependencies:
+      '@dravonix/config':
+        specifier: workspace:*
+        version: link:../../../packages/config
+      '@dravonix/database':
+        specifier: workspace:*
+        version: link:../../../packages/database
+      '@dravonix/handover':
+        specifier: workspace:*
+        version: link:../../../packages/handover
+      '@dravonix/observability':
+        specifier: workspace:*
+        version: link:../../../packages/observability
+      '@supabase/supabase-js':
+        specifier: ^2.47.10
+        version: 2.111.0
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      wrangler:
+        specifier: ^3.99.0
+        version: 3.114.17
+
   apps/workers/voice-consumer:
     dependencies:
       '@dravonix/ai':
