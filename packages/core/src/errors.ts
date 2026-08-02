@@ -82,3 +82,27 @@ export class PermissionDeniedError extends AppError {
     super("permission_denied", `Missing permission "${permission}" for company ${companyId}`);
   }
 }
+
+/** Thrown when an "assign to me" (or similar atomic claim) loses the race to another caller. */
+export class ConversationAlreadyClaimedError extends AppError {
+  constructor(public readonly conversationId: string) {
+    super(
+      "conversation_already_claimed",
+      `Conversation ${conversationId} was already claimed by another team member`,
+    );
+  }
+}
+
+/**
+ * Thrown when a caller tries to act on a conversation assigned to a
+ * different team member without holding the explicit override permission
+ * (conversations.reassign).
+ */
+export class ConversationNotAssignedToCallerError extends AppError {
+  constructor(public readonly conversationId: string) {
+    super(
+      "conversation_not_assigned_to_caller",
+      `Conversation ${conversationId} is assigned to a different team member`,
+    );
+  }
+}

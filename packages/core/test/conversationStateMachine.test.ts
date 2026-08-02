@@ -3,6 +3,9 @@ import {
   applyConversationEvent,
   InvalidStateTransitionError,
   isAiReplyAllowed,
+  statesAllowingEvent,
+  type AiMode,
+  type ConversationState,
 } from "../src/index.js";
 
 describe("conversation state machine", () => {
@@ -30,33 +33,83 @@ describe("conversation state machine", () => {
     );
   });
 
-  it("suppresses AI replies once a human has taken control", () => {
-    expect(isAiReplyAllowed("ai_active")).toBe(true);
-    expect(isAiReplyAllowed("human_active")).toBe(false);
-    expect(isAiReplyAllowed("handover_requested")).toBe(false);
-    expect(isAiReplyAllowed("paused")).toBe(false);
-    expect(isAiReplyAllowed("closed")).toBe(false);
-  });
-
   it("allows reopening a closed conversation back into ai_active", () => {
     expect(applyConversationEvent("closed", "conversation_reopened")).toBe("ai_active");
   });
 
-  it("has no direct handover_requested -> ai_active transition (must go through human_active first)", () => {
-    // Documents a real gap found while diagnosing a staging incident: a
-    // conversation that lands in handover_requested (e.g. via the AI's safe
-    // fallback after repeated validation failure) can only return to
-    // ai_active by first being assigned to an agent (agent_assigned ->
-    // human_active) and then handed back (agent_returns_to_ai). There is no
-    // shortcut straight from handover_requested to ai_active today.
-    expect(() => applyConversationEvent("handover_requested", "agent_returns_to_ai")).toThrow(
-      InvalidStateTransitionError,
-    );
+  it("moves handover_requested to queued_for_agent on agent_queues (Mark as queued)", () => {
+    expect(applyConversationEvent("handover_requested", "agent_queues")).toBe("queued_for_agent");
   });
 
-  it("returns to ai_active from human_active after being routed through handover_requested", () => {
+  it("allows End human assistance (agent_returns_to_ai) directly from handover_requested", () => {
+    // Human Handover Inbox final plan §10: declining a handover must not
+    // require faking an assignment first. This replaces the old, narrower
+    // gap-documenting test (a conversation could only return to ai_active by
+    // first being assigned to an agent) now that the direct transition exists.
+    expect(applyConversationEvent("handover_requested", "agent_returns_to_ai")).toBe("ai_active");
+  });
+
+  it("allows End human assistance directly from queued_for_agent", () => {
+    expect(applyConversationEvent("queued_for_agent", "agent_returns_to_ai")).toBe("ai_active");
+  });
+
+  it("still returns to ai_active from human_active after being routed through handover_requested", () => {
     const afterHandover = applyConversationEvent("ai_active", "handover_triggered");
     const afterAssignment = applyConversationEvent(afterHandover, "agent_assigned");
     expect(applyConversationEvent(afterAssignment, "agent_returns_to_ai")).toBe("ai_active");
+  });
+
+  describe("statesAllowingEvent", () => {
+    it("derives exactly the states that accept agent_assigned", () => {
+      expect(statesAllowingEvent("agent_assigned").sort()).toEqual(
+        ["handover_requested", "queued_for_agent"].sort(),
+      );
+    });
+
+    it("derives exactly the states that accept agent_returns_to_ai", () => {
+      expect(statesAllowingEvent("agent_returns_to_ai").sort()).toEqual(
+        ["handover_requested", "queued_for_agent", "human_active", "paused"].sort(),
+      );
+    });
+  });
+
+  describe("isAiReplyAllowed -- collaborative handover model (final plan §5)", () => {
+    const allStates: ConversationState[] = [
+      "ai_active",
+      "handover_requested",
+      "queued_for_agent",
+      "human_active",
+      "paused",
+      "closed",
+    ];
+    const modes: AiMode[] = ["active", "paused"];
+
+    it("allows AI replies in ai_active, handover_requested, queued_for_agent, and human_active when ai_mode is active", () => {
+      for (const state of ["ai_active", "handover_requested", "queued_for_agent", "human_active"] as const) {
+        expect(isAiReplyAllowed(state, "active")).toBe(true);
+      }
+    });
+
+    it("assigning/starting a human conversation does not by itself disable AI (human_active + active = allowed)", () => {
+      expect(isAiReplyAllowed("human_active", "active")).toBe(true);
+    });
+
+    it("suppresses AI whenever ai_mode is paused, regardless of conversation state", () => {
+      for (const state of allStates) {
+        expect(isAiReplyAllowed(state, "paused")).toBe(false);
+      }
+    });
+
+    it("suppresses AI in the paused conversation state regardless of ai_mode", () => {
+      for (const mode of modes) {
+        expect(isAiReplyAllowed("paused", mode)).toBe(false);
+      }
+    });
+
+    it("suppresses AI in the closed conversation state regardless of ai_mode", () => {
+      for (const mode of modes) {
+        expect(isAiReplyAllowed("closed", mode)).toBe(false);
+      }
+    });
   });
 });
