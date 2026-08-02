@@ -164,4 +164,73 @@ describe("applySafetyRules", () => {
     const result = applySafetyRules(response);
     expect(result.requiresHuman).toBe(false);
   });
+
+  it('strips a present-tense handover promise like "I\'m connecting you with our team"', () => {
+    // The exact wording observed in staging: no "will/would/shall" at all,
+    // so a tense-specific pattern would have missed it.
+    const response = baseResponse({
+      answer:
+        "Since you've reached out multiple times, I'm connecting you with our team so they can " +
+        "assist you directly.",
+      requiresHuman: false,
+    });
+    const result = applySafetyRules(response);
+    expect(result.answer).not.toMatch(/connecting you/i);
+    expect(result.answer).not.toMatch(/our team/i);
+  });
+
+  it("suppresses an escalation whose reason is based only on repeated messages/frequency", () => {
+    // Reproduces the exact new regression: the customer sent the same
+    // ordinary enquiry multiple times, and that repetition alone was read as
+    // urgency requiring a human handover.
+    const response = baseResponse({
+      answer: "Since you've reached out multiple times, I'm connecting you with our team.",
+      requiresHuman: true,
+      handoverReason:
+        "Customer sent the same message repeatedly, indicating a possible technical issue or urgent need for direct human assistance.",
+    });
+    const result = applySafetyRules(response);
+    expect(result.requiresHuman).toBe(false);
+    expect(result.handoverReason).toBeNull();
+    // The now-unauthorized "connecting you with our team" promise must not survive either.
+    expect(result.answer).not.toMatch(/connecting you/i);
+  });
+
+  it("suppresses escalation reasons citing repeated greetings or multiple contacts", () => {
+    const repeatedGreetings = baseResponse({
+      requiresHuman: true,
+      handoverReason: "Customer has sent repeated greetings with no clear question.",
+    });
+    const multipleContacts = baseResponse({
+      requiresHuman: true,
+      handoverReason: "Customer has contacted us several times today.",
+    });
+    expect(applySafetyRules(repeatedGreetings).requiresHuman).toBe(false);
+    expect(applySafetyRules(multipleContacts).requiresHuman).toBe(false);
+  });
+
+  it("does not suppress frequency-worded escalation when the customer genuinely asked for a human", () => {
+    const response = baseResponse({
+      answer: "Sure, connecting you with a team member now.",
+      requiresHuman: true,
+      handoverReason:
+        "Customer has messaged multiple times and has now explicitly asked to speak to a human.",
+    });
+    const result = applySafetyRules(response);
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe(
+      "Customer has messaged multiple times and has now explicitly asked to speak to a human.",
+    );
+  });
+
+  it("still escalates a plain, unrelated explicit human request", () => {
+    const response = baseResponse({
+      answer: "Sure, connecting you with a team member now.",
+      requiresHuman: true,
+      handoverReason: "Customer explicitly requested a human.",
+    });
+    const result = applySafetyRules(response);
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe("Customer explicitly requested a human.");
+  });
 });

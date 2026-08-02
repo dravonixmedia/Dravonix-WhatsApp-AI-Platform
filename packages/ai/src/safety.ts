@@ -23,27 +23,43 @@ function containsUngroundedClaim(answer: string): boolean {
 }
 
 /**
- * Matches sentences that promise staff/human follow-up (e.g. "Our team will
- * also follow up with you shortly."). Used as a defense-in-depth backstop for
- * the prompt-level rule: a promise like this must never reach the customer
- * unless requiresHuman is true, since otherwise no handover actually happens
- * and the promise goes unfulfilled.
+ * Matches a mention of staff/a human handling this conversation (e.g. "our
+ * team", "a staff member").
  */
-const HUMAN_FOLLOWUP_PROMISE_PATTERN =
-  /[^.!?\n]*\b(our team|the team|a team member|someone from our team|a human agent|our staff|a member of our team|a staff member)\b[^.!?\n]*\b(will|would|shall)\b[^.!?\n]*\b(follow up|reach out|contact you|get back to you|respond to you|assist you)\b[^.!?\n]*[.!?]?/gi;
+const STAFF_MENTION_PATTERN =
+  /\b(our team|the team|a team member|someone from our team|a human agent|our staff|a member of our team|a staff member)\b/i;
 
 /**
- * Removes any unauthorized human-follow-up promise from an answer that isn't
- * actually escalating (requiresHuman=false). Returns the original string
- * unchanged if stripping would leave nothing customer-facing -- an imperfect
- * match is safer to leave in place than to send a blank reply.
+ * Matches the action half of a handover promise, in whatever tense the model
+ * used -- both future ("will follow up") and present-continuous ("I'm
+ * connecting you with our team") phrasing are covered, since either reads to
+ * the customer as staff are being looped in right now.
+ */
+const HANDOVER_ACTION_PATTERN =
+  /\b(follow(ing)? up|reach(ing)? out|contact(ing)? you|get(ting)? back to you|respond(ing)? to you|assist(ing)? you|connect(ing)? you|transferr?(ing)? you|hand(ing)? (this |you )?over|put(ting)? you through)\b/i;
+
+/**
+ * Used only when stripping an unauthorized follow-up promise would otherwise
+ * leave nothing customer-facing (the whole answer was just that promise).
+ * Sending the forbidden wording is never acceptable, so a short, neutral
+ * acknowledgement is used instead of a blank WhatsApp message.
+ */
+const SAFE_ACKNOWLEDGEMENT_FALLBACK = "Thanks for reaching out -- how can I help you today?";
+
+/**
+ * Removes any unauthorized human-follow-up promise sentence from an answer
+ * that isn't actually escalating (requiresHuman=false). Falls back to a
+ * neutral acknowledgement if that would otherwise strip the entire answer --
+ * the forbidden wording must never reach the customer, even in that edge case.
  */
 function stripUnauthorizedFollowUpPromise(answer: string): string {
-  // .match() (unlike .test()) resets a global regex's lastIndex before scanning,
-  // so repeated calls against different strings can't leak state between them.
-  if (!answer.match(HUMAN_FOLLOWUP_PROMISE_PATTERN)) return answer;
-  const stripped = answer.replace(HUMAN_FOLLOWUP_PROMISE_PATTERN, "").replace(/\s+/g, " ").trim();
-  return stripped.length > 0 ? stripped : answer;
+  const sentences = answer.split(/(?<=[.!?])\s+/);
+  const kept = sentences.filter(
+    (sentence) => !(STAFF_MENTION_PATTERN.test(sentence) && HANDOVER_ACTION_PATTERN.test(sentence)),
+  );
+  if (kept.length === sentences.length) return answer;
+  const stripped = kept.join(" ").trim();
+  return stripped.length > 0 ? stripped : SAFE_ACKNOWLEDGEMENT_FALLBACK;
 }
 
 const VOICE_NEGATION_PATTERN = /\b(unable|not able|can'?t|cannot|won'?t|don'?t|do not|doesn'?t)\b/i;
@@ -77,6 +93,14 @@ const VOICE_RELATED_HANDOVER_REASON_PATTERN =
   /\b(voice messages?|voice notes?|voice mails?|audio messages?|transcripts?|transcriptions?|speech.to.text)\b/i;
 
 /**
+ * Matches a handoverReason that shows the *customer* explicitly asked for a
+ * human -- a legitimate escalation that must never be suppressed, even if the
+ * same reason also happens to mention repetition or voice history.
+ */
+const EXPLICIT_HUMAN_REQUEST_PATTERN =
+  /\b(explicitly (asked|requested)|requested (a |to speak (with|to) a )?human|asked (for|to speak (with|to)) a human|wants? to (speak|talk) (with|to) a (human|person|agent)|connect (me|them|us) (to|with) a human)\b/i;
+
+/**
  * A text message's own content can never be "an unreadable voice note" -- so
  * if a *text* enquiry is being escalated with a reason that cites voice
  * messages or transcripts, that reason can only be leaking in from stale
@@ -91,7 +115,30 @@ function isStaleVoiceEscalation(
   currentMessageIsVoice: boolean,
 ): boolean {
   if (currentMessageIsVoice || !requiresHuman) return false;
-  return VOICE_RELATED_HANDOVER_REASON_PATTERN.test(handoverReason ?? "");
+  const reason = handoverReason ?? "";
+  if (EXPLICIT_HUMAN_REQUEST_PATTERN.test(reason)) return false;
+  return VOICE_RELATED_HANDOVER_REASON_PATTERN.test(reason);
+}
+
+const FREQUENCY_BASED_ESCALATION_PATTERN =
+  /\b(sent (the )?same message|repeated(ly)? (greetings?|messages?|enquir(y|ies))|multiple times|several times|contacted (us|them|the business)?\s*(several|multiple) times|reached out (multiple|several) times|message frequency|keeps? (sending|messaging|repeating))\b/i;
+
+/**
+ * Repeated greetings, a duplicate enquiry, or a customer contacting the
+ * business several times is never, by itself, urgency -- a customer re-
+ * sending the same ordinary question is not a reason to stop AI replies. This
+ * is exactly the regression that let plain message frequency read as "urgent
+ * need for direct human assistance". Never suppressed when the customer
+ * genuinely, explicitly asked for a human.
+ */
+function isFrequencyBasedEscalation(
+  requiresHuman: boolean,
+  handoverReason: string | null,
+): boolean {
+  if (!requiresHuman) return false;
+  const reason = handoverReason ?? "";
+  if (EXPLICIT_HUMAN_REQUEST_PATTERN.test(reason)) return false;
+  return FREQUENCY_BASED_ESCALATION_PATTERN.test(reason);
 }
 
 export interface SafetyContext {
@@ -107,10 +154,13 @@ export interface SafetyContext {
  *  - Forces requiresHuman=true (and records a handoverReason) when the answer
  *    appears to make a pricing/availability/hours claim without citing any
  *    knowledgeSourceIds.
- *  - Suppresses an escalation on a text enquiry whose only stated reason is a
- *    stale voice/transcript issue from earlier history (see
- *    isStaleVoiceEscalation) -- requiresHuman must reflect the current
- *    message only.
+ *  - Suppresses an escalation whose only stated reason is a stale
+ *    voice/transcript issue from earlier history on a text enquiry (see
+ *    isStaleVoiceEscalation), or is based only on message repetition/
+ *    frequency (see isFrequencyBasedEscalation) -- requiresHuman must reflect
+ *    something about the current message, never just how many times the
+ *    customer has written in. Both carve out a genuine explicit request for a
+ *    human, which always still escalates.
  *  - Strips a stale voice-unsupported claim from the answer (when voice is
  *    actually enabled) and an unauthorized promise of human follow-up when no
  *    genuine handover (requiresHuman=true) is being triggered for this
@@ -132,7 +182,8 @@ export function applySafetyRules(
   }
 
   if (
-    isStaleVoiceEscalation(requiresHuman, handoverReason, context.currentMessageIsVoice ?? false)
+    isStaleVoiceEscalation(requiresHuman, handoverReason, context.currentMessageIsVoice ?? false) ||
+    isFrequencyBasedEscalation(requiresHuman, handoverReason)
   ) {
     requiresHuman = false;
     handoverReason = null;

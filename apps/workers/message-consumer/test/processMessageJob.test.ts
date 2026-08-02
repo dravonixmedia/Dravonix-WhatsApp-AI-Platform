@@ -256,6 +256,90 @@ describe("processMessageJob", () => {
     expect(repo.handoverCalls).toHaveLength(0);
   });
 
+  it("does not escalate a normal enquiry sent multiple times, and never sends an unauthorized handover promise", async () => {
+    // Exact regression sequence: the customer sent the same ordinary
+    // enquiry ("Hello, can you tell me about Dravonix Media?") several
+    // times, and (as actually observed in staging) that repetition alone
+    // was read by Claude as urgency, escalating to a human and saying
+    // "I'm connecting you with our team". Message frequency must never be
+    // sufficient by itself to trigger a handover.
+    repo.context = baseConversationContext({
+      conversationState: "ai_active",
+      memory: {
+        recentMessages: [
+          { role: "customer", body: "Hello, can you tell me about Dravonix Media?" },
+          { role: "ai", body: "We're a WhatsApp AI platform for businesses. How can I help?" },
+          { role: "customer", body: "Hello, can you tell me about Dravonix Media?" },
+          { role: "ai", body: "We're a WhatsApp AI platform for businesses. How can I help?" },
+        ],
+        summary: null,
+        leadState: {},
+        unresolvedQuestions: [],
+        customerReplyPreference: null,
+        lastDetectedLanguage: null,
+      },
+    });
+    aiProvider.respond = () =>
+      JSON.stringify({
+        answer:
+          "Since you've reached out multiple times, I'm connecting you with our team so they can " +
+          "assist you directly.",
+        language: "en",
+        intent: "general_enquiry",
+        confidence: 0.5,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: true,
+        handoverReason:
+          "Customer sent the same message repeatedly, indicating a possible technical issue or " +
+          "urgent need for direct human assistance.",
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processMessageJob(
+      deps,
+      makePayload({
+        messageId: "msg-repeat-3",
+        body: "Hello, can you tell me about Dravonix Media?",
+      }),
+    );
+
+    // Exactly one inbound message produced exactly one reply.
+    expect(aiProvider.calls).toHaveLength(1);
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    // No state transition: the conversation must stay ai_active.
+    expect(repo.handoverCalls).toHaveLength(0);
+    // No unauthorized human-follow-up promise reaches the customer.
+    const sentBody = whatsappProvider.sentText[0]?.body ?? "";
+    expect(sentBody).not.toMatch(/connecting you/i);
+    expect(sentBody).not.toMatch(/our team/i);
+  });
+
+  it("still triggers the normal handover flow for an explicit human request", async () => {
+    aiProvider.respond = () =>
+      JSON.stringify({
+        answer: "Of course -- connecting you with a team member now.",
+        language: "en",
+        intent: "human_request",
+        confidence: 0.9,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: true,
+        handoverReason: "Customer explicitly requested a human.",
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processMessageJob(deps, makePayload({ body: "Please connect me to a human" }));
+
+    expect(repo.handoverCalls).toHaveLength(1);
+    expect(repo.handoverCalls[0]?.reason).toBe("Customer explicitly requested a human.");
+    expect(whatsappProvider.sentText).toHaveLength(1);
+  });
+
   it("propagates a Claude request failure (auth error, network error, etc.) so the queue retries the job", async () => {
     const deps = makeDeps(activeEntitlementSnapshot());
     aiProvider.respond = () => {

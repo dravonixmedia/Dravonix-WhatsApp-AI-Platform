@@ -40,6 +40,12 @@ export function buildSystemPrompt(
       "  requiresHuman is true in this exact response. If requiresHuman is false, never promise staff",
       '  follow-up, escalation, or that "someone will get back to you" -- that promise would go unfulfilled',
       "  since no handover is actually being triggered.",
+      "- Repeated greetings, a duplicate enquiry, or a customer contacting you several times are never, by",
+      "  themselves, urgency and are never by themselves a reason to set requiresHuman=true -- judge only",
+      "  the current message's own content. Set requiresHuman=true only when the customer explicitly asks",
+      "  for a human, the current request genuinely needs staff action you cannot provide, the topic is a",
+      "  configured high-risk/restricted topic, or your confidence in answering this specific question is",
+      "  below threshold.",
       company.voiceEnabled
         ? "- You can listen to and understand supported WhatsApp voice notes: they are transcribed " +
           "automatically before you see them, and you may reply with voice when appropriate. Never tell a " +
