@@ -1,3 +1,4 @@
+import { resolveFallbackMessage } from "./fallbackMessage.js";
 import { applySafetyRules } from "./safety.js";
 import { aiStructuredResponseSchema, type AiStructuredResponse } from "./schema.js";
 import type { AiGenerationInput, AiProvider, AiUsage } from "./provider.js";
@@ -11,10 +12,31 @@ export interface OrchestrationResult {
   usedFallback: boolean;
 }
 
+/**
+ * Sanitized diagnostics for one parse/validate attempt (never the raw
+ * transcript or response text, never API keys/tokens/phone numbers -- only
+ * counts, codes, and the detected language). Emitted after both the first
+ * and, if needed, the repair attempt, so a validation failure can be traced
+ * without exposing customer message content.
+ */
+export interface ValidationDiagnosticEvent {
+  stage: "claude_response_parse";
+  attempt: "first" | "repair";
+  detectedLanguage: string | null;
+  transcriptCharCount: number;
+  responseCharCount: number;
+  errorCode: "json_parse_error" | "schema_validation_failed" | null;
+  /** JSON path of the first schema field that failed, e.g. "language" or "leadUpdates.name". */
+  failedField: string | null;
+  repairAttempted: boolean;
+}
+
 export interface OrchestrationDependencies {
   provider: AiProvider;
   /** Called once if both attempts fail, for monitoring (Master Prompt section 11). */
   onValidationFailure?: (details: { rawFirstAttempt: string; rawRepairAttempt: string }) => void;
+  /** Called after each parse/validate attempt with sanitized, logging-safe diagnostics. */
+  onDiagnostics?: (event: ValidationDiagnosticEvent) => void;
 }
 
 /**
@@ -36,21 +58,76 @@ function extractJsonCandidate(rawText: string): string {
   return trimmed;
 }
 
-function tryParse(rawText: string): AiStructuredResponse | null {
+interface ParseAttempt {
+  data: AiStructuredResponse | null;
+  errorCode: "json_parse_error" | "schema_validation_failed" | null;
+  failedField: string | null;
+}
+
+/**
+ * Parses and schema-validates a raw Claude response. The schema itself
+ * (schema.ts) has no script/language-specific constraints -- any well-formed,
+ * complete JSON payload with valid field values is accepted regardless of
+ * whether `answer` is English, Malayalam, or a mix of both. A failure here is
+ * therefore either a genuine JSON syntax error (most commonly caused by the
+ * response being cut off before Claude finished -- see the repair attempt's
+ * boosted token budget in anthropicProvider.ts) or a real missing/invalid
+ * field, never a rejection based on which language the content is in.
+ */
+function tryParse(rawText: string): ParseAttempt {
   let json: unknown;
   try {
     json = JSON.parse(extractJsonCandidate(rawText));
   } catch {
-    return null;
+    return { data: null, errorCode: "json_parse_error", failedField: null };
   }
   const result = aiStructuredResponseSchema.safeParse(json);
-  return result.success ? result.data : null;
+  if (result.success) {
+    return { data: result.data, errorCode: null, failedField: null };
+  }
+  const firstIssue = result.error.issues[0];
+  return {
+    data: null,
+    errorCode: "schema_validation_failed",
+    failedField: firstIssue && firstIssue.path.length > 0 ? firstIssue.path.join(".") : null,
+  };
 }
 
+function emitDiagnostics(
+  deps: OrchestrationDependencies,
+  input: AiGenerationInput,
+  attempt: ParseAttempt,
+  rawText: string,
+  which: "first" | "repair",
+): void {
+  deps.onDiagnostics?.({
+    stage: "claude_response_parse",
+    attempt: which,
+    detectedLanguage: input.currentDetectedLanguage ?? input.memory.lastDetectedLanguage ?? null,
+    transcriptCharCount: input.customerMessage.length,
+    responseCharCount: rawText.length,
+    errorCode: attempt.errorCode,
+    failedField: attempt.failedField,
+    repairAttempted: which === "repair",
+  });
+}
+
+/**
+ * The safe, static, non-AI-generated response used when both the original
+ * and repair attempts fail validation. The message text is resolved by the
+ * detected language (current turn's detection takes priority over a prior
+ * turn's) so a Malayalam customer gets a Malayalam apology, never an
+ * English-only one silently defaulted -- and never the old unauthorized
+ * response-time promise (see fallbackMessage.ts).
+ */
 export function safeFallbackResponse(input: AiGenerationInput): AiStructuredResponse {
+  const language =
+    input.currentDetectedLanguage ??
+    input.memory.lastDetectedLanguage ??
+    input.company.fallbackLanguage;
   return {
-    answer: input.company.staticFallbackMessage,
-    language: input.memory.lastDetectedLanguage ?? input.company.fallbackLanguage,
+    answer: resolveFallbackMessage(input.company.staticFallbackMessage, language),
+    language,
     intent: "unknown",
     confidence: 0,
     replyMode: "auto",
@@ -62,10 +139,15 @@ export function safeFallbackResponse(input: AiGenerationInput): AiStructuredResp
   };
 }
 
-const REPAIR_INSTRUCTION =
-  "Your previous response was not valid JSON matching the required schema, or was missing required " +
-  "fields. Respond again with ONLY a single valid JSON object matching the schema exactly -- no prose, " +
-  "no markdown fences.";
+function buildRepairInstruction(language: string): string {
+  return (
+    "Your previous response was not valid JSON matching the required schema, or was missing required " +
+    "fields. Respond again with ONLY a single valid JSON object matching the schema exactly -- no prose, " +
+    `no markdown fences. Reply in the same language as before (${language}). Keep the answer as concise ` +
+    "as possible while still complete and valid, so the full JSON response fits comfortably within the " +
+    "token limit -- an unfinished, truncated JSON object is treated the same as an invalid one."
+  );
+}
 
 /**
  * Orchestrates a single Claude turn end to end: call -> validate -> (repair once
@@ -79,25 +161,35 @@ export async function generateValidatedResponse(
   deps: OrchestrationDependencies,
   input: AiGenerationInput,
 ): Promise<OrchestrationResult> {
+  // currentMessageIsVoice preserves the stale-voice-escalation/frequency-based-
+  // escalation suppression already deployed on this branch (safety.ts);
+  // language/currentDetectedLanguage is the Malayalam-fix addition -- both are
+  // independent context this call needs.
   const safetyContext = {
     voiceEnabled: input.company.voiceEnabled,
     currentMessageIsVoice: input.currentMessageChannel === "audio",
   };
+  const language =
+    input.currentDetectedLanguage ??
+    input.memory.lastDetectedLanguage ??
+    input.company.fallbackLanguage;
 
   const first = await deps.provider.generate(input);
-  const firstParsed = tryParse(first.rawText);
+  const firstAttempt = tryParse(first.rawText);
+  emitDiagnostics(deps, input, firstAttempt, first.rawText, "first");
 
-  if (firstParsed) {
+  if (firstAttempt.data) {
     return {
-      response: applySafetyRules(firstParsed, safetyContext),
+      response: applySafetyRules(firstAttempt.data, safetyContext),
       usage: first.usage,
       repaired: false,
       usedFallback: false,
     };
   }
 
-  const repair = await deps.provider.generate(input, REPAIR_INSTRUCTION);
-  const repairParsed = tryParse(repair.rawText);
+  const repair = await deps.provider.generate(input, buildRepairInstruction(language));
+  const repairAttempt = tryParse(repair.rawText);
+  emitDiagnostics(deps, input, repairAttempt, repair.rawText, "repair");
 
   const combinedUsage: AiUsage = {
     inputTokens: first.usage.inputTokens + repair.usage.inputTokens,
@@ -105,9 +197,9 @@ export async function generateValidatedResponse(
     cachedInputTokens: first.usage.cachedInputTokens + repair.usage.cachedInputTokens,
   };
 
-  if (repairParsed) {
+  if (repairAttempt.data) {
     return {
-      response: applySafetyRules(repairParsed, safetyContext),
+      response: applySafetyRules(repairAttempt.data, safetyContext),
       usage: combinedUsage,
       repaired: true,
       usedFallback: false,

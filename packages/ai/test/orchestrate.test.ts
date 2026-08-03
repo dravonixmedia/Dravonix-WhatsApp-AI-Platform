@@ -50,9 +50,12 @@ describe("generateValidatedResponse", () => {
 
     expect(result.usedFallback).toBe(true);
     expect(result.response.requiresHuman).toBe(true);
+    // The corrected fallback text replaces the old unauthorized time promise
+    // (see fallbackMessage.ts) -- it must never resurface here.
     expect(result.response.answer).toBe(
-      "Automated assistance is temporarily unavailable. Our team will respond as soon as possible.",
+      "I couldn't complete that request automatically. I've shared it with the Dravonix Media team for assistance.",
     );
+    expect(result.response.answer).not.toContain("respond as soon as possible");
     expect(onValidationFailure).toHaveBeenCalledTimes(1);
   });
 
@@ -138,5 +141,188 @@ describe("generateValidatedResponse", () => {
     expect(result.repaired).toBe(false);
     expect(result.response.requiresHuman).toBe(true);
     expect(result.response.confidence).toBeLessThan(0.55);
+  });
+
+  describe("Malayalam and mixed-language responses (validation is language-agnostic)", () => {
+    const malayalamAnswer =
+      "നിങ്ങളുടെ ചോദ്യത്തിന് നന്ദി. ഞങ്ങൾ വെബ്സൈറ്റ് ഡെവലപ്മെന്റ് സേവനങ്ങൾ വാഗ്ദാനം ചെയ്യുന്നു.";
+    const mixedAnswer = "നന്ദി! We offer website development and AI automation services.";
+
+    it("accepts a complete, well-formed Malayalam Unicode response on the first attempt", async () => {
+      const provider = new MockAiProvider(() =>
+        JSON.stringify({
+          answer: malayalamAnswer,
+          language: "ml",
+          intent: "general_enquiry",
+          confidence: 0.85,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        }),
+      );
+
+      const result = await generateValidatedResponse({ provider }, makeInput());
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.repaired).toBe(false);
+      expect(result.response.answer).toBe(malayalamAnswer);
+      expect(result.response.language).toBe("ml");
+    });
+
+    it("accepts Malayalam-English mixed-script text in the same response", async () => {
+      const provider = new MockAiProvider(() =>
+        JSON.stringify({
+          answer: mixedAnswer,
+          language: "ml",
+          intent: "general_enquiry",
+          confidence: 0.8,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        }),
+      );
+
+      const result = await generateValidatedResponse({ provider }, makeInput());
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.response.answer).toBe(mixedAnswer);
+    });
+
+    it("preserves the detected language in the repair instruction sent to the provider", async () => {
+      let call = 0;
+      const provider = new MockAiProvider(() => {
+        call += 1;
+        if (call === 1) return "{ malformed";
+        return JSON.stringify({
+          answer: malayalamAnswer,
+          language: "ml",
+          intent: "general_enquiry",
+          confidence: 0.7,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        });
+      });
+
+      const result = await generateValidatedResponse(
+        { provider },
+        makeInput({ currentDetectedLanguage: "ml" }),
+      );
+
+      expect(result.repaired).toBe(true);
+      expect(result.response.answer).toBe(malayalamAnswer);
+      expect(provider.calls[1]?.repairInstruction).toContain("ml");
+    });
+
+    it("emits sanitized diagnostics for each parse attempt, with no raw transcript/response content", async () => {
+      let call = 0;
+      const provider = new MockAiProvider(() => {
+        call += 1;
+        if (call === 1) return "{ not valid json";
+        return JSON.stringify({
+          answer: malayalamAnswer,
+          language: "ml",
+          intent: "general_enquiry",
+          confidence: 0.7,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        });
+      });
+      const events: unknown[] = [];
+
+      await generateValidatedResponse(
+        { provider, onDiagnostics: (e) => events.push(e) },
+        makeInput({ currentDetectedLanguage: "ml", customerMessage: malayalamAnswer }),
+      );
+
+      expect(events).toHaveLength(2);
+      expect(events[0]).toMatchObject({
+        stage: "claude_response_parse",
+        attempt: "first",
+        detectedLanguage: "ml",
+        errorCode: "json_parse_error",
+        failedField: null,
+        repairAttempted: false,
+      });
+      expect(events[1]).toMatchObject({
+        stage: "claude_response_parse",
+        attempt: "repair",
+        detectedLanguage: "ml",
+        errorCode: null,
+        repairAttempted: true,
+      });
+      // Only counts, never the actual transcript/response text.
+      for (const event of events) {
+        const serialized = JSON.stringify(event);
+        expect(serialized).not.toContain(malayalamAnswer);
+        expect(typeof (event as { transcriptCharCount: number }).transcriptCharCount).toBe(
+          "number",
+        );
+        expect(typeof (event as { responseCharCount: number }).responseCharCount).toBe("number");
+      }
+    });
+
+    it("reports the exact schema field that failed when JSON parses but a field is invalid", async () => {
+      const provider = new MockAiProvider(() =>
+        JSON.stringify({
+          answer: malayalamAnswer,
+          // language is missing entirely -- a schema violation, not a parse error.
+          intent: "general_enquiry",
+          confidence: 0.7,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        }),
+      );
+      const events: unknown[] = [];
+
+      await generateValidatedResponse(
+        { provider, onDiagnostics: (e) => events.push(e) },
+        makeInput(),
+      );
+
+      expect(events[0]).toMatchObject({
+        errorCode: "schema_validation_failed",
+        failedField: "language",
+      });
+    });
+
+    it("falls back to the Malayalam safe-fallback text when both attempts fail for a Malayalam turn, and still escalates", async () => {
+      const provider = new MockAiProvider(() => "still not valid json");
+
+      const result = await generateValidatedResponse(
+        { provider },
+        makeInput({
+          currentDetectedLanguage: "ml",
+          company: {
+            ...makeInput().company,
+            staticFallbackMessage:
+              "Automated assistance is temporarily unavailable. Our team will respond as soon as possible.",
+          },
+        }),
+      );
+
+      expect(result.usedFallback).toBe(true);
+      expect(result.response.requiresHuman).toBe(true);
+      expect(result.response.handoverReason).toBe("ai_response_validation_failed");
+      expect(result.response.answer).not.toContain("respond as soon as possible");
+      expect(result.response.answer).toMatch(/[ഀ-ൿ]/);
+    });
   });
 });
