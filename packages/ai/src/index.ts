@@ -1,6 +1,7 @@
 export * from "./schema.js";
 export * from "./provider.js";
 export * from "./safety.js";
+export * from "./fallbackMessage.js";
 export * from "./orchestrate.js";
 export * from "./leadExtraction.js";
 export * from "./usage.js";

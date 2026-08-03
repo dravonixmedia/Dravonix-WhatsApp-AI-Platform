@@ -69,4 +69,28 @@ describe("AnthropicProvider", () => {
     const call = createMock.mock.calls[0]![0];
     expect(call.messages[0].content).toBe("hello there");
   });
+
+  it("uses the configured max_tokens for a first attempt", async () => {
+    const provider = new AnthropicProvider({
+      apiKey: "test-key",
+      model: "claude-sonnet-5",
+      maxTokens: 1024,
+    });
+
+    await provider.generate(makeInput());
+
+    expect(createMock.mock.calls[0]![0].max_tokens).toBe(1024);
+  });
+
+  it("boosts max_tokens for a repair attempt, since truncation is a likely cause of the first failure", async () => {
+    const provider = new AnthropicProvider({
+      apiKey: "test-key",
+      model: "claude-sonnet-5",
+      maxTokens: 1024,
+    });
+
+    await provider.generate(makeInput(), "Respond again with valid JSON.");
+
+    expect(createMock.mock.calls[0]![0].max_tokens).toBe(1536);
+  });
 });

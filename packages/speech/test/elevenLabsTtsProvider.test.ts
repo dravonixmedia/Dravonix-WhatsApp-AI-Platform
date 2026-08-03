@@ -89,4 +89,136 @@ describe("ElevenLabsTextToSpeechProvider", () => {
       "ElevenLabs text-to-speech request failed with status 401: invalid api key",
     );
   });
+
+  describe("Malayalam-specific voice/model selection", () => {
+    function makeProvider() {
+      return new ElevenLabsTextToSpeechProvider({
+        apiKey: "test-key",
+        defaultVoiceId: "default-voice",
+        modelId: "eleven_multilingual_v2",
+        malayalamVoiceId: "malayalam-voice",
+        englishVoiceId: "english-voice",
+        malayalamModelId: "eleven_v3",
+      });
+    }
+
+    it("uses the configured Malayalam voice, eleven_v3, and language_code ml for languageCode ml", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = makeProvider();
+
+      const result = await provider.synthesize({ text: "നന്ദി", languageCode: "ml" });
+
+      const [url, requestInit] = fetchMock.mock.calls[0]!;
+      expect(url).toContain("/text-to-speech/malayalam-voice");
+      const body = JSON.parse((requestInit as RequestInit).body as string);
+      expect(body.model_id).toBe("eleven_v3");
+      expect(body.language_code).toBe("ml");
+      expect(result.voiceCategory).toBe("malayalam");
+      expect(result.modelId).toBe("eleven_v3");
+      expect(result.fallbackVoiceUsed).toBe(false);
+    });
+
+    it("uses fixed Eleven v3 Natural voice settings (speed 0.92, similarity_boost 0.80, style 0, use_speaker_boost true) for Malayalam", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = makeProvider();
+
+      // speakingRate is deliberately ignored for Malayalam -- the fixed 0.92
+      // tuned speed always wins, unlike the English path below.
+      await provider.synthesize({ text: "നന്ദി", languageCode: "ml", speakingRate: 1.3 });
+
+      const [, requestInit] = fetchMock.mock.calls[0]!;
+      const body = JSON.parse((requestInit as RequestInit).body as string);
+      expect(body.voice_settings).toEqual({
+        stability: "natural",
+        speed: 0.92,
+        similarity_boost: 0.8,
+        style: 0,
+        use_speaker_boost: true,
+      });
+    });
+
+    it("uses the configured English voice, the default model, and no language_code for English", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = makeProvider();
+
+      const result = await provider.synthesize({ text: "Thanks", languageCode: "en" });
+
+      const [url, requestInit] = fetchMock.mock.calls[0]!;
+      expect(url).toContain("/text-to-speech/english-voice");
+      const body = JSON.parse((requestInit as RequestInit).body as string);
+      expect(body.model_id).toBe("eleven_multilingual_v2");
+      expect(body.language_code).toBeUndefined();
+      expect(result.voiceCategory).toBe("default");
+      expect(result.modelId).toBe("eleven_multilingual_v2");
+      expect(result.fallbackVoiceUsed).toBe(false);
+    });
+
+    it("does not alter English voice_settings behaviour (still driven by speakingRate, no fixed Malayalam tuning)", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = makeProvider();
+
+      await provider.synthesize({ text: "Thanks", languageCode: "en", speakingRate: 1.1 });
+
+      const [, requestInit] = fetchMock.mock.calls[0]!;
+      const body = JSON.parse((requestInit as RequestInit).body as string);
+      expect(body.voice_settings).toEqual({ speed: 1.1 });
+    });
+
+    it("selects the Malayalam voice for a Malayalam-English mixed reply where Malayalam dominates", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = makeProvider();
+
+      await provider.synthesize({
+        text: "നിങ്ങളുടെ requirement ഒന്ന് പറഞ്ഞാൽ മതി, website, branding ചെയ്യാം",
+        languageCode: "ml",
+      });
+
+      const [url] = fetchMock.mock.calls[0]!;
+      expect(url).toContain("/text-to-speech/malayalam-voice");
+    });
+
+    it("falls back safely to defaultVoiceId and the default model when the Malayalam voice ID is not configured", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = new ElevenLabsTextToSpeechProvider({
+        apiKey: "test-key",
+        defaultVoiceId: "default-voice",
+        modelId: "eleven_multilingual_v2",
+      });
+
+      const result = await provider.synthesize({ text: "നന്ദി", languageCode: "ml" });
+
+      const [url, requestInit] = fetchMock.mock.calls[0]!;
+      expect(url).toContain("/text-to-speech/default-voice");
+      const body = JSON.parse((requestInit as RequestInit).body as string);
+      expect(body.model_id).toBe("eleven_multilingual_v2");
+      expect(body.language_code).toBe("ml");
+      expect(result.voiceCategory).toBe("malayalam");
+      expect(result.fallbackVoiceUsed).toBe(true);
+    });
+
+    it("does not break the existing English voice configuration when only the Malayalam voice ID is configured", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = new ElevenLabsTextToSpeechProvider({
+        apiKey: "test-key",
+        defaultVoiceId: "default-voice",
+        modelId: "eleven_multilingual_v2",
+        malayalamVoiceId: "malayalam-voice",
+      });
+
+      await provider.synthesize({ text: "Thanks", languageCode: "en" });
+
+      const [url] = fetchMock.mock.calls[0]!;
+      expect(url).toContain("/text-to-speech/default-voice");
+    });
+
+    it("lets an explicit per-call voiceId override the Malayalam voice", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = makeProvider();
+
+      await provider.synthesize({ text: "നന്ദി", languageCode: "ml", voiceId: "custom-voice" });
+
+      const [url] = fetchMock.mock.calls[0]!;
+      expect(url).toContain("/text-to-speech/custom-voice");
+    });
+  });
 });

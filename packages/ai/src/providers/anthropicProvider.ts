@@ -51,9 +51,18 @@ export class AnthropicProvider implements AiProvider {
       messages.push({ role: "user", content: repairInstruction });
     }
 
+    // A repair attempt only happens after the first attempt's JSON was
+    // invalid/incomplete -- frequently because a high-token-density script
+    // (e.g. Malayalam) used up the base budget before finishing the
+    // structured response. Give the repair call real extra headroom rather
+    // than repeating the same ceiling and risking a second truncation.
+    const maxTokens = repairInstruction
+      ? Math.round(this.config.maxTokens * 1.5)
+      : this.config.maxTokens;
+
     const response = await this.client.messages.create({
       model: this.config.model,
-      max_tokens: this.config.maxTokens,
+      max_tokens: maxTokens,
       system,
       messages,
     });

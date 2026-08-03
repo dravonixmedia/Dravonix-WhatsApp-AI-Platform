@@ -44,7 +44,15 @@ const rawEnvSchema = z.object({
 
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-5"),
-  ANTHROPIC_MAX_TOKENS: z.coerce.number().int().positive().default(1024),
+  // 1024 was tuned against English-only structured responses. Non-Latin/
+  // high-token-density scripts (e.g. Malayalam) need substantially more
+  // output tokens for semantically equivalent content under Claude's
+  // tokenizer, and a too-tight ceiling truncates the structured JSON
+  // mid-generation -- an invalid-JSON validation failure that is really a
+  // token-budget bug misattributed to language. 2048 gives real headroom
+  // for any enabled language; see packages/ai/src/orchestrate.ts for the
+  // repair attempt's further boosted budget.
+  ANTHROPIC_MAX_TOKENS: z.coerce.number().int().positive().default(2048),
 
   GOOGLE_CLOUD_PROJECT_ID: z.string().optional(),
   GOOGLE_CLOUD_CREDENTIALS: z.string().optional(),
@@ -59,6 +67,14 @@ const rawEnvSchema = z.object({
   ELEVENLABS_VOICE_ID_DEFAULT: z.string().default("Jzzpex8KZbIGNI57kL48"),
   ELEVENLABS_TTS_MODEL_ID: z.string().default("eleven_multilingual_v2"),
   ELEVENLABS_STT_MODEL_ID: z.string().default("scribe_v1"),
+
+  // Malayalam-specific voice configuration. Optional: when
+  // ELEVENLABS_MALAYALAM_VOICE_ID is unset, the TTS provider falls back to
+  // ELEVENLABS_VOICE_ID_DEFAULT rather than failing -- see
+  // ElevenLabsTextToSpeechProvider.synthesize.
+  ELEVENLABS_MALAYALAM_VOICE_ID: z.string().optional(),
+  ELEVENLABS_ENGLISH_VOICE_ID: z.string().optional(),
+  ELEVENLABS_MALAYALAM_MODEL_ID: z.string().default("eleven_v3"),
 
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
