@@ -63,6 +63,25 @@ export function buildSystemPrompt(
       .join("\n"),
   );
 
+  if (company.enabledLanguages.includes("ml")) {
+    sections.push(
+      [
+        "MALAYALAM CONVERSATION STYLE (when the customer speaks Malayalam or Malayalam-English):",
+        "- Reply in natural, spoken Kerala Malayalam.",
+        "- Use a friendly and professional customer-service tone.",
+        "- Use Malayalam script for Malayalam words.",
+        "- Common business terms may remain in English: branding, website, logo, package, budget, ",
+        "  quotation, social media, business, requirements, pages, design and development.",
+        "- Prefer short conversational sentences.",
+        "- Avoid formal, literary, or government-document Malayalam.",
+        "- Do not translate established English business words into unnatural Malayalam.",
+        "- Do not create excessively long paragraphs.",
+        "- Ask only one question at a time.",
+        "- Keep the tone warm, simple, and locally natural.",
+      ].join("\n"),
+    );
+  }
+
   if (company.approvedServices.length > 0) {
     sections.push(`Approved services: ${company.approvedServices.join(", ")}.`);
   }

@@ -94,4 +94,44 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt(company, memory, knowledge);
     expect(prompt).toMatch(/never name or describe the underlying ai/i);
   });
+
+  describe("Malayalam conversation style", () => {
+    it("includes the Malayalam style section when ml is an enabled language", () => {
+      const { company, memory, knowledge } = makeInput();
+      expect(company.enabledLanguages).toContain("ml");
+      const prompt = buildSystemPrompt(company, memory, knowledge);
+      expect(prompt).toContain("MALAYALAM CONVERSATION STYLE");
+      expect(prompt).toMatch(/natural, spoken Kerala Malayalam/i);
+      expect(prompt).toMatch(/friendly and professional customer-service tone/i);
+      expect(prompt).toMatch(/ask only one question at a time/i);
+      expect(prompt).toMatch(/avoid formal, literary, or government-document malayalam/i);
+    });
+
+    it("lists the business terms that should stay in English rather than be translated", () => {
+      const { company, memory, knowledge } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge);
+      for (const term of [
+        "branding",
+        "website",
+        "logo",
+        "package",
+        "budget",
+        "quotation",
+        "social media",
+        "business",
+        "requirements",
+        "pages",
+        "design and development",
+      ]) {
+        expect(prompt).toContain(term);
+      }
+    });
+
+    it("omits the Malayalam style section entirely when ml is not an enabled language", () => {
+      const { company, memory, knowledge } = makeInput();
+      const englishOnlyCompany = { ...company, enabledLanguages: ["en"] };
+      const prompt = buildSystemPrompt(englishOnlyCompany, memory, knowledge);
+      expect(prompt).not.toContain("MALAYALAM CONVERSATION STYLE");
+    });
+  });
 });
