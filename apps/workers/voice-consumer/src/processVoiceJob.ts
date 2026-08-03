@@ -255,9 +255,10 @@ export async function processVoiceJob(
           detectedLanguage: event.detectedLanguage,
           transcriptCharCount: event.transcriptCharCount,
           responseCharCount: event.responseCharCount,
-          errorCode: event.errorCode,
+          category: event.category,
           failedField: event.failedField,
           repairAttempted: event.repairAttempted,
+          repairSucceeded: event.repairSucceeded,
         }),
     },
     {
@@ -269,18 +270,20 @@ export async function processVoiceJob(
     },
   );
 
+  const handoverTriggered = response.requiresHuman;
   log.info("Stage: safety_validation", {
     detectedLanguage: transcription.detectedLanguageCode,
     responseCharCount: response.answer.length,
     repairAttempted: repaired,
     usedFallback,
+    handoverTriggered,
   });
 
   if (usedFallback) {
     log.warn("Used safe static fallback response after repeated AI validation failure");
   }
 
-  if (response.requiresHuman) {
+  if (handoverTriggered) {
     const reason = response.handoverReason ?? "ai_requested_handover";
     log.warn("Triggering handover (AI keeps replying collaboratively unless explicitly paused)", {
       reason,

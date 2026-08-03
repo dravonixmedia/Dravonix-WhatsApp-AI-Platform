@@ -577,13 +577,95 @@ describe("processVoiceJob", () => {
       expect(whatsappProvider.sentText).toHaveLength(1);
     });
 
-    it("does not trigger a handover for an ordinary Malayalam enquiry", async () => {
-      aiProvider.respond = () => malayalamResponse();
+    it("does not trigger a handover for an ordinary Malayalam enquiry about branding/website/pricing/company info", async () => {
+      aiProvider.respond = () =>
+        malayalamResponse({
+          answer:
+            "ഞങ്ങൾ ബ്രാൻഡിംഗ്, വെബ്സൈറ്റ് ഡെവലപ്മെന്റ് സേവനങ്ങൾ വാഗ്ദാനം ചെയ്യുന്നു. വില 25,000 രൂപ മുതൽ ആരംഭിക്കുന്നു.",
+          knowledgeSourceIds: ["pricing-source-1"],
+        });
       const deps = makeDeps(activeEntitlementSnapshot());
 
       await processVoiceJob(deps, makePayload());
 
       expect(handoverRepo.handoverCalls).toHaveLength(0);
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+
+    it("follows the configured custom-quotation escalation rule in Malayalam, without hardcoding language", async () => {
+      repo.context = baseConversationContext({
+        aiContext: {
+          ...baseConversationContext().aiContext,
+          enabledLanguages: ["en", "ml"],
+          handoverRules: ["customer requests a custom quotation"],
+        },
+      });
+      aiProvider.respond = () =>
+        malayalamResponse({
+          requiresHuman: true,
+          handoverReason: "custom_quotation_requested",
+          answer: "ഒരു പ്രത്യേക ക്വട്ടേഷനായി ഞാൻ ഇത് ടീമിന് കൈമാറാം.",
+        });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(handoverRepo.handoverCalls).toHaveLength(1);
+      expect(handoverRepo.handoverCalls[0]).toMatchObject({
+        reason: "custom_quotation_requested",
+        sourceType: "voice",
+      });
+    });
+
+    it("never sends a duplicate Malayalam audio reply across a simulated redelivery", async () => {
+      const synthesizeSpy = vi.spyOn(ttsProvider, "synthesize");
+      aiProvider.respond = () => malayalamResponse();
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+      await processVoiceJob(deps, makePayload()); // redelivery of the same queue message
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(1);
+      expect(synthesizeSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("English voice behaviour is unchanged by the Malayalam fix", () => {
+    it("still transcribes, replies, and sends text and voice for an English voice note", async () => {
+      sttProvider.fixedText = "What services do you offer?";
+      sttProvider.fixedDetectedLanguageCode = "en";
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(1);
+      expect(handoverRepo.handoverCalls).toHaveLength(0);
+    });
+
+    it("still escalates for an explicit English human request", async () => {
+      sttProvider.fixedText = "I want to speak to a human.";
+      sttProvider.fixedDetectedLanguageCode = "en";
+      aiProvider.respond = () =>
+        JSON.stringify({
+          answer: "Sure, connecting you with our team.",
+          language: "en",
+          intent: "human_request",
+          confidence: 0.9,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: true,
+          handoverReason: "customer_requested_human",
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(handoverRepo.handoverCalls).toHaveLength(1);
+      expect(handoverRepo.handoverCalls[0]).toMatchObject({ reason: "customer_requested_human" });
     });
   });
 });

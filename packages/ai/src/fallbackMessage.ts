@@ -14,7 +14,7 @@ const FALLBACK_MESSAGE_EN =
   "I couldn't complete that request automatically. I've shared it with the Dravonix Media team for assistance.";
 
 const FALLBACK_MESSAGE_ML =
-  "ആ അഭ്യർത്ഥന എനിക്ക് സ്വയമേവ പൂർത്തിയാക്കാൻ കഴിഞ്ഞില്ല. സഹായത്തിനായി ഞാൻ ഇത് Dravonix Media ടീമുമായി പങ്കുവെച്ചിട്ടുണ്ട്.";
+  "ഈ അഭ്യർത്ഥന സ്വയമേവ പൂർത്തിയാക്കാൻ കഴിഞ്ഞില്ല. സഹായത്തിനായി ഇത് Dravonix Media ടീമുമായി പങ്കുവെച്ചിട്ടുണ്ട്.";
 
 function isMalayalam(language: string | null | undefined): boolean {
   return (language ?? "").trim().toLowerCase().startsWith("ml");
