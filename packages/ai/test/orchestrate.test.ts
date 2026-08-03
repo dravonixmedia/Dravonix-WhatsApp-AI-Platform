@@ -223,6 +223,31 @@ describe("generateValidatedResponse", () => {
       expect(provider.calls[1]?.repairInstruction).toContain("ml");
     });
 
+    it("extracts and validates a Malayalam response wrapped in a markdown code fence", async () => {
+      const validResponse = {
+        answer: malayalamAnswer,
+        language: "ml",
+        intent: "general_enquiry",
+        confidence: 0.8,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      };
+      const provider = new MockAiProvider(
+        () =>
+          "Here is my response:\n```json\n" + JSON.stringify(validResponse) + "\n```\nLet me know!",
+      );
+
+      const result = await generateValidatedResponse({ provider }, makeInput());
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.repaired).toBe(false);
+      expect(result.response.answer).toBe(malayalamAnswer);
+    });
+
     it("emits sanitized diagnostics for each parse attempt, with no raw transcript/response content", async () => {
       let call = 0;
       const provider = new MockAiProvider(() => {
@@ -253,16 +278,18 @@ describe("generateValidatedResponse", () => {
         stage: "claude_response_parse",
         attempt: "first",
         detectedLanguage: "ml",
-        errorCode: "json_parse_error",
+        category: "response_json_parse_failed",
         failedField: null,
         repairAttempted: false,
+        repairSucceeded: null,
       });
       expect(events[1]).toMatchObject({
         stage: "claude_response_parse",
         attempt: "repair",
         detectedLanguage: "ml",
-        errorCode: null,
+        category: null,
         repairAttempted: true,
+        repairSucceeded: true,
       });
       // Only counts, never the actual transcript/response text.
       for (const event of events) {
@@ -298,7 +325,7 @@ describe("generateValidatedResponse", () => {
       );
 
       expect(events[0]).toMatchObject({
-        errorCode: "schema_validation_failed",
+        category: "response_schema_validation_failed",
         failedField: "language",
       });
     });
@@ -323,6 +350,94 @@ describe("generateValidatedResponse", () => {
       expect(result.response.handoverReason).toBe("ai_response_validation_failed");
       expect(result.response.answer).not.toContain("respond as soon as possible");
       expect(result.response.answer).toMatch(/[ഀ-ൿ]/);
+    });
+
+    it("emits a final response_repair_failed diagnostic distinct from the per-attempt category", async () => {
+      const provider = new MockAiProvider(() => "not valid json at all");
+      const events: unknown[] = [];
+
+      await generateValidatedResponse(
+        { provider, onDiagnostics: (e) => events.push(e) },
+        makeInput(),
+      );
+
+      const categories = (events as Array<{ category: string | null }>).map((e) => e.category);
+      expect(categories).toEqual([
+        "response_json_parse_failed", // first attempt
+        "response_json_parse_failed", // repair attempt
+        "response_repair_failed", // final summary marker
+      ]);
+    });
+
+    it("emits response_safety_validation_failed, distinct from a parse/schema failure, when safety rules force an escalation", async () => {
+      const provider = new MockAiProvider(() =>
+        JSON.stringify({
+          answer: "Our website package costs ₹25,000.",
+          language: "en",
+          intent: "pricing_question",
+          confidence: 0.8,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false, // Claude did not ask for a handover itself
+          handoverReason: null,
+          knowledgeSourceIds: [], // no grounding cited for a pricing claim
+          internalNotes: null,
+        }),
+      );
+      const events: unknown[] = [];
+
+      const result = await generateValidatedResponse(
+        { provider, onDiagnostics: (e) => events.push(e) },
+        makeInput(),
+      );
+
+      expect(result.response.requiresHuman).toBe(true);
+      expect(events).toHaveLength(2);
+      expect(events[0]).toMatchObject({ category: null }); // the parse/schema step itself succeeded
+      expect(events[1]).toMatchObject({
+        stage: "claude_response_safety",
+        category: "response_safety_validation_failed",
+      });
+    });
+
+    it("includes the specific validation error and the required schema in the repair instruction, not a vague message", async () => {
+      let call = 0;
+      const provider = new MockAiProvider(() => {
+        call += 1;
+        if (call === 1) {
+          return JSON.stringify({
+            answer: "Hi there",
+            // language omitted -- triggers a schema_validation_failed on "language"
+            intent: "general_enquiry",
+            confidence: 0.7,
+            replyMode: "auto",
+            leadUpdates: null,
+            requiresHuman: false,
+            handoverReason: null,
+            knowledgeSourceIds: [],
+            internalNotes: null,
+          });
+        }
+        return JSON.stringify({
+          answer: "Hi there",
+          language: "en",
+          intent: "general_enquiry",
+          confidence: 0.7,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        });
+      });
+
+      await generateValidatedResponse({ provider }, makeInput());
+
+      const repairInstruction = provider.calls[1]?.repairInstruction ?? "";
+      expect(repairInstruction).toContain("language");
+      expect(repairInstruction).toContain("requiresHuman");
+      expect(repairInstruction).toContain("handoverReason");
     });
   });
 });
