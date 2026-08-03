@@ -104,6 +104,9 @@ importers:
       "@dravonix/handover":
         specifier: workspace:*
         version: link:../../packages/handover
+      "@dravonix/observability":
+        specifier: workspace:*
+        version: link:../../packages/observability
       "@dravonix/tenant":
         specifier: workspace:*
         version: link:../../packages/tenant

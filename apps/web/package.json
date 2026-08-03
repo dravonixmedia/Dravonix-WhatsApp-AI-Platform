@@ -14,6 +14,7 @@
     "@dravonix/core": "workspace:*",
     "@dravonix/database": "workspace:*",
     "@dravonix/handover": "workspace:*",
+    "@dravonix/observability": "workspace:*",
     "@dravonix/tenant": "workspace:*",
     "@dravonix/whatsapp": "workspace:*",
     "@supabase/ssr": "^0.5.2",

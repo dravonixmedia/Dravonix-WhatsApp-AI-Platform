@@ -1,4 +1,5 @@
 import type {
+  ConversationForThread,
   ConversationThreadPage,
   ExpiredOutboundMessage,
   HandoverConversationSummary,
@@ -67,6 +68,15 @@ export interface HandoverRepository {
     conversationId: string,
     pagination?: { before?: string; limit?: number },
   ): Promise<ConversationThreadPage>;
+
+  /**
+   * Reads a conversation's summary fields plus its company_id (RLS-protected
+   * authenticated client). Returns null for a conversation that genuinely
+   * does not exist, one RLS has hidden (wrong company, revoked membership),
+   * or a malformed id -- these three cases are indistinguishable to the
+   * caller by design (see getConversationThreadForDashboard).
+   */
+  getConversationForThread(conversationId: string): Promise<ConversationForThread | null>;
 }
 
 /**

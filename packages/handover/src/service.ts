@@ -1,6 +1,7 @@
-import { mapHandoverRpcError } from "./errors.js";
+import { HandoverConversationNotFoundError, mapHandoverRpcError } from "./errors.js";
 import type { HandoverRepository } from "./repository.js";
 import type {
+  ConversationForThread,
   ConversationThreadPage,
   HandoverConversationSummary,
   HandoverInboxItem,
@@ -191,4 +192,33 @@ export async function getConversationThread(
   pagination?: { before?: string; limit?: number },
 ): Promise<ConversationThreadPage> {
   return repo.getConversationThread(conversationId, pagination);
+}
+
+export interface ConversationThreadForDashboard {
+  conversation: ConversationForThread;
+  thread: ConversationThreadPage;
+}
+
+/**
+ * The single, tenant-checked entry point for the conversation-detail page:
+ * used for both the initial load and every "load older messages" page.
+ * RLS alone would already return zero rows for a cross-tenant or revoked-
+ * membership conversationId, but this explicit re-check turns that into a
+ * defined, testable outcome (with a fake repo, not just an assumption about
+ * live RLS) -- and, critically, makes a missing conversation and a cross-
+ * tenant conversation throw the exact same error, so neither the dashboard
+ * nor its logs ever reveal that a conversation exists in a different tenant.
+ */
+export async function getConversationThreadForDashboard(
+  repo: HandoverRepository,
+  callerCompanyId: string,
+  conversationId: string,
+  pagination?: { before?: string; limit?: number },
+): Promise<ConversationThreadForDashboard> {
+  const conversation = await repo.getConversationForThread(conversationId);
+  if (!conversation || conversation.companyId !== callerCompanyId) {
+    throw new HandoverConversationNotFoundError(conversationId);
+  }
+  const thread = await repo.getConversationThread(conversationId, pagination);
+  return { conversation, thread };
 }

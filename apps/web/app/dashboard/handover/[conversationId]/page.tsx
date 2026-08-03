@@ -1,19 +1,22 @@
+import { loadEnv } from "@dravonix/config";
+import { AppError } from "@dravonix/core";
 import {
   deriveAiLikelyProcessing,
-  getConversationThread,
+  getConversationThreadForDashboard,
   markConversationRead,
   SupabaseHandoverRepository,
 } from "@dravonix/handover";
+import { createLogger } from "@dravonix/observability";
+import { notFound } from "next/navigation";
 import {
   closeConversationAction,
   endHumanAssistanceAction,
   pauseAiAction,
-  reconcileOutboundMessageAction,
   resumeAiAction,
 } from "../../../../lib/actions/handover.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
-import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
+import { ConversationThread } from "./ConversationThread.js";
 import { ReplyComposer } from "./ReplyComposer.js";
 
 function ActionButton({ children }: { children: React.ReactNode }) {
@@ -36,15 +39,32 @@ export default async function ConversationDetailPage({
   const supabase = await createServerSupabaseClient();
   const repo = new SupabaseHandoverRepository(supabase);
 
-  const [{ data: conversation, error }, thread] = await Promise.all([
-    supabase
-      .from("conversations")
-      .select("state, ai_mode, assigned_member_id, handover_reason")
-      .eq("id", conversationId)
-      .single(),
-    getConversationThread(repo, conversationId),
-  ]);
-  if (error) throw error;
+  let conversation: Awaited<ReturnType<typeof getConversationThreadForDashboard>>["conversation"];
+  let thread: Awaited<ReturnType<typeof getConversationThreadForDashboard>>["thread"];
+  try {
+    const result = await getConversationThreadForDashboard(
+      repo,
+      session.activeCompanyId,
+      conversationId,
+    );
+    conversation = result.conversation;
+    thread = result.thread;
+  } catch (err) {
+    // Never leak internal Supabase/Postgres error text, and never reveal
+    // whether the conversation exists in another tenant -- log only
+    // sanitized identifiers/error codes server-side, then render the same
+    // not-found response for a missing, cross-tenant, RLS-hidden, or
+    // revoked-membership conversationId.
+    const env = loadEnv(process.env);
+    createLogger({
+      environment: env.APP_ENV,
+      companyId: session.activeCompanyId,
+      conversationId,
+    }).warn("conversation_detail_unavailable", {
+      errorCode: err instanceof AppError ? err.code : "unknown",
+    });
+    notFound();
+  }
 
   await markConversationRead(repo, conversationId);
 
@@ -53,7 +73,7 @@ export default async function ConversationDetailPage({
     .reverse()
     .find((m) => m.direction === "outbound" && m.senderType === "ai");
   const aiLikelyProcessing = deriveAiLikelyProcessing({
-    aiMode: conversation.ai_mode,
+    aiMode: conversation.aiMode,
     latestInboundAt: latestInbound?.createdAt ?? null,
     latestAiOutboundAt: latestAiOutbound?.createdAt ?? null,
   });
@@ -64,17 +84,17 @@ export default async function ConversationDetailPage({
         <div>
           <h1 style={{ fontSize: "1.3rem", margin: 0 }}>Conversation</h1>
           <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
-            state: {conversation.state} · ai_mode: {conversation.ai_mode}
+            state: {conversation.state} · ai_mode: {conversation.aiMode}
             {aiLikelyProcessing ? " · AI is likely drafting a reply" : ""}
           </p>
-          {conversation.handover_reason ? (
+          {conversation.handoverReason ? (
             <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
-              Reason: {conversation.handover_reason}
+              Reason: {conversation.handoverReason}
             </p>
           ) : null}
         </div>
         <div style={{ display: "flex", gap: "0.4rem" }}>
-          {conversation.ai_mode === "active" ? (
+          {conversation.aiMode === "active" ? (
             <form
               action={async () => {
                 "use server";
@@ -116,82 +136,12 @@ export default async function ConversationDetailPage({
         </div>
       </div>
 
-      <div
-        style={{
-          marginTop: "1.5rem",
-          display: "flex",
-          flexDirection: "column",
-          gap: "0.6rem",
-          maxHeight: "55vh",
-          overflowY: "auto",
-        }}
-      >
-        {thread.messages.map((message) => {
-          const isCustomer = message.senderType === "customer";
-          const needsReconcile =
-            message.outboundStatus === "delivery_unknown" ||
-            message.outboundStatus === "send_failed";
-          return (
-            <div
-              key={message.id}
-              className="dvx-card"
-              style={{
-                alignSelf: isCustomer ? "flex-start" : "flex-end",
-                maxWidth: "70%",
-              }}
-            >
-              <div className="dvx-muted" style={{ fontSize: "0.7rem", marginBottom: "0.25rem" }}>
-                {message.senderType} · {message.channelType} ·{" "}
-                {new Date(message.createdAt).toLocaleString()}
-                {message.outboundStatus ? ` · ${message.outboundStatus}` : ""}
-              </div>
-              <div>{message.body}</div>
-              {needsReconcile ? (
-                <div style={{ marginTop: "0.4rem" }}>
-                  <p style={{ color: "#b45309", fontSize: "0.75rem", margin: "0 0 0.3rem" }}>
-                    {message.outboundStatus === "delivery_unknown"
-                      ? "Delivery could not be confirmed -- manual reconciliation required."
-                      : "This send failed."}
-                  </p>
-                  {message.senderType === "ai" ? (
-                    <ReconcileAiMessageForm
-                      messageId={message.id}
-                      conversationId={conversationId}
-                    />
-                  ) : (
-                    <div style={{ display: "flex", gap: "0.3rem" }}>
-                      <form
-                        action={async () => {
-                          "use server";
-                          await reconcileOutboundMessageAction(
-                            message.id,
-                            conversationId,
-                            "confirm_sent",
-                          );
-                        }}
-                      >
-                        <ActionButton>Confirm sent</ActionButton>
-                      </form>
-                      <form
-                        action={async () => {
-                          "use server";
-                          await reconcileOutboundMessageAction(
-                            message.id,
-                            conversationId,
-                            "confirm_not_sent",
-                          );
-                        }}
-                      >
-                        <ActionButton>Confirm not sent</ActionButton>
-                      </form>
-                    </div>
-                  )}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
+      <ConversationThread
+        key={session.activeCompanyId}
+        conversationId={conversationId}
+        initialMessages={thread.messages}
+        initialHasMore={thread.hasMore}
+      />
 
       {conversation.state === "human_active" ? (
         <ReplyComposer conversationId={conversationId} />

@@ -3,6 +3,7 @@ import type { HandoverRepository } from "../repository.js";
 import { deriveUnreadCount, derivePriority } from "../priority.js";
 import { maskPhoneNumber } from "../maskPhoneNumber.js";
 import type {
+  ConversationForThread,
   ConversationThreadMessage,
   ConversationThreadPage,
   HandoverConversationSummary,
@@ -334,6 +335,29 @@ export class SupabaseHandoverRepository implements HandoverRepository {
           createdAt: row.created_at,
         }))
         .reverse(),
+    };
+  }
+
+  async getConversationForThread(conversationId: string): Promise<ConversationForThread | null> {
+    const { data, error } = await this.client
+      .from("conversations")
+      .select("id, company_id, state, ai_mode, assigned_member_id, handover_reason")
+      .eq("id", conversationId)
+      .maybeSingle();
+    if (error) {
+      // 22P02 = invalid_text_representation (e.g. a malformed non-UUID id) --
+      // indistinguishable from "not found" as far as the caller should know.
+      if (error.code === "22P02") return null;
+      throw new Error(error.message);
+    }
+    if (!data) return null;
+    return {
+      id: data.id,
+      companyId: data.company_id,
+      state: data.state,
+      aiMode: data.ai_mode,
+      assignedMemberId: data.assigned_member_id,
+      handoverReason: data.handover_reason,
     };
   }
 }

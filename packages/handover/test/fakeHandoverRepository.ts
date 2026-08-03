@@ -1,7 +1,9 @@
 import type { HandoverRepository } from "../src/repository.js";
 import type {
   ConversationAiMode,
+  ConversationForThread,
   ConversationState,
+  ConversationThreadMessage,
   ConversationThreadPage,
   HandoverConversationSummary,
   HandoverInboxItem,
@@ -10,6 +12,8 @@ import type {
   OutboundFinalizeResult,
   OutboundReservation,
 } from "../src/types.js";
+
+const DEFAULT_FAKE_THREAD_PAGE_SIZE = 50;
 
 export interface FakeConversationSeed {
   id: string;
@@ -55,6 +59,9 @@ interface FakeMessage {
   providerMessageId: string | null;
 }
 
+/** Seed for a read-only conversation-thread row (see getConversationThread). */
+export type FakeThreadMessageSeed = ConversationThreadMessage & { conversationId: string };
+
 let fakeIdCounter = 0;
 function nextId(prefix: string): string {
   fakeIdCounter += 1;
@@ -77,9 +84,15 @@ export class FakeHandoverRepository implements HandoverRepository {
   private readonly conversations = new Map<string, FakeConversation>();
   private readonly members = new Map<string, FakeMember>();
   private readonly messages = new Map<string, FakeMessage>();
+  private readonly threadMessages: FakeThreadMessageSeed[];
   private callerMemberId: string | null = null;
 
-  constructor(conversations: FakeConversationSeed[] = [], members: FakeMemberSeed[] = []) {
+  constructor(
+    conversations: FakeConversationSeed[] = [],
+    members: FakeMemberSeed[] = [],
+    threadMessages: FakeThreadMessageSeed[] = [],
+  ) {
+    this.threadMessages = threadMessages;
     for (const seed of conversations) {
       this.conversations.set(seed.id, {
         id: seed.id,
@@ -340,7 +353,43 @@ export class FakeHandoverRepository implements HandoverRepository {
     ).length;
   }
 
-  async getConversationThread(): Promise<ConversationThreadPage> {
-    return { messages: [], hasMore: false };
+  async getConversationThread(
+    conversationId: string,
+    pagination?: { before?: string; limit?: number },
+  ): Promise<ConversationThreadPage> {
+    const limit = pagination?.limit ?? DEFAULT_FAKE_THREAD_PAGE_SIZE;
+
+    // Mirrors SupabaseHandoverRepository's real query: order by created_at
+    // descending, optionally below a `before` cursor, take limit + 1 to
+    // detect hasMore, then reverse back to ascending for display.
+    const descending = this.threadMessages
+      .filter((m) => m.conversationId === conversationId)
+      .filter((m) => !pagination?.before || m.createdAt < pagination.before)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+      .slice(0, limit + 1);
+
+    const hasMore = descending.length > limit;
+    const page = hasMore ? descending.slice(0, limit) : descending;
+
+    return {
+      hasMore,
+      messages: page
+        .slice()
+        .reverse()
+        .map(({ conversationId: _conversationId, ...rest }) => rest),
+    };
+  }
+
+  async getConversationForThread(conversationId: string): Promise<ConversationForThread | null> {
+    const conv = this.conversations.get(conversationId);
+    if (!conv) return null;
+    return {
+      id: conv.id,
+      companyId: conv.companyId,
+      state: conv.state,
+      aiMode: conv.aiMode,
+      assignedMemberId: conv.assignedMemberId,
+      handoverReason: conv.handoverReason,
+    };
   }
 }

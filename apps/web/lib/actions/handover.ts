@@ -6,6 +6,7 @@ import {
   assignToTeamMember,
   closeConversation,
   endHumanAssistance,
+  getConversationThreadForDashboard,
   markAsQueued,
   markConversationRead,
   pauseAi,
@@ -14,6 +15,7 @@ import {
   sendHumanReply,
   startHumanConversation,
   SupabaseHandoverRepository,
+  type ConversationThreadMessage,
 } from "@dravonix/handover";
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
 import { revalidatePath } from "next/cache";
@@ -96,6 +98,32 @@ export async function reconcileOutboundMessageAction(
   const { repo } = await getHandoverRepo();
   await reconcileOutboundMessage(repo, messageId, resolution);
   revalidateHandoverPaths(conversationId);
+}
+
+/**
+ * Loads one older page of a conversation's message thread (the dashboard's
+ * "Load older messages" control). Reads through the authenticated,
+ * RLS-protected client only -- never the service-role client -- and
+ * re-derives the caller's own active company on every call, so a
+ * conversationId/before cursor for a different tenant is rejected the same
+ * way a missing one is (getConversationThreadForDashboard never reveals
+ * which case actually happened).
+ */
+export async function loadOlderMessagesAction(
+  conversationId: string,
+  before: string,
+): Promise<{ messages: ConversationThreadMessage[]; hasMore: boolean }> {
+  const session = await getDashboardSession();
+  if (!session) throw new Error("Not authenticated");
+
+  const { repo } = await getHandoverRepo();
+  const { thread } = await getConversationThreadForDashboard(
+    repo,
+    session.activeCompanyId,
+    conversationId,
+    { before },
+  );
+  return thread;
 }
 
 /**

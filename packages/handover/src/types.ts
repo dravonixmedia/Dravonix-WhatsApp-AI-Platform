@@ -15,6 +15,16 @@ export interface HandoverConversationSummary {
   handoverReason: string | null;
 }
 
+/**
+ * A conversation's own summary fields plus its company_id, read directly via
+ * the RLS-protected authenticated client -- used to authorize a conversation-
+ * detail/thread read before trusting a client-supplied conversationId (see
+ * getConversationThreadForDashboard in service.ts).
+ */
+export interface ConversationForThread extends HandoverConversationSummary {
+  companyId: string;
+}
+
 /** Result shape shared by reserve_ai_outbound_message / reserve_human_outbound_message. */
 export interface OutboundReservation {
   id: string;
