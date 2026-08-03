@@ -30,7 +30,7 @@ concurrency:
 
 env:
   EXPECTED_BRANCH: hotfix/malayalam-voice-validation
-  EXPECTED_COMMIT: b9193c5457653adeb985de0aeb65288915c920fc
+  EXPECTED_COMMIT: 8f5fb5c03696c399cb902675d23513c663da357f
 
 jobs:
   verify-source-commit:
