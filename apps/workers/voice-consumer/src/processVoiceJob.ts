@@ -24,6 +24,16 @@ export interface VoiceJobPayload {
   mimeType: string | null;
 }
 
+/**
+ * Deployment-wide voice-reply switch, independent of any per-company/contact
+ * reply-mode preference resolved by resolveReplyMode(). "text_only" forces
+ * every voice job to reply with text alone -- no TTS call, no audio
+ * generation/send/storage -- regardless of language or company config.
+ * "text_and_audio" preserves the existing resolveReplyMode()-driven
+ * text/voice/text_and_voice behaviour unchanged.
+ */
+export type VoiceReplyMode = "text_only" | "text_and_audio";
+
 export interface VoiceConsumerDeps {
   repo: VoiceConsumerRepository;
   entitlementRepo: EntitlementRepository;
@@ -34,6 +44,7 @@ export interface VoiceConsumerDeps {
   ttsProvider: TextToSpeechProvider;
   storageProvider: StorageProvider;
   logger: Logger;
+  voiceReplyMode: VoiceReplyMode;
 }
 
 /** Maps our simple enabled-language codes to BCP-47 codes Google STT/TTS expect. */
@@ -320,7 +331,15 @@ export async function processVoiceJob(
   // record below always use response.answer, unmodified.
   const speechText = ttsIsMalayalam ? prepareMalayalamSpeechText(response.answer) : response.answer;
 
-  if (replyMode.mode === "text_only" || replyMode.mode === "text_and_voice") {
+  // The deployment-wide VOICE_REPLY_MODE switch overrides the per-company/
+  // contact resolveReplyMode() result when set to "text_only" -- every voice
+  // job replies with text alone, regardless of language or company config.
+  // "text_and_audio" leaves resolveReplyMode()'s result untouched.
+  const audioForcedOff = deps.voiceReplyMode === "text_only";
+  const effectiveReplyMode = audioForcedOff ? "text_only" : replyMode.mode;
+
+  let textReplySent = false;
+  if (effectiveReplyMode === "text_only" || effectiveReplyMode === "text_and_voice") {
     const sendResult = await deps.whatsappProvider.sendText({
       phoneNumberId: context.phoneNumberId,
       toWaId: context.waId,
@@ -334,9 +353,24 @@ export async function processVoiceJob(
         providerMessageId: sendResult.providerMessageId,
       }),
     );
+    textReplySent = true;
   }
 
-  if (replyMode.mode === "voice_only" || replyMode.mode === "text_and_voice") {
+  const shouldSendAudio =
+    effectiveReplyMode === "voice_only" || effectiveReplyMode === "text_and_voice";
+
+  // Sanitized: never log the customer phone number, full transcript, or full
+  // AI response -- only channel/mode/flags.
+  log.info("Voice reply summary", {
+    inboundChannel: "voice",
+    replyMode: deps.voiceReplyMode,
+    transcriptionCompleted: Boolean(transcription.text.trim()),
+    textReplySent,
+    audioReplySkipped: !shouldSendAudio,
+    ...(audioForcedOff ? { skipReason: "reply_mode_text_only" } : {}),
+  });
+
+  if (shouldSendAudio) {
     try {
       await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "text_to_speech");
 

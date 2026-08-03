@@ -117,6 +117,7 @@ export default {
       }),
       storageProvider: new R2StorageProvider(env.AUDIO_BUCKET),
       logger,
+      voiceReplyMode: platformEnv.VOICE_REPLY_MODE,
     };
 
     for (const message of batch.messages) {

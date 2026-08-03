@@ -168,6 +168,7 @@ describe("processVoiceJob", () => {
       ttsProvider,
       storageProvider,
       logger: silentLogger,
+      voiceReplyMode: "text_and_audio",
     };
   }
 
@@ -427,6 +428,7 @@ describe("Malayalam voice selection", () => {
       ttsProvider,
       storageProvider,
       logger: silentLogger,
+      voiceReplyMode: "text_and_audio",
     };
   }
 
@@ -580,6 +582,7 @@ describe("Malayalam speech-text preparation", () => {
       ttsProvider,
       storageProvider,
       logger: silentLogger,
+      voiceReplyMode: "text_and_audio",
     };
   }
 
@@ -726,5 +729,205 @@ describe("Malayalam speech-text preparation", () => {
     expect(voiceLog.speechTextPrepared).toBe(true);
     const serialized = lines.join("\n");
     expect(serialized).not.toContain(display);
+  });
+});
+
+describe("VOICE_REPLY_MODE", () => {
+  let repo: FakeVoiceConsumerRepository;
+  let whatsappProvider: MockWhatsAppProvider;
+  let aiProvider: MockAiProvider;
+  let sttProvider: MockSpeechToTextProvider;
+  let ttsProvider: MockTextToSpeechProvider;
+  let storageProvider: MockStorageProvider;
+  let knowledgeRetriever: { retrieve: ReturnType<typeof vi.fn> };
+
+  function malayalamResponse(answer: string) {
+    return () =>
+      JSON.stringify({
+        answer,
+        language: "ml",
+        intent: "website_enquiry",
+        confidence: 0.9,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+  }
+
+  beforeEach(() => {
+    repo = new FakeVoiceConsumerRepository();
+    repo.context = baseConversationContext({
+      aiContext: {
+        ...baseConversationContext().aiContext,
+        enabledLanguages: ["en", "ml", "hi", "ar"],
+      },
+    });
+    whatsappProvider = new MockWhatsAppProvider();
+    aiProvider = new MockAiProvider();
+    sttProvider = new MockSpeechToTextProvider();
+    ttsProvider = new MockTextToSpeechProvider();
+    storageProvider = new MockStorageProvider();
+    knowledgeRetriever = { retrieve: vi.fn(async () => []) };
+  });
+
+  function makeDeps(
+    entitlementSnapshot: EntitlementSnapshot,
+    voiceReplyMode: VoiceConsumerDeps["voiceReplyMode"],
+  ): VoiceConsumerDeps {
+    return {
+      repo,
+      entitlementRepo: new FakeEntitlementRepository(entitlementSnapshot),
+      knowledgeRetriever,
+      aiProvider,
+      whatsappProvider,
+      sttProvider,
+      ttsProvider,
+      storageProvider,
+      logger: silentLogger,
+      voiceReplyMode,
+    };
+  }
+
+  it("produces exactly one text reply for Malayalam voice input in text_only mode, without calling TTS, Meta audio-send, or R2 audio upload", async () => {
+    aiProvider.respond = malayalamResponse("നന്ദി, ഞങ്ങൾ സഹായിക്കാം.");
+    sttProvider.fixedDetectedLanguageCode = "ml";
+    const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(0);
+    expect(ttsProvider.calls).toHaveLength(0);
+    expect(repo.recordedOutboundVoice).toHaveLength(0);
+    const outboundAudioKeys = await storageProvider.list(`companies/${COMPANY_ID}/audio/outbound`);
+    expect(outboundAudioKeys).toHaveLength(0);
+  });
+
+  it("produces exactly one text reply for Malayalam-English mixed voice input in text_only mode", async () => {
+    aiProvider.respond = malayalamResponse(
+      "നിങ്ങളുടെ requirement ഒന്ന് പറഞ്ഞാൽ മതി, ഞങ്ങൾ website, branding എന്നിവ ചെയ്യുന്നു.",
+    );
+    sttProvider.fixedDetectedLanguageCode = "ml";
+    const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(0);
+    expect(ttsProvider.calls).toHaveLength(0);
+  });
+
+  it("produces exactly one text reply for English voice input in text_only mode", async () => {
+    sttProvider.fixedDetectedLanguageCode = "en";
+    const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(0);
+    expect(ttsProvider.calls).toHaveLength(0);
+  });
+
+  it("produces exactly one text reply for Hindi and Arabic voice input in text_only mode", async () => {
+    for (const languageCode of ["hi", "ar"]) {
+      repo = new FakeVoiceConsumerRepository();
+      repo.context = baseConversationContext({
+        aiContext: {
+          ...baseConversationContext().aiContext,
+          enabledLanguages: ["en", "ml", "hi", "ar"],
+        },
+      });
+      whatsappProvider = new MockWhatsAppProvider();
+      ttsProvider = new MockTextToSpeechProvider();
+      sttProvider.fixedDetectedLanguageCode = languageCode;
+      const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(0);
+      expect(ttsProvider.calls).toHaveLength(0);
+    }
+  });
+
+  it("still calls ElevenLabs speech-to-text (transcription) in text_only mode", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(repo.recordedTranscriptions).toHaveLength(1);
+    expect(repo.recordedTranscriptions[0]).toMatchObject({ provider: sttProvider.providerName });
+  });
+
+  it("does not send a duplicate text reply in text_only mode", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(repo.recordedOutboundText).toHaveLength(1);
+  });
+
+  it("preserves the existing text-and-voice behaviour in text_and_audio mode", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot(), "text_and_audio");
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(1);
+    expect(ttsProvider.calls).toHaveLength(1);
+    expect(repo.recordedOutboundVoice).toHaveLength(1);
+  });
+
+  it("logs the sanitized voice-reply summary with audioReplySkipped and skipReason in text_only mode", async () => {
+    const lines: string[] = [];
+    const logger = createLogger(
+      { environment: "test" },
+      {
+        write: (line: string) => {
+          lines.push(line);
+        },
+      },
+    );
+    const deps = { ...makeDeps(activeEntitlementSnapshot(), "text_only"), logger };
+
+    await processVoiceJob(deps, makePayload());
+
+    const summaryLine = lines.find((line) => line.includes("Voice reply summary"));
+    expect(summaryLine).toBeDefined();
+    const summary = JSON.parse(summaryLine!);
+    expect(summary).toMatchObject({
+      inboundChannel: "voice",
+      replyMode: "text_only",
+      transcriptionCompleted: true,
+      textReplySent: true,
+      audioReplySkipped: true,
+      skipReason: "reply_mode_text_only",
+    });
+    const serialized = lines.join("\n");
+    expect(serialized).not.toContain("919820000001");
+  });
+
+  it("logs audioReplySkipped: false and omits skipReason in text_and_audio mode", async () => {
+    const lines: string[] = [];
+    const logger = createLogger(
+      { environment: "test" },
+      {
+        write: (line: string) => {
+          lines.push(line);
+        },
+      },
+    );
+    const deps = { ...makeDeps(activeEntitlementSnapshot(), "text_and_audio"), logger };
+
+    await processVoiceJob(deps, makePayload());
+
+    const summaryLine = lines.find((line) => line.includes("Voice reply summary"));
+    const summary = JSON.parse(summaryLine!);
+    expect(summary.audioReplySkipped).toBe(false);
+    expect(summary.skipReason).toBeUndefined();
   });
 });

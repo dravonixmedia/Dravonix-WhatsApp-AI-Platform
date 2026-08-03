@@ -76,6 +76,14 @@ const rawEnvSchema = z.object({
   ELEVENLABS_ENGLISH_VOICE_ID: z.string().optional(),
   ELEVENLABS_MALAYALAM_MODEL_ID: z.string().default("eleven_v3"),
 
+  // Deployment-wide voice-reply switch (apps/workers/voice-consumer). An
+  // explicit enum rather than a boolean -- "should we send audio" is not a
+  // self-explanatory yes/no, and the two states have distinct semantics
+  // ("text_only" forces every voice reply to text regardless of company/
+  // contact preference; "text_and_audio" leaves that per-company resolution
+  // untouched). Defaults safely to "text_only".
+  VOICE_REPLY_MODE: z.enum(["text_only", "text_and_audio"]).default("text_only"),
+
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
