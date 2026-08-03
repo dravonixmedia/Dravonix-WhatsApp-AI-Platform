@@ -68,6 +68,14 @@ const rawEnvSchema = z.object({
   ELEVENLABS_TTS_MODEL_ID: z.string().default("eleven_multilingual_v2"),
   ELEVENLABS_STT_MODEL_ID: z.string().default("scribe_v1"),
 
+  // Malayalam-specific voice configuration. Optional: when
+  // ELEVENLABS_MALAYALAM_VOICE_ID is unset, the TTS provider falls back to
+  // ELEVENLABS_VOICE_ID_DEFAULT rather than failing -- see
+  // ElevenLabsTextToSpeechProvider.synthesize.
+  ELEVENLABS_MALAYALAM_VOICE_ID: z.string().optional(),
+  ELEVENLABS_ENGLISH_VOICE_ID: z.string().optional(),
+  ELEVENLABS_MALAYALAM_MODEL_ID: z.string().default("eleven_v3"),
+
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),

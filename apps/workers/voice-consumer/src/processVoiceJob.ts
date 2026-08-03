@@ -4,6 +4,8 @@ import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
 import { logHandoverTrigger, type Logger } from "@dravonix/observability";
 import {
+  isDominantlyMalayalam,
+  isMalayalamLanguageCode,
   resolveReplyMode,
   type SpeechToTextProvider,
   type TextToSpeechProvider,
@@ -305,6 +307,14 @@ export async function processVoiceJob(
   }
 
   const replyLanguage = transcription.detectedLanguageCode ?? primaryLanguage;
+  // Voice/model selection uses only the current inbound message's detected
+  // language and the current generated reply's own script -- never stale
+  // conversation history -- so a Malayalam-English mixed reply where
+  // Malayalam dominates still gets the Malayalam voice.
+  const ttsIsMalayalam =
+    isMalayalamLanguageCode(transcription.detectedLanguageCode) ||
+    isDominantlyMalayalam(response.answer);
+  const ttsLanguageCode = ttsIsMalayalam ? "ml" : replyLanguage;
 
   if (replyMode.mode === "text_only" || replyMode.mode === "text_and_voice") {
     const sendResult = await deps.whatsappProvider.sendText({
@@ -326,12 +336,21 @@ export async function processVoiceJob(
     try {
       await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "text_to_speech");
 
-      const voiceId = context.voiceSettings.defaultVoiceByLanguage[replyLanguage] ?? undefined;
+      const voiceId = context.voiceSettings.defaultVoiceByLanguage[ttsLanguageCode] ?? undefined;
       const synthesized = await deps.ttsProvider.synthesize({
         text: response.answer,
-        languageCode: replyLanguage,
+        languageCode: ttsLanguageCode,
         voiceId,
         speakingRate: context.voiceSettings.speakingRate,
+      });
+
+      // Sanitized: never log the actual voice ID, API key, transcript, full
+      // response text, or customer phone number.
+      log.info("Selected TTS voice configuration", {
+        selectedLanguage: ttsLanguageCode,
+        voiceCategory: synthesized.voiceCategory,
+        modelId: synthesized.modelId,
+        fallbackVoiceUsed: synthesized.fallbackVoiceUsed ?? false,
       });
 
       const { mediaId: outboundMediaId } = await deps.whatsappProvider.uploadMedia(
@@ -364,7 +383,7 @@ export async function processVoiceJob(
         sizeBytes: synthesized.audio.byteLength,
         durationSeconds: null,
         voiceId: voiceId ?? null,
-        language: replyLanguage,
+        language: ttsLanguageCode,
         retentionExpiresAt: computeRetentionExpiry(new Date(), context.voiceSettings.retentionDays),
       });
     } catch (error) {

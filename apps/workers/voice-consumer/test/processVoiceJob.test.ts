@@ -374,3 +374,156 @@ describe("processVoiceJob", () => {
     expect(keys).toHaveLength(1);
   });
 });
+
+describe("Malayalam voice selection", () => {
+  let repo: FakeVoiceConsumerRepository;
+  let whatsappProvider: MockWhatsAppProvider;
+  let aiProvider: MockAiProvider;
+  let sttProvider: MockSpeechToTextProvider;
+  let ttsProvider: MockTextToSpeechProvider;
+  let storageProvider: MockStorageProvider;
+  let knowledgeRetriever: { retrieve: ReturnType<typeof vi.fn> };
+
+  function malayalamResponse(answer: string) {
+    return () =>
+      JSON.stringify({
+        answer,
+        language: "ml",
+        intent: "website_enquiry",
+        confidence: 0.9,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+  }
+
+  beforeEach(() => {
+    repo = new FakeVoiceConsumerRepository();
+    repo.context = baseConversationContext({
+      aiContext: {
+        ...baseConversationContext().aiContext,
+        enabledLanguages: ["en", "ml"],
+      },
+    });
+    whatsappProvider = new MockWhatsAppProvider();
+    aiProvider = new MockAiProvider();
+    sttProvider = new MockSpeechToTextProvider();
+    ttsProvider = new MockTextToSpeechProvider();
+    storageProvider = new MockStorageProvider();
+    knowledgeRetriever = { retrieve: vi.fn(async () => []) };
+  });
+
+  function makeDeps(entitlementSnapshot: EntitlementSnapshot): VoiceConsumerDeps {
+    return {
+      repo,
+      entitlementRepo: new FakeEntitlementRepository(entitlementSnapshot),
+      knowledgeRetriever,
+      aiProvider,
+      whatsappProvider,
+      sttProvider,
+      ttsProvider,
+      storageProvider,
+      logger: silentLogger,
+    };
+  }
+
+  it("selects the Malayalam voice when the AI reply is predominantly Malayalam script", async () => {
+    aiProvider.respond = malayalamResponse("നന്ദി, ഞങ്ങൾ സഹായിക്കാം.");
+    sttProvider.fixedDetectedLanguageCode = "en";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(ttsProvider.calls).toHaveLength(1);
+    expect(ttsProvider.calls[0]?.languageCode).toBe("ml");
+    // The displayed WhatsApp text must remain exactly what the AI generated.
+    expect(whatsappProvider.sentText[0]?.body).toBe("നന്ദി, ഞങ്ങൾ സഹായിക്കാം.");
+  });
+
+  it("selects the Malayalam voice for a Malayalam-English mixed reply where Malayalam dominates", async () => {
+    aiProvider.respond = malayalamResponse(
+      "നിങ്ങളുടെ requirement ഒന്ന് പറഞ്ഞാൽ മതി, ഞങ്ങൾ website, branding എന്നിവ ചെയ്യുന്നു.",
+    );
+    sttProvider.fixedDetectedLanguageCode = "en";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(ttsProvider.calls[0]?.languageCode).toBe("ml");
+  });
+
+  it("selects the Malayalam voice when the detected language of the current inbound message is Malayalam, even if the reply is English-dominant", async () => {
+    aiProvider.respond = () =>
+      JSON.stringify({
+        answer: "Thanks, we can help with that.",
+        language: "ml",
+        intent: "website_enquiry",
+        confidence: 0.9,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+    sttProvider.fixedDetectedLanguageCode = "ml";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(ttsProvider.calls[0]?.languageCode).toBe("ml");
+  });
+
+  it("uses the existing English/default voice for an English-dominant reply", async () => {
+    sttProvider.fixedDetectedLanguageCode = "en";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(ttsProvider.calls[0]?.languageCode).toBe("en");
+  });
+
+  it("does not send duplicate text or audio replies for a Malayalam reply", async () => {
+    aiProvider.respond = malayalamResponse("നന്ദി, ഞങ്ങൾ സഹായിക്കാം.");
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(1);
+    expect(ttsProvider.calls).toHaveLength(1);
+  });
+
+  it("logs only sanitized voice-selection fields, never the actual voice ID, API key, transcript, response text, or phone number", async () => {
+    aiProvider.respond = malayalamResponse("നന്ദി, ഞങ്ങൾ സഹായിക്കാം.");
+    const lines: string[] = [];
+    const logger = createLogger(
+      { environment: "test" },
+      {
+        write: (line: string) => {
+          lines.push(line);
+        },
+      },
+    );
+    const deps = { ...makeDeps(activeEntitlementSnapshot()), logger };
+
+    await processVoiceJob(deps, makePayload());
+
+    const voiceLogLine = lines.find((line) => line.includes("Selected TTS voice configuration"));
+    expect(voiceLogLine).toBeDefined();
+    const voiceLog = JSON.parse(voiceLogLine!);
+    expect(voiceLog).toMatchObject({
+      selectedLanguage: "ml",
+      voiceCategory: "malayalam",
+      modelId: "eleven_v3",
+      fallbackVoiceUsed: false,
+    });
+    const serialized = lines.join("\n");
+    expect(serialized).not.toContain("919820000001");
+    expect(serialized).not.toContain("നന്ദി, ഞങ്ങൾ സഹായിക്കാം");
+    expect(serialized).not.toContain(sttProvider.fixedText);
+  });
+});

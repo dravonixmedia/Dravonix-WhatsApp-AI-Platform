@@ -29,6 +29,11 @@ export interface TextToSpeechInput {
 export interface TextToSpeechResult {
   audio: ArrayBuffer;
   mimeType: string;
+  /** Sanitized voice-selection signal for logging -- never the actual voice ID. */
+  voiceCategory?: "malayalam" | "default";
+  modelId?: string;
+  /** True when a Malayalam reply had to use the default voice because no Malayalam voice ID was configured. */
+  fallbackVoiceUsed?: boolean;
 }
 
 export interface TextToSpeechProvider {

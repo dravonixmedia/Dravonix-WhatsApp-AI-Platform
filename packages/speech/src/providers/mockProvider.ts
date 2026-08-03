@@ -1,3 +1,4 @@
+import { isMalayalamLanguageCode } from "../malayalamDetection.js";
 import type {
   SpeechToTextInput,
   SpeechToTextProvider,
@@ -31,10 +32,18 @@ export class MockSpeechToTextProvider implements SpeechToTextProvider {
 
 /** Deterministic mock TTS provider for local development and tests. */
 export class MockTextToSpeechProvider implements TextToSpeechProvider {
+  /** Every synthesize() call, in order -- lets tests assert exactly what text/languageCode/voiceId was actually sent. */
+  public calls: TextToSpeechInput[] = [];
+
   async synthesize(input: TextToSpeechInput): Promise<TextToSpeechResult> {
+    this.calls.push(input);
+    const isMalayalam = isMalayalamLanguageCode(input.languageCode);
     return {
       audio: new TextEncoder().encode(`MOCK_AUDIO:${input.text}`).buffer,
       mimeType: "audio/ogg",
+      voiceCategory: isMalayalam ? "malayalam" : "default",
+      modelId: isMalayalam ? "eleven_v3" : "eleven_multilingual_v2",
+      fallbackVoiceUsed: false,
     };
   }
 }

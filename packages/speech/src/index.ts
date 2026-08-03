@@ -1,6 +1,7 @@
 export * from "./provider.js";
 export * from "./replyMode.js";
 export * from "./normalizeTranscript.js";
+export * from "./malayalamDetection.js";
 export * from "./googleAuth.js";
 export * from "./providers/googleSttProvider.js";
 export * from "./providers/googleTtsProvider.js";
