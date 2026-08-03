@@ -101,10 +101,27 @@ describe("buildSystemPrompt", () => {
       expect(company.enabledLanguages).toContain("ml");
       const prompt = buildSystemPrompt(company, memory, knowledge);
       expect(prompt).toContain("MALAYALAM CONVERSATION STYLE");
-      expect(prompt).toMatch(/natural, spoken Kerala Malayalam/i);
-      expect(prompt).toMatch(/friendly and professional customer-service tone/i);
+      expect(prompt).toMatch(/natural, neutral spoken kerala conversational malayalam/i);
+      expect(prompt).toMatch(/sound warm, helpful, and professional/i);
       expect(prompt).toMatch(/ask only one question at a time/i);
-      expect(prompt).toMatch(/avoid formal, literary, or government-document malayalam/i);
+      expect(prompt).toMatch(/not literary or formal malayalam/i);
+      expect(prompt).toMatch(/do not overuse district-specific slang/i);
+    });
+
+    it("gives explicit avoid/prefer examples so the model favors conversational over literary phrasing", () => {
+      const { company, memory, knowledge } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge);
+      // Stiff/literary phrases to avoid.
+      expect(prompt).toContain("താങ്കളുടെ ആവശ്യകതകൾ");
+      expect(prompt).toContain("വിശദമായി പങ്കുവെക്കുക");
+      expect(prompt).toContain("സാധിക്കുന്നതാണ്");
+      expect(prompt).toContain("കൂടുതൽ വിവരങ്ങൾ ആവശ്യമുണ്ടോ");
+      // Natural conversational constructions to prefer.
+      expect(prompt).toContain("നിങ്ങളുടെ requirement ഒന്ന് പറഞ്ഞാൽ മതി");
+      expect(prompt).toContain("അതനുസരിച്ച് suitable package പറയാം");
+      expect(prompt).toContain("കൂടുതൽ details വേണോ?");
+      expect(prompt).toContain("ശരി, അത് ചെയ്യാൻ സാധിക്കും");
+      expect(prompt).toContain("budget range ഒന്ന് പറയാമോ?");
     });
 
     it("lists the business terms that should stay in English rather than be translated", () => {

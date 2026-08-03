@@ -631,6 +631,81 @@ describe("processVoiceJob", () => {
     });
   });
 
+  describe("Malayalam natural-speech TTS preparation", () => {
+    beforeEach(() => {
+      sttProvider.fixedText = "എനിക്ക് വെബ്സൈറ്റ് വേണം";
+      sttProvider.fixedDetectedLanguageCode = "ml";
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, enabledLanguages: ["en", "ml"] },
+      });
+    });
+
+    function malayalamResponseWith(answer: string) {
+      return JSON.stringify({
+        answer,
+        language: "ml",
+        intent: "general_enquiry",
+        confidence: 0.85,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+    }
+
+    it("synthesizes with languageCode ml for a Malayalam reply, while the WhatsApp text stays unchanged", async () => {
+      const displayText = "നന്ദി, ഞങ്ങൾ സഹായിക്കാം.";
+      aiProvider.respond = () => malayalamResponseWith(displayText);
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText[0]?.body).toBe(displayText);
+      expect(ttsProvider.calls).toHaveLength(1);
+      expect(ttsProvider.calls[0]?.languageCode).toBe("ml");
+    });
+
+    it("shortens a Markdown-formatted list for TTS without changing the displayed WhatsApp text", async () => {
+      const displayText =
+        "ഞങ്ങളുടെ സേവനങ്ങൾ ഇവയാണ്:\n1. Website Design ചെയ്യും\n2. Branding സഹായിക്കും\n3. Social Media കൈകാര്യം ചെയ്യും";
+      aiProvider.respond = () => malayalamResponseWith(displayText);
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText[0]?.body).toBe(displayText);
+      expect(ttsProvider.calls[0]?.text).toBe(
+        "ഞങ്ങളുടെ സേവനങ്ങൾ ഇവയാണ്. Website Design ചെയ്യും. Branding സഹായിക്കും. Social Media കൈകാര്യം ചെയ്യും",
+      );
+      expect(ttsProvider.calls[0]?.text).not.toMatch(/[0-9]\.|[•●▪]/);
+    });
+
+    it("converts currency and numbers into spoken Malayalam for TTS, leaving the display text untouched", async () => {
+      const displayText = "വെബ്സൈറ്റ് പാക്കേജ് ₹30,000 ആണ്, 10 pages വരെ ഉൾപ്പെടും.";
+      aiProvider.respond = () => malayalamResponseWith(displayText);
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText[0]?.body).toBe(displayText);
+      expect(ttsProvider.calls[0]?.text).toContain("മുപ്പതിനായിരം രൂപ");
+      expect(ttsProvider.calls[0]?.text).toContain("പത്ത് pages");
+    });
+
+    it("selects the Malayalam TTS voice (languageCode ml) for a Malayalam-dominant mixed reply", async () => {
+      const displayText =
+        "നിങ്ങളുടെ requirement മനസ്സിലായി, ഞങ്ങൾ website, branding എന്നിവ ചെയ്യുന്നു, budget range ഒന്ന് പറയാമോ?";
+      aiProvider.respond = () => malayalamResponseWith(displayText);
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(ttsProvider.calls[0]?.languageCode).toBe("ml");
+    });
+  });
+
   describe("English voice behaviour is unchanged by the Malayalam fix", () => {
     it("still transcribes, replies, and sends text and voice for an English voice note", async () => {
       sttProvider.fixedText = "What services do you offer?";
@@ -642,6 +717,30 @@ describe("processVoiceJob", () => {
       expect(whatsappProvider.sentText).toHaveLength(1);
       expect(whatsappProvider.sentAudio).toHaveLength(1);
       expect(handoverRepo.handoverCalls).toHaveLength(0);
+    });
+
+    it("synthesizes with languageCode en and the unmodified display text for an English reply", async () => {
+      sttProvider.fixedText = "What services do you offer?";
+      sttProvider.fixedDetectedLanguageCode = "en";
+      aiProvider.respond = () =>
+        JSON.stringify({
+          answer: "We offer website design and branding packages.",
+          language: "en",
+          intent: "general_enquiry",
+          confidence: 0.9,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(ttsProvider.calls[0]?.languageCode).toBe("en");
+      expect(ttsProvider.calls[0]?.text).toBe("We offer website design and branding packages.");
     });
 
     it("still escalates for an explicit English human request", async () => {

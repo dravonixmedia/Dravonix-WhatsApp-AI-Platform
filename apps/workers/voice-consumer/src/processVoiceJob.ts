@@ -14,7 +14,9 @@ import {
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
 import type { Logger } from "@dravonix/observability";
 import {
+  isDominantlyMalayalam,
   normalizeTranscript,
+  prepareMalayalamSpeechText,
   resolveReplyMode,
   type SpeechToTextProvider,
   type TextToSpeechProvider,
@@ -22,6 +24,28 @@ import {
 import { buildStorageKey, computeRetentionExpiry, type StorageProvider } from "@dravonix/storage";
 import type { WhatsAppProvider } from "@dravonix/whatsapp";
 import type { VoiceConsumerRepository } from "./repository.js";
+
+/**
+ * Domain-specific vocabulary that biases ElevenLabs Scribe's transcription
+ * accuracy for auto-detected/Malayalam-English mixed audio (final plan
+ * section 5) -- names and technical terms a generic language model has no
+ * reason to expect are the most common source of STT accuracy loss for
+ * mixed business speech.
+ */
+const MALAYALAM_STT_KEYTERMS = [
+  "Dravonix",
+  "branding",
+  "website",
+  "quotation",
+  "logo",
+  "social media",
+  "Zoho",
+  "CRM",
+  "SaaS",
+  "Cloudflare",
+  "Supabase",
+  "Kerala",
+];
 
 export interface VoiceJobPayload {
   companyId: string;
@@ -161,6 +185,14 @@ export async function processVoiceJob(
 
   const primaryLanguage =
     context.aiContext.enabledLanguages[0] ?? context.aiContext.fallbackLanguage;
+  // "Confidently Malayalam" means the company has no other enabled language
+  // to be mixed with -- there's no ambiguity to auto-detect. Any company
+  // with more than one enabled language (e.g. Malayalam-English) is treated
+  // as potentially mixed: auto-detect plus keyterms gives better accuracy
+  // there than forcing a single language would.
+  const isConfidentlyMalayalam =
+    context.aiContext.enabledLanguages.length === 1 &&
+    context.aiContext.enabledLanguages[0] === "ml";
   const sttInput = {
     audio: audioBytes,
     mimeType,
@@ -168,6 +200,8 @@ export async function processVoiceJob(
     alternativeLanguageCodes: context.aiContext.enabledLanguages
       .slice(1)
       .map((code) => toSttLanguageCode(code)),
+    forceLanguageCode: isConfidentlyMalayalam ? "ml" : undefined,
+    keyterms: isConfidentlyMalayalam ? undefined : MALAYALAM_STT_KEYTERMS,
   };
 
   let transcription = await deps.sttProvider.transcribe(sttInput);
@@ -342,6 +376,16 @@ export async function processVoiceJob(
   }
 
   const replyLanguage = transcription.detectedLanguageCode ?? primaryLanguage;
+  // The voice used for TTS is decided by the reply's own dominant script,
+  // not just the STT-detected language tag -- a Malayalam-English mixed
+  // reply where Malayalam dominates must still use the Malayalam voice
+  // (final plan section 4). The Malayalam TTS-preparation layer (numbers/
+  // currency spoken aloud, Markdown/bullets stripped, NFC-normalized) is
+  // applied only for that voice; the WhatsApp text reply above always keeps
+  // response.answer completely unchanged.
+  const ttsIsMalayalam = isDominantlyMalayalam(response.answer);
+  const ttsLanguageCode = ttsIsMalayalam ? "ml" : "en";
+  const speechText = ttsIsMalayalam ? prepareMalayalamSpeechText(response.answer) : response.answer;
 
   if (replyMode.mode === "text_only" || replyMode.mode === "text_and_voice") {
     log.info("Stage: whatsapp_text_generation", {
@@ -383,12 +427,14 @@ export async function processVoiceJob(
 
       log.info("Stage: whatsapp_audio_generation", {
         detectedLanguage: replyLanguage,
+        ttsLanguageCode,
         responseCharCount: response.answer.length,
+        speechTextCharCount: speechText.length,
       });
-      const voiceId = context.voiceSettings.defaultVoiceByLanguage[replyLanguage] ?? undefined;
+      const voiceId = context.voiceSettings.defaultVoiceByLanguage[ttsLanguageCode] ?? undefined;
       const synthesized = await deps.ttsProvider.synthesize({
-        text: response.answer,
-        languageCode: replyLanguage,
+        text: speechText,
+        languageCode: ttsLanguageCode,
         voiceId,
         speakingRate: context.voiceSettings.speakingRate,
       });
@@ -427,8 +473,8 @@ export async function processVoiceJob(
         sizeBytes: synthesized.audio.byteLength,
         durationSeconds: null,
         voiceId: voiceId ?? null,
-        language: replyLanguage,
-        sourceText: response.answer,
+        language: ttsLanguageCode,
+        sourceText: speechText,
         retentionExpiresAt: computeRetentionExpiry(new Date(), context.voiceSettings.retentionDays),
       });
     } catch (error) {

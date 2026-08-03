@@ -113,6 +113,12 @@ export default {
         apiKey: env.ELEVENLABS_API_KEY,
         defaultVoiceId: platformEnv.ELEVENLABS_VOICE_ID_DEFAULT,
         modelId: platformEnv.ELEVENLABS_TTS_MODEL_ID,
+        malayalamVoiceId: platformEnv.ELEVENLABS_MALAYALAM_VOICE_ID,
+        englishVoiceId: platformEnv.ELEVENLABS_ENGLISH_VOICE_ID,
+        malayalamModelId: platformEnv.ELEVENLABS_MALAYALAM_MODEL_ID,
+        pronunciationDictionaryId: platformEnv.ELEVENLABS_PRONUNCIATION_DICTIONARY_ID,
+        pronunciationDictionaryVersionId:
+          platformEnv.ELEVENLABS_PRONUNCIATION_DICTIONARY_VERSION_ID,
       }),
       storageProvider: new R2StorageProvider(env.AUDIO_BUCKET),
       logger,
