@@ -1,0 +1,138 @@
+name: Deploy Malayalam Voice Hotfix (voice-consumer, staging only)
+
+# Lives on the default branch (required for workflow_dispatch to be
+# dispatchable at all) but deploys a specific, pinned commit from
+# hotfix/malayalam-voice-validation -- not whatever is on this branch. This
+# workflow never checks out or builds anything from this branch itself
+# beyond the workflow definition; every actual source file (wrangler.toml,
+# scripts/verify-wrangler-env-bindings.sh, apps/workers/voice-consumer/**)
+# comes from the pinned EXPECTED_COMMIT checked out below. The hotfix code
+# is never merged into the default branch by this workflow.
+#
+# Narrowly scoped on purpose: no production option anywhere, deploys only
+# apps/workers/voice-consumer (never apps/api, message-consumer, the web
+# app, or outbound-reconciler), and never runs a Supabase command or
+# migration. Manual dispatch only -- no push/pull_request/schedule trigger.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Staging-specific: scoped to this Worker's staging deploy only, so two
+  # simultaneous dispatches of this workflow can never race the same
+  # dravonix-audio-staging Worker. Distinct from deploy.yml's
+  # deploy-${{ inputs.target_environment }} group (that workflow has no
+  # inputs here to reference).
+  group: deploy-voice-consumer-staging
+  cancel-in-progress: false
+
+env:
+  EXPECTED_BRANCH: hotfix/malayalam-voice-validation
+  EXPECTED_COMMIT: dad75ad8d517e7a0f50ace23a120fb19217b9274
+
+jobs:
+  verify-source-commit:
+    name: Verify the pinned hotfix commit is reachable from its branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out hotfix/malayalam-voice-validation (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_BRANCH }}
+          fetch-depth: 0
+
+      - name: Fail unless EXPECTED_COMMIT is HEAD of EXPECTED_BRANCH
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "${{ env.EXPECTED_COMMIT }}" ]]; then
+            echo "::error::HEAD of ${{ env.EXPECTED_BRANCH }} is $actual, not the expected ${{ env.EXPECTED_COMMIT }}. Refusing to deploy -- the branch has moved since this deployment was reviewed and approved."
+            exit 1
+          fi
+          echo "OK: ${{ env.EXPECTED_BRANCH }} HEAD is ${{ env.EXPECTED_COMMIT }}."
+
+  deploy-voice-consumer-staging:
+    name: Deploy voice-consumer (staging only)
+    needs: verify-source-commit
+    runs-on: ubuntu-latest
+    # Hardcoded to staging -- this workflow has no input that could ever
+    # select "production", so there is no code path into a production
+    # environment/secret set. Approval depends on the repo's "staging"
+    # GitHub Environment having required reviewers configured (Settings ->
+    # Environments -> staging); this workflow's `environment: staging` line
+    # only turns that into a real gate if that protection rule already exists.
+    environment: staging
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_LOG: debug
+      WRANGLER_LOG_SANITIZE: true
+      FORCE_COLOR: 0
+    steps:
+      - name: Check out the exact reviewed hotfix commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_COMMIT }}
+
+      - name: Re-confirm checked-out commit matches the expected hotfix commit
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "${{ env.EXPECTED_COMMIT }}" ]]; then
+            echo "::error::Checked-out commit $actual does not match expected ${{ env.EXPECTED_COMMIT }}."
+            exit 1
+          fi
+          echo "OK: checked out $actual."
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Preflight -- verify resolved staging resource names for voice-consumer only
+        # Reuses the same guard deploy.yml relies on: fails if any resolved
+        # name in [env.staging] doesn't carry a "-staging" segment. Only
+        # voice-consumer's wrangler.toml is checked -- apps/api and
+        # message-consumer are never referenced by this workflow at all.
+        run: bash scripts/verify-wrangler-env-bindings.sh apps/workers/voice-consumer/wrangler.toml staging
+
+      - name: Confirm the configured Worker name is exactly dravonix-audio-staging
+        working-directory: apps/workers/voice-consumer
+        run: |
+          set -euo pipefail
+          name_line="$(awk '/^\[env\.staging\]/{f=1; next} /^\[/{f=0} f && /^name[[:space:]]*=/{print; exit}' wrangler.toml)"
+          echo "Resolved [env.staging] name declaration: $name_line"
+          if [[ "$name_line" != 'name = "dravonix-audio-staging"' ]]; then
+            echo "::error::[env.staging] name in wrangler.toml is not dravonix-audio-staging ($name_line)."
+            exit 1
+          fi
+          echo "OK: staging Worker name is dravonix-audio-staging."
+
+      - name: Staging dry-run
+        working-directory: apps/workers/voice-consumer
+        run: npx wrangler deploy --dry-run --env staging
+
+      - name: Deploy voice-consumer (staging)
+        run: |
+          cd apps/workers/voice-consumer
+          npx wrangler deploy --env staging
+
+      - name: Print Wrangler logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "===== Wrangler debug logs ====="
+          find "${WRANGLER_LOG_PATH:-.}" -type f -name '*.log' -print -exec sed -n '1,500p' {} \; || true
