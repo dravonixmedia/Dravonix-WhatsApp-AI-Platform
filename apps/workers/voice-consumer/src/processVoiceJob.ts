@@ -1,4 +1,8 @@
-import { generateValidatedResponse, type AiProvider } from "@dravonix/ai";
+import {
+  generateValidatedResponse,
+  type AiProvider,
+  type ValidationDiagnosticEvent,
+} from "@dravonix/ai";
 import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravonix/billing";
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
 import {
@@ -10,6 +14,7 @@ import {
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
 import type { Logger } from "@dravonix/observability";
 import {
+  normalizeTranscript,
   resolveReplyMode,
   type SpeechToTextProvider,
   type TextToSpeechProvider,
@@ -136,6 +141,7 @@ export async function processVoiceJob(
   const media = await deps.whatsappProvider.getMediaMetadata(payload.mediaId);
   const audioBytes = await deps.whatsappProvider.downloadMedia(media.url);
   const mimeType = payload.mimeType ?? media.mimeType ?? "audio/ogg";
+  log.info("Stage: media_download", { mimeType, sizeBytes: audioBytes.byteLength });
 
   const inboundStorageKey = buildStorageKey(payload.companyId, "audio/inbound", payload.messageId);
   await deps.storageProvider.put(inboundStorageKey, audioBytes, { contentType: mimeType });
@@ -169,6 +175,12 @@ export async function processVoiceJob(
   if (!transcription.text.trim() && context.voiceSettings.fallbackBehavior === "retry_once") {
     transcription = await deps.sttProvider.transcribe(sttInput);
   }
+
+  log.info("Stage: stt_transcription", {
+    detectedLanguage: transcription.detectedLanguageCode,
+    transcriptCharCount: transcription.text.length,
+    confidence: transcription.confidence,
+  });
 
   await deps.repo.recordTranscription({
     companyId: payload.companyId,
@@ -210,21 +222,59 @@ export async function processVoiceJob(
     return;
   }
 
-  const knowledge = await deps.knowledgeRetriever.retrieve(payload.companyId, transcription.text);
+  // Unicode NFC normalization matters for scripts like Malayalam, whose
+  // conjunct consonants/vowel signs can arrive as more than one equivalent
+  // combining-code-point sequence -- normalizing here (not just trimming)
+  // keeps the transcript's representation consistent regardless of which
+  // language was spoken.
+  const normalizedTranscript = normalizeTranscript(transcription.text);
+  log.info("Stage: transcript_normalization", {
+    detectedLanguage: transcription.detectedLanguageCode,
+    transcriptCharCount: normalizedTranscript.length,
+  });
 
-  const { response, usedFallback } = await generateValidatedResponse(
+  const knowledge = await deps.knowledgeRetriever.retrieve(payload.companyId, normalizedTranscript);
+
+  log.info("Stage: claude_request", {
+    detectedLanguage: transcription.detectedLanguageCode,
+    transcriptCharCount: normalizedTranscript.length,
+  });
+
+  const { response, usedFallback, repaired } = await generateValidatedResponse(
     {
       provider: deps.aiProvider,
       onValidationFailure: (details) =>
-        log.error("AI structured response failed validation twice", details),
+        log.error("AI structured response failed validation twice", {
+          detectedLanguage: transcription.detectedLanguageCode,
+          firstResponseCharCount: details.rawFirstAttempt.length,
+          repairResponseCharCount: details.rawRepairAttempt.length,
+        }),
+      onDiagnostics: (event: ValidationDiagnosticEvent) =>
+        log.info(`Stage: ${event.stage}`, {
+          attempt: event.attempt,
+          detectedLanguage: event.detectedLanguage,
+          transcriptCharCount: event.transcriptCharCount,
+          responseCharCount: event.responseCharCount,
+          errorCode: event.errorCode,
+          failedField: event.failedField,
+          repairAttempted: event.repairAttempted,
+        }),
     },
     {
       company: context.aiContext,
       memory: context.memory,
       knowledge,
-      customerMessage: transcription.text,
+      customerMessage: normalizedTranscript,
+      currentDetectedLanguage: transcription.detectedLanguageCode,
     },
   );
+
+  log.info("Stage: safety_validation", {
+    detectedLanguage: transcription.detectedLanguageCode,
+    responseCharCount: response.answer.length,
+    repairAttempted: repaired,
+    usedFallback,
+  });
 
   if (usedFallback) {
     log.warn("Used safe static fallback response after repeated AI validation failure");
@@ -291,6 +341,10 @@ export async function processVoiceJob(
   const replyLanguage = transcription.detectedLanguageCode ?? primaryLanguage;
 
   if (replyMode.mode === "text_only" || replyMode.mode === "text_and_voice") {
+    log.info("Stage: whatsapp_text_generation", {
+      detectedLanguage: replyLanguage,
+      responseCharCount: response.answer.length,
+    });
     const outboundResult = await sendAiOutboundMessage(deps.handoverRepo, deps.whatsappProvider, {
       sourceMessageId: payload.messageId,
       channelType: "text",
@@ -324,6 +378,10 @@ export async function processVoiceJob(
     try {
       await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "text_to_speech");
 
+      log.info("Stage: whatsapp_audio_generation", {
+        detectedLanguage: replyLanguage,
+        responseCharCount: response.answer.length,
+      });
       const voiceId = context.voiceSettings.defaultVoiceByLanguage[replyLanguage] ?? undefined;
       const synthesized = await deps.ttsProvider.synthesize({
         text: response.answer,

@@ -452,4 +452,138 @@ describe("processVoiceJob", () => {
     const keys = await storageProvider.list(`companies/${COMPANY_ID}/audio/inbound`);
     expect(keys).toHaveLength(1);
   });
+
+  describe("Malayalam voice (regression: was misclassified as ai_response_validation_failed)", () => {
+    const malayalamAnswer =
+      "നിങ്ങളുടെ ചോദ്യത്തിന് നന്ദി. ഞങ്ങൾ വെബ്സൈറ്റ് ഡെവലപ്മെന്റ് സേവനങ്ങൾ വാഗ്ദാനം ചെയ്യുന്നു.";
+    const mixedAnswer = "നന്ദി! We offer website development and AI automation services.";
+
+    function malayalamResponse(overrides: Record<string, unknown> = {}) {
+      return JSON.stringify({
+        answer: malayalamAnswer,
+        language: "ml",
+        intent: "general_enquiry",
+        confidence: 0.85,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+        ...overrides,
+      });
+    }
+
+    beforeEach(() => {
+      sttProvider.fixedText = "എനിക്ക് വെബ്സൈറ്റ് വേണം";
+      sttProvider.fixedDetectedLanguageCode = "ml";
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, enabledLanguages: ["en", "ml"] },
+      });
+    });
+
+    it("accepts a valid Malayalam text response and sends it as-is", async () => {
+      aiProvider.respond = () => malayalamResponse();
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentText[0]?.body).toBe(malayalamAnswer);
+      expect(handoverRepo.handoverCalls).toHaveLength(0);
+    });
+
+    it("sends both a Malayalam text and a Malayalam voice reply", async () => {
+      aiProvider.respond = () => malayalamResponse();
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(1);
+      expect(repo.recordedGeneratedAudio).toEqual([
+        expect.objectContaining({ language: "ml", sourceText: malayalamAnswer }),
+      ]);
+    });
+
+    it("accepts a Malayalam-English mixed-script response", async () => {
+      aiProvider.respond = () => malayalamResponse({ answer: mixedAnswer });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentText[0]?.body).toBe(mixedAnswer);
+    });
+
+    it("repairs a malformed first response and still sends exactly one Malayalam reply (no duplicate)", async () => {
+      let call = 0;
+      aiProvider.respond = () => {
+        call += 1;
+        return call === 1 ? "{ not valid json" : malayalamResponse();
+      };
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(aiProvider.calls).toHaveLength(2);
+      expect(aiProvider.calls[1]?.repairInstruction).toContain("ml");
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentText[0]?.body).toBe(malayalamAnswer);
+      expect(handoverRepo.handoverCalls).toHaveLength(0);
+    });
+
+    it("uses the corrected, Malayalam safe-fallback text and escalates when both attempts fail", async () => {
+      aiProvider.respond = () => "still not valid json after repair";
+      repo.context = baseConversationContext({
+        aiContext: {
+          ...baseConversationContext().aiContext,
+          enabledLanguages: ["en", "ml"],
+          staticFallbackMessage:
+            "Automated assistance is temporarily unavailable. Our team will respond as soon as possible.",
+        },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(handoverRepo.handoverCalls).toHaveLength(1);
+      expect(handoverRepo.handoverCalls[0]).toMatchObject({
+        reason: "ai_response_validation_failed",
+        sourceType: "voice",
+      });
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      const sentFallback = whatsappProvider.sentText[0]?.body ?? "";
+      expect(sentFallback).not.toContain("respond as soon as possible");
+      expect(sentFallback).toMatch(/[ഀ-ൿ]/);
+    });
+
+    it("still triggers a handover for an explicit human request in Malayalam", async () => {
+      aiProvider.respond = () =>
+        malayalamResponse({
+          requiresHuman: true,
+          handoverReason: "customer_requested_human",
+          answer: "ഒരു ജീവനക്കാരനെ ബന്ധിപ്പിക്കാം.",
+        });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(handoverRepo.handoverCalls).toHaveLength(1);
+      expect(handoverRepo.handoverCalls[0]).toMatchObject({
+        reason: "customer_requested_human",
+        sourceType: "voice",
+      });
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+
+    it("does not trigger a handover for an ordinary Malayalam enquiry", async () => {
+      aiProvider.respond = () => malayalamResponse();
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(handoverRepo.handoverCalls).toHaveLength(0);
+    });
+  });
 });

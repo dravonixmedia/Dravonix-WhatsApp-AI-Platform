@@ -44,7 +44,15 @@ const rawEnvSchema = z.object({
 
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-5"),
-  ANTHROPIC_MAX_TOKENS: z.coerce.number().int().positive().default(1024),
+  // 1024 was tuned against English-only structured responses. Non-Latin/
+  // high-token-density scripts (e.g. Malayalam) need substantially more
+  // output tokens for semantically equivalent content under Claude's
+  // tokenizer, and a too-tight ceiling truncates the structured JSON
+  // mid-generation -- an invalid-JSON validation failure that is really a
+  // token-budget bug misattributed to language. 2048 gives real headroom
+  // for any enabled language; see packages/ai/src/orchestrate.ts for the
+  // repair attempt's further boosted budget.
+  ANTHROPIC_MAX_TOKENS: z.coerce.number().int().positive().default(2048),
 
   GOOGLE_CLOUD_PROJECT_ID: z.string().optional(),
   GOOGLE_CLOUD_CREDENTIALS: z.string().optional(),

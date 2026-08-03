@@ -41,6 +41,14 @@ export interface AiGenerationInput {
   memory: ConversationMemoryContext;
   knowledge: RetrievedKnowledgeSnippet[];
   customerMessage: string;
+  /**
+   * The language actually detected for THIS turn's inbound message (e.g. a
+   * voice note's STT-detected language), when known -- takes priority over
+   * memory.lastDetectedLanguage (which reflects a PRIOR turn) for choosing
+   * the language of any safe-fallback text and for the repair instruction.
+   * Omitted for text messages, which have no separate detection step.
+   */
+  currentDetectedLanguage?: string | null;
 }
 
 export interface AiUsage {
