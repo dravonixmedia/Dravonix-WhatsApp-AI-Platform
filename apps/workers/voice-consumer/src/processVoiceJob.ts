@@ -6,6 +6,7 @@ import { logHandoverTrigger, type Logger } from "@dravonix/observability";
 import {
   isDominantlyMalayalam,
   isMalayalamLanguageCode,
+  prepareMalayalamSpeechText,
   resolveReplyMode,
   type SpeechToTextProvider,
   type TextToSpeechProvider,
@@ -315,6 +316,9 @@ export async function processVoiceJob(
     isMalayalamLanguageCode(transcription.detectedLanguageCode) ||
     isDominantlyMalayalam(response.answer);
   const ttsLanguageCode = ttsIsMalayalam ? "ml" : replyLanguage;
+  // speechText is used ONLY for TTS input -- the WhatsApp text reply and DB
+  // record below always use response.answer, unmodified.
+  const speechText = ttsIsMalayalam ? prepareMalayalamSpeechText(response.answer) : response.answer;
 
   if (replyMode.mode === "text_only" || replyMode.mode === "text_and_voice") {
     const sendResult = await deps.whatsappProvider.sendText({
@@ -338,19 +342,22 @@ export async function processVoiceJob(
 
       const voiceId = context.voiceSettings.defaultVoiceByLanguage[ttsLanguageCode] ?? undefined;
       const synthesized = await deps.ttsProvider.synthesize({
-        text: response.answer,
+        text: speechText,
         languageCode: ttsLanguageCode,
         voiceId,
         speakingRate: context.voiceSettings.speakingRate,
       });
 
       // Sanitized: never log the actual voice ID, API key, transcript, full
-      // response text, or customer phone number.
+      // display/speech text, or customer phone number -- lengths and flags only.
       log.info("Selected TTS voice configuration", {
         selectedLanguage: ttsLanguageCode,
         voiceCategory: synthesized.voiceCategory,
         modelId: synthesized.modelId,
         fallbackVoiceUsed: synthesized.fallbackVoiceUsed ?? false,
+        displayTextLength: response.answer.length,
+        speechTextLength: speechText.length,
+        speechTextPrepared: ttsIsMalayalam,
       });
 
       const { mediaId: outboundMediaId } = await deps.whatsappProvider.uploadMedia(

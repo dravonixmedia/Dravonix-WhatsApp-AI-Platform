@@ -17,6 +17,21 @@ export interface ElevenLabsTtsConfig {
 }
 
 /**
+ * Fixed, tuned Eleven v3 voice settings for Malayalam only -- "Natural"
+ * stability plus values that keep pronunciation consistent instead of
+ * flipping style mid-sentence across Malayalam/English-script boundaries.
+ * Never applied to English requests (`speed` there still comes from
+ * input.speakingRate, unchanged).
+ */
+const MALAYALAM_VOICE_SETTINGS = {
+  stability: "natural",
+  speed: 0.92,
+  similarity_boost: 0.8,
+  style: 0,
+  use_speaker_boost: true,
+} as const;
+
+/**
  * ElevenLabs text-to-speech adapter. Requests Opus output directly (ADR-0005)
  * so replies can be sent to WhatsApp without a separate transcoding step.
  *
@@ -46,10 +61,16 @@ export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
 
     const url = `${this.baseUrl}/${voiceId}?output_format=opus_48000_128`;
 
+    const voiceSettings = isMalayalam
+      ? MALAYALAM_VOICE_SETTINGS
+      : input.speakingRate
+        ? { speed: input.speakingRate }
+        : undefined;
+
     const body: Record<string, unknown> = {
       text: input.text,
       model_id: modelId,
-      voice_settings: input.speakingRate ? { speed: input.speakingRate } : undefined,
+      voice_settings: voiceSettings,
     };
     if (isMalayalam) {
       body.language_code = "ml";

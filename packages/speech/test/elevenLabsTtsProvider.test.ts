@@ -118,6 +118,25 @@ describe("ElevenLabsTextToSpeechProvider", () => {
       expect(result.fallbackVoiceUsed).toBe(false);
     });
 
+    it("uses fixed Eleven v3 Natural voice settings (speed 0.92, similarity_boost 0.80, style 0, use_speaker_boost true) for Malayalam", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = makeProvider();
+
+      // speakingRate is deliberately ignored for Malayalam -- the fixed 0.92
+      // tuned speed always wins, unlike the English path below.
+      await provider.synthesize({ text: "നന്ദി", languageCode: "ml", speakingRate: 1.3 });
+
+      const [, requestInit] = fetchMock.mock.calls[0]!;
+      const body = JSON.parse((requestInit as RequestInit).body as string);
+      expect(body.voice_settings).toEqual({
+        stability: "natural",
+        speed: 0.92,
+        similarity_boost: 0.8,
+        style: 0,
+        use_speaker_boost: true,
+      });
+    });
+
     it("uses the configured English voice, the default model, and no language_code for English", async () => {
       const fetchMock = stubFetchReturningAudio([1]);
       const provider = makeProvider();
@@ -132,6 +151,17 @@ describe("ElevenLabsTextToSpeechProvider", () => {
       expect(result.voiceCategory).toBe("default");
       expect(result.modelId).toBe("eleven_multilingual_v2");
       expect(result.fallbackVoiceUsed).toBe(false);
+    });
+
+    it("does not alter English voice_settings behaviour (still driven by speakingRate, no fixed Malayalam tuning)", async () => {
+      const fetchMock = stubFetchReturningAudio([1]);
+      const provider = makeProvider();
+
+      await provider.synthesize({ text: "Thanks", languageCode: "en", speakingRate: 1.1 });
+
+      const [, requestInit] = fetchMock.mock.calls[0]!;
+      const body = JSON.parse((requestInit as RequestInit).body as string);
+      expect(body.voice_settings).toEqual({ speed: 1.1 });
     });
 
     it("selects the Malayalam voice for a Malayalam-English mixed reply where Malayalam dominates", async () => {

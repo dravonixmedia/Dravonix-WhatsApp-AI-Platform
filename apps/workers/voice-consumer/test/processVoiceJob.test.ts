@@ -527,3 +527,204 @@ describe("Malayalam voice selection", () => {
     expect(serialized).not.toContain(sttProvider.fixedText);
   });
 });
+
+describe("Malayalam speech-text preparation", () => {
+  let repo: FakeVoiceConsumerRepository;
+  let whatsappProvider: MockWhatsAppProvider;
+  let aiProvider: MockAiProvider;
+  let sttProvider: MockSpeechToTextProvider;
+  let ttsProvider: MockTextToSpeechProvider;
+  let storageProvider: MockStorageProvider;
+  let knowledgeRetriever: { retrieve: ReturnType<typeof vi.fn> };
+
+  function malayalamResponse(answer: string) {
+    return () =>
+      JSON.stringify({
+        answer,
+        language: "ml",
+        intent: "website_enquiry",
+        confidence: 0.9,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+      });
+  }
+
+  beforeEach(() => {
+    repo = new FakeVoiceConsumerRepository();
+    repo.context = baseConversationContext({
+      aiContext: {
+        ...baseConversationContext().aiContext,
+        enabledLanguages: ["en", "ml"],
+      },
+    });
+    whatsappProvider = new MockWhatsAppProvider();
+    aiProvider = new MockAiProvider();
+    sttProvider = new MockSpeechToTextProvider();
+    ttsProvider = new MockTextToSpeechProvider();
+    storageProvider = new MockStorageProvider();
+    knowledgeRetriever = { retrieve: vi.fn(async () => []) };
+  });
+
+  function makeDeps(entitlementSnapshot: EntitlementSnapshot): VoiceConsumerDeps {
+    return {
+      repo,
+      entitlementRepo: new FakeEntitlementRepository(entitlementSnapshot),
+      knowledgeRetriever,
+      aiProvider,
+      whatsappProvider,
+      sttProvider,
+      ttsProvider,
+      storageProvider,
+      logger: silentLogger,
+    };
+  }
+
+  it("keeps the WhatsApp display text exactly unchanged while TTS receives a separate, prepared speech text", async () => {
+    const display = "🎉 **വില** ₹15,000 ആണ്! Dravonix branding സേവനം.";
+    aiProvider.respond = malayalamResponse(display);
+    sttProvider.fixedDetectedLanguageCode = "ml";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText[0]?.body).toBe(display);
+    expect(repo.recordedOutboundText[0]?.body).toBe(display);
+    expect(repo.recordedOutboundVoice[0]).toMatchObject({ body: display });
+    expect(ttsProvider.calls[0]?.text).not.toBe(display);
+  });
+
+  it("removes emojis and Markdown from the Malayalam speech text", async () => {
+    aiProvider.respond = malayalamResponse("🎉 **വില** _വളരെ_ കുറവാണ്!");
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    const speechText = ttsProvider.calls[0]!.text;
+    expect(speechText).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
+    expect(speechText).not.toContain("*");
+    expect(speechText).not.toContain("_");
+  });
+
+  it("converts ₹15,000 to പതിനയ്യായിരം രൂപ in the speech text only", async () => {
+    const display = "വില ₹15,000 ആണ്.";
+    aiProvider.respond = malayalamResponse(display);
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(ttsProvider.calls[0]!.text).toContain("പതിനയ്യായിരം രൂപ");
+    expect(whatsappProvider.sentText[0]?.body).toBe(display);
+  });
+
+  it("converts ₹30,000 to മുപ്പതിനായിരം രൂപ in the speech text only", async () => {
+    const display = "വില ₹30,000 ആണ്.";
+    aiProvider.respond = malayalamResponse(display);
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(ttsProvider.calls[0]!.text).toContain("മുപ്പതിനായിരം രൂപ");
+    expect(whatsappProvider.sentText[0]?.body).toBe(display);
+  });
+
+  it("uses the curated Malayalam-script equivalents for Roman-script business terms", async () => {
+    aiProvider.respond = malayalamResponse(
+      "Dravonix Media നിങ്ങൾക്ക് branding, logo, website development ചെയ്യും.",
+    );
+    sttProvider.fixedDetectedLanguageCode = "ml";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    const speechText = ttsProvider.calls[0]!.text;
+    expect(speechText).toContain("ഡ്രാവോണിക്സ് മീഡിയ");
+    expect(speechText).toContain("ബ്രാൻഡിംഗ്");
+    expect(speechText).toContain("ലോഗോ");
+    expect(speechText).toContain("വെബ്സൈറ്റ് ഡെവലപ്മെന്റ്");
+  });
+
+  it("pronounces Dravonix using ഡ്രാവോണിക്സ്", async () => {
+    aiProvider.respond = malayalamResponse("Dravonix എപ്പോഴും സഹായിക്കും.");
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(ttsProvider.calls[0]!.text).toContain("ഡ്രാവോണിക്സ്");
+  });
+
+  it("rewrites a numbered package list with prices into short spoken sentences for TTS, leaving the display text as a visual list", async () => {
+    const display =
+      "1. Logo + Brand Guidelines + Business Card Design — ₹15,000\n" +
+      "2. Full Brand Identity Package — ₹30,000";
+    aiProvider.respond = malayalamResponse(display);
+    sttProvider.fixedDetectedLanguageCode = "ml";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText[0]?.body).toBe(display);
+    const speechText = ttsProvider.calls[0]!.text;
+    expect(speechText).toContain("ഒന്നാമത്തെ പാക്കേജിൽ");
+    expect(speechText).toContain("എന്നിവ ഉൾപ്പെടും");
+    expect(speechText).toContain("രണ്ടാമത്തേത്");
+    expect(speechText).not.toContain("1.");
+    expect(speechText).not.toContain("₹");
+  });
+
+  it("leaves English output completely unchanged (no speech-text preparation applied)", async () => {
+    sttProvider.fixedDetectedLanguageCode = "en";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    // MockAiProvider's default English answer -- confirms speechText === the
+    // AI's raw answer for English, with no Malayalam prep layer touching it.
+    const expectedAnswer = "Thanks for reaching out to Dravonix Media! How can I help you today?";
+    expect(whatsappProvider.sentText[0]?.body).toBe(expectedAnswer);
+    expect(ttsProvider.calls[0]!.text).toBe(expectedAnswer);
+  });
+
+  it("does not send duplicate text or audio for a Malayalam reply that needed speech-text preparation", async () => {
+    aiProvider.respond = malayalamResponse("🎉 **വില** ₹15,000 ആണ്! Dravonix branding.");
+    sttProvider.fixedDetectedLanguageCode = "ml";
+    const deps = makeDeps(activeEntitlementSnapshot());
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText).toHaveLength(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(1);
+    expect(ttsProvider.calls).toHaveLength(1);
+    expect(repo.recordedOutboundText).toHaveLength(1);
+    expect(repo.recordedOutboundVoice).toHaveLength(1);
+  });
+
+  it("logs displayTextLength, speechTextLength, and speechTextPrepared alongside the existing sanitized fields", async () => {
+    const display = "🎉 **വില** ₹15,000 ആണ്! Dravonix branding സേവനം.";
+    aiProvider.respond = malayalamResponse(display);
+    sttProvider.fixedDetectedLanguageCode = "ml";
+    const lines: string[] = [];
+    const logger = createLogger(
+      { environment: "test" },
+      {
+        write: (line: string) => {
+          lines.push(line);
+        },
+      },
+    );
+    const deps = { ...makeDeps(activeEntitlementSnapshot()), logger };
+
+    await processVoiceJob(deps, makePayload());
+
+    const voiceLogLine = lines.find((line) => line.includes("Selected TTS voice configuration"));
+    const voiceLog = JSON.parse(voiceLogLine!);
+    expect(voiceLog.displayTextLength).toBe(display.length);
+    expect(voiceLog.speechTextLength).toBe(ttsProvider.calls[0]!.text.length);
+    expect(voiceLog.speechTextPrepared).toBe(true);
+    const serialized = lines.join("\n");
+    expect(serialized).not.toContain(display);
+  });
+});
