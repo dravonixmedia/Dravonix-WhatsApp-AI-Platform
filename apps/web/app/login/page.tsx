@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { platformBrand } from "@dravonix/config";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
+import { BrandLogo } from "../BrandLogo.js";
 import { LoginForm } from "./LoginForm.js";
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -46,8 +47,10 @@ export default async function LoginPage({
     >
       <div className="dvx-card" style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
-          <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>{platformBrand.shortName}</div>
-          <h1 style={{ fontSize: "1.05rem", fontWeight: 500, margin: "0.5rem 0 0" }}>
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <BrandLogo height={32} />
+          </div>
+          <h1 style={{ fontSize: "1.05rem", fontWeight: 500, margin: "0.75rem 0 0" }}>
             {platformBrand.login.heading}
           </h1>
           <p className="dvx-muted" style={{ fontSize: "0.85rem", marginTop: "0.25rem" }}>

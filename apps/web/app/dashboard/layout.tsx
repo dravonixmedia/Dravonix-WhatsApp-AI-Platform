@@ -4,6 +4,7 @@ import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
 import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
+import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { NavLinks } from "./NavLinks.js";
 
 // Every /dashboard/* route depends on the request's session cookie (real
@@ -88,9 +89,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         aria-label="Toggle navigation menu"
       />
       <label htmlFor="dvx-nav-toggle" className="dvx-nav-toggle-label" aria-hidden="true">
-        <span />
-        <span />
-        <span />
+        <BrandIcon size={22} />
       </label>
       <a href="#dvx-main-content" className="dvx-skip-link">
         Skip to content
@@ -108,8 +107,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
           flexDirection: "column",
         }}
       >
-        <div style={{ fontWeight: 700, fontSize: "1.1rem", marginBottom: "0.25rem" }}>
-          {platformBrand.dashboard.subheading}
+        <div style={{ marginBottom: "0.5rem" }}>
+          <BrandLogo height={28} />
         </div>
         <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
           {platformBrand.companyName}

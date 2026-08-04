@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { platformBrand } from "@dravonix/config";
+import { BrandLogo } from "../BrandLogo.js";
 import { ForgotPasswordForm } from "./ForgotPasswordForm.js";
 
 export default async function ForgotPasswordPage({
@@ -22,8 +22,10 @@ export default async function ForgotPasswordPage({
     >
       <div className="dvx-card" style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
-          <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>{platformBrand.shortName}</div>
-          <h1 style={{ fontSize: "1.05rem", fontWeight: 500, margin: "0.5rem 0 0" }}>
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <BrandLogo height={32} />
+          </div>
+          <h1 style={{ fontSize: "1.05rem", fontWeight: 500, margin: "0.75rem 0 0" }}>
             Reset your password
           </h1>
         </div>
