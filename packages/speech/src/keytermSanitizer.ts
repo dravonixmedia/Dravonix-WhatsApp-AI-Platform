@@ -18,7 +18,8 @@ const WHITESPACE_RUN_PATTERN = /\s+/g;
 const MAX_KEYTERM_LENGTH = 50;
 const MAX_KEYTERM_WORDS = 5;
 
-export type KeytermRejectionReason = "invalidType" | "empty" | "tooLong" | "tooManyWords" | "duplicate";
+export type KeytermRejectionReason =
+  "invalidType" | "empty" | "tooLong" | "tooManyWords" | "duplicate";
 
 export interface KeytermSanitizationSummary {
   inputCount: number;

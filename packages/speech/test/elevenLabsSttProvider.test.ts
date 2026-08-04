@@ -334,7 +334,11 @@ describe("ElevenLabsSpeechToTextProvider", () => {
         }
         return {
           ok: true,
-          json: async () => ({ text: "മനസ്സിലായി", language_code: "ml", language_probability: 0.9 }),
+          json: async () => ({
+            text: "മനസ്സിലായി",
+            language_code: "ml",
+            language_probability: 0.9,
+          }),
         };
       });
       vi.stubGlobal("fetch", fetchMock);

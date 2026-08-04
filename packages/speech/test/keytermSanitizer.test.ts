@@ -109,7 +109,11 @@ describe("sanitizeKeyterms", () => {
   });
 
   it("returns an empty result when every term is invalid", () => {
-    const { keyterms, summary } = sanitizeKeyterms(["a".repeat(60), "", "one two three four five six"]);
+    const { keyterms, summary } = sanitizeKeyterms([
+      "a".repeat(60),
+      "",
+      "one two three four five six",
+    ]);
     expect(keyterms).toEqual([]);
     expect(summary.acceptedCount).toBe(0);
     expect(summary.rejectedCount).toBe(3);
