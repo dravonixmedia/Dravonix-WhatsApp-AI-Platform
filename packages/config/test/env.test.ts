@@ -61,4 +61,18 @@ describe("loadEnv", () => {
     const env = loadEnv({ ...base, ELEVENLABS_API_KEY: "sk-test" });
     expect(env.elevenLabsConfigured).toBe(true);
   });
+
+  it("defaults VOICE_REPLY_MODE to text_only when unset", () => {
+    const env = loadEnv(base);
+    expect(env.VOICE_REPLY_MODE).toBe("text_only");
+  });
+
+  it("accepts an explicit VOICE_REPLY_MODE of text_and_audio", () => {
+    const env = loadEnv({ ...base, VOICE_REPLY_MODE: "text_and_audio" });
+    expect(env.VOICE_REPLY_MODE).toBe("text_and_audio");
+  });
+
+  it("rejects an invalid VOICE_REPLY_MODE value", () => {
+    expect(() => loadEnv({ ...base, VOICE_REPLY_MODE: "audio_only" })).toThrow(EnvValidationError);
+  });
 });

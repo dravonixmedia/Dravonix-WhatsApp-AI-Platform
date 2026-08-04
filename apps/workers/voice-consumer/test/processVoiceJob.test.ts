@@ -242,7 +242,10 @@ describe("processVoiceJob", () => {
     knowledgeRetriever = { retrieve: vi.fn(async () => []) };
   });
 
-  function makeDeps(entitlementSnapshot: EntitlementSnapshot): VoiceConsumerDeps {
+  function makeDeps(
+    entitlementSnapshot: EntitlementSnapshot,
+    voiceReplyMode: VoiceConsumerDeps["voiceReplyMode"] = "text_and_audio",
+  ): VoiceConsumerDeps {
     return {
       repo,
       handoverRepo,
@@ -254,6 +257,7 @@ describe("processVoiceJob", () => {
       ttsProvider,
       storageProvider,
       logger: silentLogger,
+      voiceReplyMode,
     };
   }
 
@@ -765,6 +769,197 @@ describe("processVoiceJob", () => {
 
       expect(handoverRepo.handoverCalls).toHaveLength(1);
       expect(handoverRepo.handoverCalls[0]).toMatchObject({ reason: "customer_requested_human" });
+    });
+  });
+
+  describe("VOICE_REPLY_MODE", () => {
+    function malayalamResponse(answer: string) {
+      return () =>
+        JSON.stringify({
+          answer,
+          language: "ml",
+          intent: "general_enquiry",
+          confidence: 0.85,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        });
+    }
+
+    beforeEach(() => {
+      repo.context = baseConversationContext({
+        aiContext: {
+          ...baseConversationContext().aiContext,
+          enabledLanguages: ["en", "ml", "hi", "ar"],
+        },
+      });
+    });
+
+    it("produces exactly one text reply for Malayalam voice input in text_only mode, without calling TTS, Meta audio-send, or R2 audio upload/reservation", async () => {
+      aiProvider.respond = malayalamResponse("നന്ദി, ഞങ്ങൾ സഹായിക്കാം.");
+      sttProvider.fixedDetectedLanguageCode = "ml";
+      const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(0);
+      expect(ttsProvider.calls).toHaveLength(0);
+      expect(repo.recordedGeneratedAudio).toHaveLength(0);
+      expect(handoverRepo.getOutboundStatus("msg-1", "audio")).toBeUndefined();
+      const outboundAudioKeys = await storageProvider.list(
+        `companies/${COMPANY_ID}/audio/outbound`,
+      );
+      expect(outboundAudioKeys).toHaveLength(0);
+    });
+
+    it("produces exactly one text reply for Malayalam-English mixed voice input in text_only mode", async () => {
+      aiProvider.respond = malayalamResponse(
+        "നിങ്ങളുടെ requirement ഒന്ന് പറഞ്ഞാൽ മതി, ഞങ്ങൾ website, branding എന്നിവ ചെയ്യുന്നു.",
+      );
+      sttProvider.fixedDetectedLanguageCode = "ml";
+      const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(0);
+      expect(ttsProvider.calls).toHaveLength(0);
+    });
+
+    it("produces exactly one text reply for English voice input in text_only mode", async () => {
+      sttProvider.fixedDetectedLanguageCode = "en";
+      const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(0);
+      expect(ttsProvider.calls).toHaveLength(0);
+    });
+
+    it("produces exactly one text reply for Hindi and Arabic voice input in text_only mode", async () => {
+      for (const languageCode of ["hi", "ar"]) {
+        whatsappProvider = new MockWhatsAppProvider();
+        ttsProvider = new MockTextToSpeechProvider();
+        sttProvider.fixedDetectedLanguageCode = languageCode;
+        const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+        await processVoiceJob(deps, makePayload({ messageId: `msg-${languageCode}` }));
+
+        expect(whatsappProvider.sentText).toHaveLength(1);
+        expect(whatsappProvider.sentAudio).toHaveLength(0);
+        expect(ttsProvider.calls).toHaveLength(0);
+      }
+    });
+
+    it("still calls ElevenLabs speech-to-text (transcription) in text_only mode", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(repo.recordedTranscriptions).toHaveLength(1);
+      expect(repo.recordedTranscriptions[0]).toMatchObject({ provider: sttProvider.providerName });
+    });
+
+    it("does not send a duplicate text reply in text_only mode", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(handoverRepo.getOutboundStatus("msg-1", "text")).toBe("sent");
+    });
+
+    it("preserves the existing text-and-voice behaviour in text_and_audio mode", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot(), "text_and_audio");
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(1);
+      expect(ttsProvider.calls).toHaveLength(1);
+      expect(repo.recordedGeneratedAudio).toHaveLength(1);
+    });
+
+    it("preserves collaborative handover behaviour: AI keeps replying when handover is requested and ai_mode stays active, even in text_only mode", async () => {
+      aiProvider.respond = () =>
+        JSON.stringify({
+          answer: "Let me get a team member to help with that.",
+          language: "en",
+          intent: "complex_request",
+          confidence: 0.3,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: true,
+          handoverReason: "low_confidence",
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        });
+      repo.context = baseConversationContext({
+        conversationState: "handover_requested",
+        aiMode: "active",
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), "text_only");
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(handoverRepo.handoverCalls).toHaveLength(1);
+      // The customer-facing answer is still sent even while handover is pending.
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(0);
+    });
+
+    it("logs the sanitized voice-reply summary with audioReplySkipped and skipReason in text_only mode", async () => {
+      const lines: string[] = [];
+      const logger = createLogger(
+        { environment: "test" },
+        {
+          write: (line: string) => {
+            lines.push(line);
+          },
+        },
+      );
+      const deps = { ...makeDeps(activeEntitlementSnapshot(), "text_only"), logger };
+
+      await processVoiceJob(deps, makePayload());
+
+      const summaryLine = lines.find((line) => line.includes("Voice reply summary"));
+      expect(summaryLine).toBeDefined();
+      const summary = JSON.parse(summaryLine!);
+      expect(summary).toMatchObject({
+        inboundChannel: "voice",
+        replyMode: "text_only",
+        transcriptionCompleted: true,
+        textReplySent: true,
+        audioReplySkipped: true,
+        skipReason: "reply_mode_text_only",
+      });
+      const serialized = lines.join("\n");
+      expect(serialized).not.toContain("919820000001");
+    });
+
+    it("logs audioReplySkipped: false and omits skipReason in text_and_audio mode", async () => {
+      const lines: string[] = [];
+      const logger = createLogger(
+        { environment: "test" },
+        {
+          write: (line: string) => {
+            lines.push(line);
+          },
+        },
+      );
+      const deps = { ...makeDeps(activeEntitlementSnapshot(), "text_and_audio"), logger };
+
+      await processVoiceJob(deps, makePayload());
+
+      const summaryLine = lines.find((line) => line.includes("Voice reply summary"));
+      const summary = JSON.parse(summaryLine!);
+      expect(summary.audioReplySkipped).toBe(false);
+      expect(summary.skipReason).toBeUndefined();
     });
   });
 });

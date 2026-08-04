@@ -45,6 +45,10 @@ name = "dravonix-audio-staging"
 
 [env.staging.vars]
 APP_ENV = "staging"
+# Voice replies are text-only in staging while the Malayalam TTS pronunciation
+# fix is validated -- see VOICE_REPLY_MODE in packages/config/src/env.ts.
+# This is also the safe default when unset; set explicitly here for clarity.
+VOICE_REPLY_MODE = "text_only"
 
 [[env.staging.r2_buckets]]
 binding = "AUDIO_BUCKET"

@@ -56,6 +56,16 @@ export interface VoiceJobPayload {
   mimeType: string | null;
 }
 
+/**
+ * Deployment-wide voice-reply switch, independent of any per-company/contact
+ * reply-mode preference resolved by resolveReplyMode(). "text_only" forces
+ * every voice job to reply with text alone -- no TTS call, no audio
+ * reservation/generation/send/storage -- regardless of language or company
+ * config. "text_and_audio" preserves the existing resolveReplyMode()-driven
+ * text/voice/text_and_voice behaviour unchanged.
+ */
+export type VoiceReplyMode = "text_only" | "text_and_audio";
+
 export interface VoiceConsumerDeps {
   repo: VoiceConsumerRepository;
   handoverRepo: HandoverWorkerRepository;
@@ -67,6 +77,7 @@ export interface VoiceConsumerDeps {
   ttsProvider: TextToSpeechProvider;
   storageProvider: StorageProvider;
   logger: Logger;
+  voiceReplyMode: VoiceReplyMode;
 }
 
 /** Maps our simple enabled-language codes to BCP-47 codes Google STT/TTS expect. */
@@ -387,7 +398,15 @@ export async function processVoiceJob(
   const ttsLanguageCode = ttsIsMalayalam ? "ml" : "en";
   const speechText = ttsIsMalayalam ? prepareMalayalamSpeechText(response.answer) : response.answer;
 
-  if (replyMode.mode === "text_only" || replyMode.mode === "text_and_voice") {
+  // The deployment-wide VOICE_REPLY_MODE switch overrides the per-company/
+  // contact resolveReplyMode() result when set to "text_only" -- every voice
+  // job replies with text alone, regardless of language or company config.
+  // "text_and_audio" leaves resolveReplyMode()'s result untouched.
+  const audioForcedOff = deps.voiceReplyMode === "text_only";
+  const effectiveReplyMode = audioForcedOff ? "text_only" : replyMode.mode;
+
+  let textReplySent = false;
+  if (effectiveReplyMode === "text_only" || effectiveReplyMode === "text_and_voice") {
     log.info("Stage: whatsapp_text_generation", {
       detectedLanguage: replyLanguage,
       responseCharCount: response.answer.length,
@@ -404,9 +423,24 @@ export async function processVoiceJob(
         outboundStatus: outboundResult.outboundStatus,
       });
     }
+    textReplySent = true;
   }
 
-  if (replyMode.mode === "voice_only" || replyMode.mode === "text_and_voice") {
+  const shouldSendAudio =
+    effectiveReplyMode === "voice_only" || effectiveReplyMode === "text_and_voice";
+
+  // Sanitized: never log the customer phone number, full transcript, or full
+  // AI response -- only channel/mode/flags.
+  log.info("Voice reply summary", {
+    inboundChannel: "voice",
+    replyMode: deps.voiceReplyMode,
+    transcriptionCompleted: Boolean(transcription.text.trim()),
+    textReplySent,
+    audioReplySkipped: !shouldSendAudio,
+    ...(audioForcedOff ? { skipReason: "reply_mode_text_only" } : {}),
+  });
+
+  if (shouldSendAudio) {
     // Reserved before synthesizing (rather than using sendAiOutboundMessage's
     // generic helper) so a redelivered job that already produced a voice
     // reply for this message skips the paid TTS/upload work entirely instead
