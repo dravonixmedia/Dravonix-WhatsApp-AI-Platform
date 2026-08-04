@@ -1,13 +1,18 @@
 "use client";
 
 import type { ConversationThreadMessage } from "@dravonix/handover";
+import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition } from "react";
 import {
   loadOlderMessagesAction,
   reconcileOutboundMessageAction,
 } from "../../../../lib/actions/handover.js";
+import { useTenantRealtimeChannel } from "../../../../lib/realtime/useTenantRealtimeChannel.js";
 import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
+import { mapRealtimeMessageRow } from "./realtimeMessageMapper.js";
 import {
+  appendRealtimeMessage,
+  applyRealtimeMessagePatch,
   initialThreadState,
   oldestCursor,
   prependOlderPage,
@@ -26,6 +31,8 @@ interface ConversationThreadProps {
   conversationId: string;
   initialMessages: ConversationThreadMessage[];
   initialHasMore: boolean;
+  /** Realtime handshake -- see useTenantRealtimeChannel.ts. */
+  accessToken: string;
 }
 
 /**
@@ -39,6 +46,7 @@ export function ConversationThread({
   conversationId,
   initialMessages,
   initialHasMore,
+  accessToken,
 }: ConversationThreadProps) {
   const [state, setState] = useState<ThreadPageState>(() =>
     initialThreadState(initialMessages, initialHasMore),
@@ -46,6 +54,33 @@ export function ConversationThread({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+
+  useTenantRealtimeChannel({
+    namespace: "conversation-thread",
+    scopeId: conversationId,
+    accessToken,
+    watches: [{ table: "messages", filterColumn: "conversation_id", event: "*" }],
+    onChange: (_table, payload) => {
+      if (payload.eventType === "INSERT") {
+        setState((prev) => appendRealtimeMessage(prev, mapRealtimeMessageRow(payload.new)));
+      } else if (payload.eventType === "UPDATE") {
+        const id = (payload.new as { id?: string }).id;
+        if (id) {
+          setState((prev) =>
+            applyRealtimeMessagePatch(prev, id, mapRealtimeMessageRow(payload.new)),
+          );
+        }
+      }
+    },
+    onStaleReconnect: () => {
+      // The channel was dropped and just came back -- any events that
+      // occurred while disconnected were missed, so get an authoritative
+      // reload from the server loader rather than trying to reconcile an
+      // unknown gap of incremental patches.
+      router.refresh();
+    },
+  });
 
   function loadOlder() {
     const before = oldestCursor(state);

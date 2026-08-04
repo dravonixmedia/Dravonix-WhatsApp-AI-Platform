@@ -19,6 +19,16 @@ export interface DashboardSession {
   activeCompanyId: string;
   activeMemberId: string;
   activeRole: CompanyRole;
+  /**
+   * The current session's access token, relayed to client components that
+   * open a browser-side Supabase Realtime subscription (supabase.realtime.
+   * setAuth(accessToken)) so postgres_changes events are filtered by the
+   * connecting user's own RLS, not just a client-supplied filter string.
+   * Never used for authorization decisions here or anywhere in this
+   * module -- getUser() above is what actually validates the caller;
+   * this is only relayed onward for the realtime handshake.
+   */
+  accessToken: string;
 }
 
 /** Thrown when a signed-in user has zero active company memberships. */
@@ -46,6 +56,15 @@ export async function getDashboardSession(): Promise<DashboardSession | null> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
+
+  // getSession() is used here only to relay the access token to client-side
+  // Realtime subscriptions -- the authorization decision for this request was
+  // already made above by getUser(), which revalidates against the auth
+  // server rather than trusting a locally-decoded cookie.
+  const {
+    data: { session: rawSession },
+  } = await supabase.auth.getSession();
+  const accessToken = rawSession?.access_token ?? "";
 
   const { data: memberRows, error } = await supabase
     .from("company_members")
@@ -95,5 +114,6 @@ export async function getDashboardSession(): Promise<DashboardSession | null> {
     activeCompanyId: active.companyId,
     activeMemberId: active.memberId,
     activeRole: active.role,
+    accessToken,
   };
 }

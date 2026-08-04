@@ -43,3 +43,38 @@ export function initialThreadState(
 ): ThreadPageState {
   return { messages, hasMore };
 }
+
+/**
+ * Appends a message received over a live Realtime subscription.
+ * De-duplicates by id: a message this component already has (its own
+ * optimistic row, or a redelivered/duplicate INSERT event after a
+ * reconnect) is left exactly where it is rather than appended a second
+ * time. Assumes new realtime rows are always the newest -- true for this
+ * thread, since "Load older messages" only ever prepends to the front.
+ */
+export function appendRealtimeMessage(
+  state: ThreadPageState,
+  message: ConversationThreadMessage,
+): ThreadPageState {
+  if (state.messages.some((m) => m.id === message.id)) return state;
+  return { ...state, messages: [...state.messages, message] };
+}
+
+/**
+ * Patches an already-loaded message in place (e.g. outbound_status flipping
+ * from "sending" to "sent"/"delivery_unknown" after a live UPDATE event).
+ * A no-op if the id isn't currently loaded (an update for a message outside
+ * the currently-loaded window, or one that arrived before its own INSERT
+ * was processed -- the next reconnect/resync will pick up the latest row).
+ */
+export function applyRealtimeMessagePatch(
+  state: ThreadPageState,
+  messageId: string,
+  patch: Partial<ConversationThreadMessage>,
+): ThreadPageState {
+  const index = state.messages.findIndex((m) => m.id === messageId);
+  if (index === -1) return state;
+  const messages = state.messages.slice();
+  messages[index] = Object.assign({}, messages[index], patch);
+  return { ...state, messages };
+}
