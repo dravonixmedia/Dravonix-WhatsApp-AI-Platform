@@ -42,11 +42,20 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
     // Re-validated here regardless of what the caller already did (defense
     // in depth, per the 2026-08-04 incident) -- an invalid, oversized, or
     // malformed keyterm must never reach ElevenLabs and must never fail this
-    // request. Only the sanitized survivors are ever sent; the parameter is
-    // omitted entirely once none remain.
+    // request. Only the sanitized survivors are ever sent.
+    //
+    // Each survivor is appended as its own "keyterms" form entry -- the
+    // standard multipart representation for a list field -- rather than as
+    // one JSON.stringify'd blob under a single entry. The blob form was the
+    // actual defect behind the 2026-08-04 incident: ElevenLabs validated the
+    // *entire serialized array string* as if it were a single keyword, so
+    // even an array of individually-short terms produced one combined value
+    // well over its 50-character keyword limit. Per-term sanitization alone
+    // cannot fix that; only sending discrete entries can. The parameter is
+    // omitted entirely once no valid terms remain.
     const { keyterms } = sanitizeKeyterms(input.keyterms);
-    if (keyterms.length > 0) {
-      formData.append("keyterms", JSON.stringify(keyterms));
+    for (const term of keyterms) {
+      formData.append("keyterms", term);
     }
 
     const response = await fetch(this.baseUrl, {
