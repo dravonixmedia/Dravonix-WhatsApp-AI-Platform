@@ -47,6 +47,9 @@ run_file "$DB_URL" "$MIGRATIONS_DIR/00000000000001_extensions.sql"
 echo "Applying local auth shim (provides auth.users/auth.uid() outside real Supabase)..."
 run_file "$DB_URL" "$ROOT_DIR/supabase/tests/support/supabase_local_shim.sql"
 
+echo "Applying local Realtime publication shim (provides supabase_realtime outside real Supabase)..."
+run_file "$DB_URL" "$ROOT_DIR/supabase/tests/support/realtime_publication_shim.sql"
+
 echo "Creating restricted authenticated/anon/service_role roles..."
 run_file "$DB_URL" "$ROOT_DIR/supabase/tests/support/roles_create.sql"
 
@@ -64,6 +67,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_tenant_isolat
 
 echo "Running Human Handover Inbox RLS/RPC hardening assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_handover.sql"
+
+echo "Running dashboard Realtime (migration 13) assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_realtime.sql"
 
 echo "All RLS tests passed."
 
@@ -89,6 +95,9 @@ run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000001_extensions.sql"
 echo "[legacy-upgrade] Applying local auth shim..."
 run_file "$LEGACY_DB_URL" "$ROOT_DIR/supabase/tests/support/supabase_local_shim.sql"
 
+echo "[legacy-upgrade] Applying local Realtime publication shim..."
+run_file "$LEGACY_DB_URL" "$ROOT_DIR/supabase/tests/support/realtime_publication_shim.sql"
+
 echo "[legacy-upgrade] Creating restricted authenticated/anon/service_role roles..."
 run_file "$LEGACY_DB_URL" "$ROOT_DIR/supabase/tests/support/roles_create.sql"
 
@@ -97,6 +106,7 @@ for f in "$MIGRATIONS_DIR"/*.sql; do
   base="$(basename "$f")"
   [[ "$base" == "00000000000001_extensions.sql" ]] && continue
   [[ "$base" == "00000000000012_human_handover.sql" ]] && continue
+  [[ "$base" == "00000000000013_dashboard_realtime.sql" ]] && continue
   run_file "$LEGACY_DB_URL" "$f"
 done
 
@@ -105,6 +115,9 @@ run_file "$LEGACY_DB_URL" "$ROOT_DIR/supabase/tests/support/legacy_outbound_seed
 
 echo "[legacy-upgrade] Applying migration 12 against the legacy-seeded database..."
 run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000012_human_handover.sql"
+
+echo "[legacy-upgrade] Applying migration 13 (dashboard Realtime) against the upgraded database..."
+run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000013_dashboard_realtime.sql"
 
 echo "[legacy-upgrade] Granting table privileges to authenticated/anon/service_role..."
 run_file "$LEGACY_DB_URL" "$ROOT_DIR/supabase/tests/support/roles.sql"
@@ -117,5 +130,8 @@ psql "$LEGACY_DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_tenant
 
 echo "[legacy-upgrade] Re-running Human Handover Inbox RLS/RPC hardening assertions against the upgraded database..."
 psql "$LEGACY_DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_handover.sql"
+
+echo "[legacy-upgrade] Re-running dashboard Realtime (migration 13) assertions against the upgraded database..."
+psql "$LEGACY_DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_realtime.sql"
 
 echo "All legacy-upgrade regression tests passed."
