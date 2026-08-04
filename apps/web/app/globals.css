@@ -1,21 +1,94 @@
+/*
+ * Dravonix design tokens.
+ *
+ * Provenance: dravonixmedia.com could not be reached from this environment
+ * (its outbound network policy blocks this sandbox's proxy) to extract
+ * computed styles directly, so these values extend the token set already
+ * established in this file (--dravonix-primary #1f6feb, --dravonix-secondary
+ * #0b1220) rather than inventing an unrelated palette. The dark navy +
+ * cyan direction matches the already-approved Human Handover visual
+ * language this dashboard is built on top of. If exact brand values are
+ * later confirmed from the live site or design source files, update only
+ * the values below -- every component consumes these custom properties,
+ * never a literal color/shadow/radius.
+ *
+ * Dark is the primary, deliberate theme for the authenticated dashboard
+ * (deep navy, cyan accents, premium SaaS feel). Light is kept as the
+ * accessible alternative for users/OSes that prefer it -- both themes
+ * share the same semantic token names so components never branch on theme.
+ */
+
 :root {
-  --dravonix-primary: #1f6feb;
-  --dravonix-secondary: #0b1220;
-  --dravonix-accent: #22c55e;
-  --dravonix-bg: #f7f8fa;
-  --dravonix-surface: #ffffff;
-  --dravonix-border: #e2e5ea;
-  --dravonix-text: #0b1220;
-  --dravonix-muted: #5b6472;
+  --background-primary: #f7f8fa;
+  --background-secondary: #eef1f5;
+  --surface-primary: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-hover: #f1f4f8;
+  --surface-selected: rgba(31, 111, 235, 0.08);
+  --border-default: #e2e5ea;
+  --border-strong: #c7cdd6;
+  --text-primary: #0b1220;
+  --text-secondary: #364154;
+  --text-muted: #5b6472;
+  --brand-blue: #1f6feb;
+  --brand-blue-strong: #1257c4;
+  --brand-cyan: #0891b2;
+  --brand-gradient: linear-gradient(135deg, #1f6feb 0%, #0891b2 100%);
+  --success: #16a34a;
+  --success-surface: rgba(22, 163, 74, 0.12);
+  --warning: #b45309;
+  --warning-surface: rgba(180, 83, 9, 0.12);
+  --danger: #dc2626;
+  --danger-surface: rgba(220, 38, 38, 0.12);
+  --info: #0891b2;
+  --info-surface: rgba(8, 145, 178, 0.12);
+  --focus-ring: #1f6feb;
+  --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 12px rgba(15, 23, 42, 0.06);
+  --radius-small: 6px;
+  --radius-medium: 10px;
+  --radius-large: 16px;
+
+  /* Legacy aliases -- existing components/pages still reference these
+     names; keep them pointed at the new tokens rather than editing every
+     call site in the same change. New code should use the semantic names
+     above directly. */
+  --dravonix-primary: var(--brand-blue);
+  --dravonix-secondary: var(--text-primary);
+  --dravonix-accent: var(--success);
+  --dravonix-bg: var(--background-primary);
+  --dravonix-surface: var(--surface-primary);
+  --dravonix-border: var(--border-default);
+  --dravonix-text: var(--text-primary);
+  --dravonix-muted: var(--text-muted);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --dravonix-bg: #0b1220;
-    --dravonix-surface: #121a2b;
-    --dravonix-border: #22304a;
-    --dravonix-text: #e6e9ef;
-    --dravonix-muted: #96a1b3;
+    --background-primary: #05070d;
+    --background-secondary: #0a0f1a;
+    --surface-primary: #0f1524;
+    --surface-elevated: #141c2e;
+    --surface-hover: #1a2338;
+    --surface-selected: rgba(34, 211, 238, 0.1);
+    --border-default: #1e2a40;
+    --border-strong: #2c3a56;
+    --text-primary: #f2f5fa;
+    --text-secondary: #aab4c8;
+    --text-muted: #7c8aa3;
+    --brand-blue: #3b82f6;
+    --brand-blue-strong: #60a5fa;
+    --brand-cyan: #22d3ee;
+    --brand-gradient: linear-gradient(135deg, #3b82f6 0%, #22d3ee 100%);
+    --success: #34d399;
+    --success-surface: rgba(52, 211, 153, 0.14);
+    --warning: #fbbf24;
+    --warning-surface: rgba(251, 191, 36, 0.14);
+    --danger: #f87171;
+    --danger-surface: rgba(248, 113, 113, 0.14);
+    --info: #22d3ee;
+    --info-surface: rgba(34, 211, 238, 0.14);
+    --focus-ring: #22d3ee;
+    --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   }
 }
 
@@ -23,53 +96,285 @@
   box-sizing: border-box;
 }
 
+html {
+  color-scheme: light dark;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: var(--dravonix-bg);
-  color: var(--dravonix-text);
+  background: var(--background-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
 }
 
 a {
   color: inherit;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------
+ * Reusable primitives. Every dashboard component should compose these
+ * rather than hardcoding colors/shadows/radii inline.
+ * ------------------------------------------------------------------- */
+
 .dvx-card {
-  background: var(--dravonix-surface);
-  border: 1px solid var(--dravonix-border);
-  border-radius: 12px;
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-medium);
   padding: 1.5rem;
+  box-shadow: var(--shadow-soft);
+}
+
+.dvx-card--elevated {
+  background: var(--surface-elevated);
+}
+
+.dvx-card--interactive {
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.dvx-card--interactive:hover {
+  background: var(--surface-hover);
+}
+
+.dvx-card--selected {
+  background: var(--surface-selected);
+  border-color: var(--brand-cyan);
 }
 
 .dvx-button {
-  background: var(--dravonix-primary);
+  background: var(--brand-blue);
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-small);
   padding: 0.65rem 1.25rem;
   font-size: 0.95rem;
+  font-weight: 500;
   cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    opacity 150ms ease;
+}
+
+.dvx-button:hover {
+  background: var(--brand-blue-strong);
+}
+
+.dvx-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dvx-button--secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+}
+
+.dvx-button--secondary:hover {
+  background: var(--surface-hover);
+}
+
+.dvx-button--danger {
+  background: var(--danger);
 }
 
 .dvx-input {
-  border: 1px solid var(--dravonix-border);
-  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-small);
   padding: 0.6rem 0.8rem;
   font-size: 0.95rem;
   width: 100%;
-  background: var(--dravonix-surface);
-  color: var(--dravonix-text);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+}
+
+.dvx-input:focus-visible {
+  border-color: var(--focus-ring);
 }
 
 .dvx-muted {
-  color: var(--dravonix-muted);
+  color: var(--text-muted);
+}
+
+.dvx-text-secondary {
+  color: var(--text-secondary);
 }
 
 .dvx-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.75rem;
-  padding: 0.15rem 0.6rem;
+  font-weight: 500;
+  padding: 0.2rem 0.65rem;
   border-radius: 999px;
-  background: rgba(31, 111, 235, 0.12);
-  color: var(--dravonix-primary);
+  white-space: nowrap;
+}
+
+.dvx-badge--brand {
+  background: var(--surface-selected);
+  color: var(--brand-cyan);
+}
+
+.dvx-badge--success {
+  background: var(--success-surface);
+  color: var(--success);
+}
+
+.dvx-badge--warning {
+  background: var(--warning-surface);
+  color: var(--warning);
+}
+
+.dvx-badge--danger {
+  background: var(--danger-surface);
+  color: var(--danger);
+}
+
+.dvx-badge--info {
+  background: var(--info-surface);
+  color: var(--info);
+}
+
+.dvx-badge--neutral {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+}
+
+.dvx-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-hover) 25%,
+    var(--surface-elevated) 37%,
+    var(--surface-hover) 63%
+  );
+  background-size: 400% 100%;
+  border-radius: var(--radius-small);
+  animation: dvx-skeleton-shimmer 1.4s ease infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dvx-skeleton {
+    animation: none;
+  }
+}
+
+@keyframes dvx-skeleton-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Skip link -- visible only on keyboard focus, lets a keyboard user
+ * bypass the sidebar navigation entirely.
+ * ------------------------------------------------------------------- */
+
+.dvx-skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--brand-blue);
+  color: white;
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius-small);
+  z-index: 100;
+}
+
+.dvx-skip-link:focus {
+  left: 0.75rem;
+  top: 0.75rem;
+}
+
+/* ---------------------------------------------------------------------
+ * Responsive dashboard sidebar -- checkbox-driven (no client JS needed),
+ * so the toggle stays keyboard-operable (native input, focus-visible
+ * outline, Space/Enter both toggle it) even before any script hydrates.
+ * ------------------------------------------------------------------- */
+
+.dvx-nav-toggle-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.dvx-nav-toggle-label {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .dvx-nav-toggle-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    width: 40px;
+    height: 40px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-small);
+    cursor: pointer;
+    z-index: 60;
+    padding: 0 9px;
+  }
+
+  .dvx-nav-toggle-label span {
+    display: block;
+    height: 2px;
+    background: var(--text-primary);
+    border-radius: 1px;
+  }
+
+  .dvx-nav-toggle-input:focus-visible + .dvx-nav-toggle-label {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .dvx-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    transform: translateX(-100%);
+    transition: transform 200ms ease;
+    z-index: 55;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dvx-sidebar {
+      transition: none;
+    }
+  }
+
+  .dvx-nav-toggle-input:checked ~ .dvx-sidebar {
+    transform: translateX(0);
+    box-shadow: var(--shadow-soft);
+  }
 }

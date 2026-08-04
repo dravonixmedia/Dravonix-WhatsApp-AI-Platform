@@ -16,12 +16,22 @@ export const dynamic = "force-dynamic";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Overview" },
-  { href: "/dashboard/inbox", label: "Inbox" },
+  { href: "/dashboard/conversations", label: "Live Conversations" },
   { href: "/dashboard/leads", label: "Leads" },
   { href: "/dashboard/knowledge", label: "Knowledge Base" },
   { href: "/dashboard/billing", label: "Billing" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
+
+const ROLE_LABELS: Record<string, string> = {
+  company_owner: "Owner",
+  company_admin: "Admin",
+  manager: "Manager",
+  agent: "Agent",
+  knowledge_editor: "Knowledge Editor",
+  billing_viewer: "Billing Viewer",
+  viewer: "Viewer",
+};
 
 function NoCompanyAccessPage() {
   return (
@@ -67,13 +77,32 @@ export default async function DashboardLayout({ children }: { children: React.Re
     session.activeCompanyId,
   );
 
+  const roleLabel = ROLE_LABELS[session.activeRole] ?? session.activeRole;
+
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
+      <input
+        type="checkbox"
+        id="dvx-nav-toggle"
+        className="dvx-nav-toggle-input"
+        aria-label="Toggle navigation menu"
+      />
+      <label htmlFor="dvx-nav-toggle" className="dvx-nav-toggle-label" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </label>
+      <a href="#dvx-main-content" className="dvx-skip-link">
+        Skip to content
+      </a>
       <aside
+        id="dvx-sidebar-nav"
+        className="dvx-sidebar"
         style={{
           width: 240,
           flexShrink: 0,
-          borderRight: "1px solid var(--dravonix-border)",
+          background: "var(--surface-elevated)",
+          borderRight: "1px solid var(--border-default)",
           padding: "1.5rem 1rem",
           display: "flex",
           flexDirection: "column",
@@ -82,9 +111,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <div style={{ fontWeight: 700, fontSize: "1.1rem", marginBottom: "0.25rem" }}>
           {platformBrand.dashboard.subheading}
         </div>
-        <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "1rem" }}>
+        <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
           {platformBrand.companyName}
         </div>
+        <span
+          className="dvx-badge dvx-badge--neutral"
+          style={{ alignSelf: "flex-start", marginBottom: "1rem" }}
+        >
+          {roleLabel}
+        </span>
 
         {session.memberships.length > 1 ? (
           <form
@@ -171,7 +206,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
           </form>
         </div>
       </aside>
-      <main style={{ flex: 1, padding: "2rem" }}>{children}</main>
+      <main id="dvx-main-content" style={{ flex: 1, padding: "2rem", minWidth: 0 }}>
+        {children}
+      </main>
     </div>
   );
 }
