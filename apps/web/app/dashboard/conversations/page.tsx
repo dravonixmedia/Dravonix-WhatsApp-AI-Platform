@@ -5,6 +5,8 @@ import {
   type ConversationListAssignmentFilter,
   type ConversationListHandoverFilter,
 } from "../../../lib/repositories/conversationsRepository.js";
+import { RealtimeRefreshBoundary } from "../../../lib/realtime/RealtimeRefreshBoundary.js";
+import { CONVERSATIONS_LIST_WATCHES } from "../../../lib/realtime/watchConfigs.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
 
@@ -96,6 +98,12 @@ export default async function ConversationsPage({
 
   return (
     <div>
+      <RealtimeRefreshBoundary
+        namespace="conversations-list"
+        scopeId={session.activeCompanyId}
+        accessToken={session.accessToken}
+        watches={CONVERSATIONS_LIST_WATCHES}
+      />
       <h1 style={{ fontSize: "1.4rem" }}>Live Conversations</h1>
       <p className="dvx-muted">All conversations for this company, across every channel.</p>
 

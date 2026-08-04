@@ -14,6 +14,8 @@ import {
   resumeAiAction,
   startHumanConversationAction,
 } from "../../../lib/actions/handover.js";
+import { RealtimeRefreshBoundary } from "../../../lib/realtime/RealtimeRefreshBoundary.js";
+import { HANDOVER_INBOX_WATCHES } from "../../../lib/realtime/watchConfigs.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
 
@@ -66,6 +68,12 @@ export default async function HandoverInboxPage({
 
   return (
     <div>
+      <RealtimeRefreshBoundary
+        namespace="handover-inbox"
+        scopeId={session.activeCompanyId}
+        accessToken={session.accessToken}
+        watches={HANDOVER_INBOX_WATCHES}
+      />
       <h1 style={{ fontSize: "1.4rem" }}>Human Handover Inbox</h1>
       <p className="dvx-muted">
         Conversations that requested, are queued for, or are actively receiving human assistance.

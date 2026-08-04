@@ -16,6 +16,8 @@ import {
   resumeAiAction,
 } from "../../../../lib/actions/handover.js";
 import { getDashboardCapabilities } from "../../../../lib/permissions.js";
+import { RealtimeRefreshBoundary } from "../../../../lib/realtime/RealtimeRefreshBoundary.js";
+import { CONVERSATION_DETAIL_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 // Reused directly from the Human Handover module: these components are
@@ -92,6 +94,12 @@ export default async function ConversationDetailPage({
 
   return (
     <div>
+      <RealtimeRefreshBoundary
+        namespace="conversation-detail"
+        scopeId={conversationId}
+        accessToken={session.accessToken}
+        watches={CONVERSATION_DETAIL_WATCHES}
+      />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
           <h1 style={{ fontSize: "1.3rem", margin: 0 }}>Conversation</h1>
@@ -192,6 +200,7 @@ export default async function ConversationDetailPage({
         conversationId={conversationId}
         initialMessages={thread.messages}
         initialHasMore={thread.hasMore}
+        accessToken={session.accessToken}
       />
 
       {conversation.state === "human_active" && capabilities.canReplyToConversations ? (

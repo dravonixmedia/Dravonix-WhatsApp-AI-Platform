@@ -1,6 +1,8 @@
 import type { ConversationThreadMessage } from "@dravonix/handover";
 import { describe, expect, it } from "vitest";
 import {
+  appendRealtimeMessage,
+  applyRealtimeMessagePatch,
   initialThreadState,
   oldestCursor,
   prependOlderPage,
@@ -76,5 +78,56 @@ describe("threadPagination", () => {
     });
     expect(next.hasMore).toBe(false);
     expect(oldestCursor(next)).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  describe("appendRealtimeMessage", () => {
+    it("appends a genuinely new message to the end", () => {
+      const current = initialThreadState([msg("m1", "2026-01-01T00:00:00.000Z")], false);
+      const next = appendRealtimeMessage(current, msg("m2", "2026-01-01T00:01:00.000Z"));
+      expect(next.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+    });
+
+    it("de-duplicates by id -- a redelivered/duplicate INSERT event is a no-op", () => {
+      const current = initialThreadState(
+        [msg("m1", "2026-01-01T00:00:00.000Z"), msg("m2", "2026-01-01T00:01:00.000Z")],
+        false,
+      );
+      const next = appendRealtimeMessage(current, msg("m2", "2026-01-01T00:01:00.000Z"));
+      expect(next).toBe(current);
+      expect(next.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+    });
+
+    it("preserves hasMore", () => {
+      const current = initialThreadState([msg("m1", "2026-01-01T00:00:00.000Z")], true);
+      const next = appendRealtimeMessage(current, msg("m2", "2026-01-01T00:01:00.000Z"));
+      expect(next.hasMore).toBe(true);
+    });
+  });
+
+  describe("applyRealtimeMessagePatch", () => {
+    it("patches an already-loaded message in place by id", () => {
+      const current = initialThreadState(
+        [msg("m1", "2026-01-01T00:00:00.000Z"), msg("m2", "2026-01-01T00:01:00.000Z")],
+        false,
+      );
+      const next = applyRealtimeMessagePatch(current, "m2", { outboundStatus: "sent" });
+      expect(next.messages.find((m) => m.id === "m2")?.outboundStatus).toBe("sent");
+      expect(next.messages.find((m) => m.id === "m1")?.outboundStatus).toBeNull();
+    });
+
+    it("is a no-op when the id isn't currently loaded", () => {
+      const current = initialThreadState([msg("m1", "2026-01-01T00:00:00.000Z")], false);
+      const next = applyRealtimeMessagePatch(current, "unknown", { outboundStatus: "sent" });
+      expect(next).toBe(current);
+    });
+
+    it("never changes message count or ordering", () => {
+      const current = initialThreadState(
+        [msg("m1", "2026-01-01T00:00:00.000Z"), msg("m2", "2026-01-01T00:01:00.000Z")],
+        false,
+      );
+      const next = applyRealtimeMessagePatch(current, "m1", { outboundStatus: "send_failed" });
+      expect(next.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+    });
   });
 });
