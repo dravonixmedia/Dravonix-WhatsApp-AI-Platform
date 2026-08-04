@@ -36,13 +36,13 @@ create or replace function test_assert(description text, condition boolean) retu
 -- ---------------------------------------------------------------------------
 
 select test_assert(
-  'All 12 legacy fixture messages survive migration 12 untouched in count',
-  (select count(*) from messages where company_id = 'f0000000-1000-0000-0000-000000000001') = 12
+  'All 20 legacy fixture messages survive migration 12 untouched in count',
+  (select count(*) from messages where company_id = 'f0000000-1000-0000-0000-000000000001') = 20
 );
 
 select test_assert(
-  'All 4 legacy conversations survive migration 12',
-  (select count(*) from conversations where company_id = 'f0000000-1000-0000-0000-000000000001') = 4
+  'All 6 legacy conversations survive migration 12',
+  (select count(*) from conversations where company_id = 'f0000000-1000-0000-0000-000000000001') = 6
 );
 
 -- ---------------------------------------------------------------------------
@@ -75,10 +75,26 @@ select test_assert(
 -- ---------------------------------------------------------------------------
 
 select test_assert(
-  'Every legacy outbound row (5 total: out1, out2, out3a, out3b, out4) is backfilled to outbound_status=sent',
+  'Every legacy outbound row (11 total: out1, out2, out3a/b, out4, out5-text, out5-audio, out6a/b/c/d) is backfilled to outbound_status=sent',
   (select count(*) from messages
      where company_id = 'f0000000-1000-0000-0000-000000000001'
-       and direction = 'outbound' and outbound_status = 'sent') = 5
+       and direction = 'outbound' and outbound_status = 'sent') = 11
+);
+
+select test_assert(
+  'Every one of those same 11 legacy outbound rows is flagged legacy_outbound=true',
+  (select count(*) from messages
+     where company_id = 'f0000000-1000-0000-0000-000000000001'
+       and direction = 'outbound' and legacy_outbound = true) = 11
+);
+
+select test_assert(
+  'No legacy inbound row, and no legacy conversation''s rows in general, are ever flagged legacy_outbound=true except the outbound ones',
+  not exists (
+    select 1 from messages
+    where company_id = 'f0000000-1000-0000-0000-000000000001'
+      and direction = 'inbound' and legacy_outbound = true
+  )
 );
 
 select test_assert(
@@ -149,6 +165,40 @@ select test_assert(
   )
 );
 
+select test_assert(
+  'conv-dual: out5-text.source_message_id points at in5 (dual-channel: text side)',
+  (select source_message_id from messages where id = 'f0000000-4000-0000-0000-00000000000e')
+    = 'f0000000-4000-0000-0000-00000000000d'
+);
+
+select test_assert(
+  'conv-dual: out5-audio.source_message_id ALSO points at in5 (dual-channel: audio side, independent per-channel queue)',
+  (select source_message_id from messages where id = 'f0000000-4000-0000-0000-00000000000f')
+    = 'f0000000-4000-0000-0000-00000000000d'
+);
+
+select test_assert(
+  'conv-burst: out6a (earliest of the 4 duplicate replies) claims in6 -- the one deterministic pairing',
+  (select source_message_id from messages where id = 'f0000000-4000-0000-0000-000000000011')
+    = 'f0000000-4000-0000-0000-000000000010'
+);
+
+select test_assert(
+  'conv-burst: out6b/out6c/out6d (ambiguous duplicate retries) all remain source_message_id null -- never fabricated',
+  (select count(*) from messages
+     where id in ('f0000000-4000-0000-0000-000000000012', 'f0000000-4000-0000-0000-000000000013', 'f0000000-4000-0000-0000-000000000014')
+       and source_message_id is null) = 3
+);
+
+select test_assert(
+  'conv-burst: out6b/out6c/out6d still carry their real provider_message_id and body -- never deleted, never altered',
+  (select count(*) from messages
+     where id in ('f0000000-4000-0000-0000-000000000012', 'f0000000-4000-0000-0000-000000000013', 'f0000000-4000-0000-0000-000000000014')
+       and provider_message_id in ('wamid.LEGACY_OUT6B', 'wamid.LEGACY_OUT6C', 'wamid.LEGACY_OUT6D')
+       and outbound_status = 'sent'
+       and legacy_outbound = true) = 3
+);
+
 -- ---------------------------------------------------------------------------
 -- 5. Every constraint the backfill exists to unblock is actually valid (not
 --    merely present -- `not valid` constraints don't check existing rows).
@@ -167,6 +217,28 @@ select test_assert(
 select test_assert(
   'messages_sender_member_id_check is a validated constraint',
   (select convalidated from pg_constraint where conname = 'messages_sender_member_id_check') = true
+);
+
+select test_assert(
+  'messages_legacy_outbound_scope_check is a validated constraint',
+  (select convalidated from pg_constraint where conname = 'messages_legacy_outbound_scope_check') = true
+);
+
+select test_assert(
+  'messages_source_message_channel_uq_idx exists as a partial unique index (not the old plain constraint)',
+  not exists (select 1 from pg_constraint where conname = 'messages_source_message_channel_uq')
+  and exists (
+    select 1 from pg_indexes
+    where indexname = 'messages_source_message_channel_uq_idx'
+      and indexdef like '%UNIQUE%'
+      and indexdef like '%WHERE%'
+  )
+);
+
+select test_assert(
+  'The 3 ambiguous conv-burst duplicates (null source_message_id) do not collide under the partial unique index -- proving legacy nulls were never the actual problem, only the ai_reply_source_check was',
+  (select count(*) from messages
+     where id in ('f0000000-4000-0000-0000-000000000012', 'f0000000-4000-0000-0000-000000000013', 'f0000000-4000-0000-0000-000000000014')) = 3
 );
 
 -- Re-running the backfill's own statements a second time against the same,
@@ -220,6 +292,34 @@ begin
   end if;
 
   raise notice 'OK: reserve_ai_outbound_message / finalize_ai_outbound_message still work end to end on a legacy-upgraded database';
+end;
+$$;
+
+-- The critical partial-index proof: conv-burst's in6 already has FOUR
+-- legacy_outbound=true 'text' AI replies on file (source_message_id =
+-- in6 for one of them, null for the other three). If uniqueness still
+-- applied to legacy rows, a fresh (non-legacy) reservation for the exact
+-- same (source_message_id, channel_type) pair would be wrongly rejected.
+-- It must succeed, because messages_source_message_channel_uq_idx's
+-- predicate excludes legacy_outbound rows entirely.
+do $$
+declare
+  v_reserved_id uuid;
+  v_claimed boolean;
+  v_status outbound_delivery_status;
+begin
+  select id, claimed, outbound_status into v_reserved_id, v_claimed, v_status
+    from reserve_ai_outbound_message('f0000000-4000-0000-0000-000000000010', 'text');
+
+  if not v_claimed or v_status <> 'sending' then
+    raise exception 'ASSERTION FAILED: a fresh reservation for in6/text must succeed despite 4 pre-existing legacy_outbound rows on that exact (source_message_id, channel_type), got claimed=%, status=%', v_claimed, v_status;
+  end if;
+
+  if (select legacy_outbound from messages where id = v_reserved_id) <> false then
+    raise exception 'ASSERTION FAILED: a freshly reserved row must never be legacy_outbound=true';
+  end if;
+
+  raise notice 'OK: partial unique index correctly excludes legacy_outbound rows -- a fresh reservation for a source_message_id/channel_type pair already used by legacy duplicates still succeeds';
 end;
 $$;
 

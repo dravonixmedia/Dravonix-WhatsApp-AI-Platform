@@ -111,6 +111,7 @@ export interface MessageRow {
   send_attempt_count: number;
   last_send_error_code: string | null;
   retryable: boolean | null;
+  legacy_outbound: boolean;
   created_at: string;
 }
 

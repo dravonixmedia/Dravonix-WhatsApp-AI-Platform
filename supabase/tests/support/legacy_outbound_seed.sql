@@ -8,7 +8,7 @@
 -- / recordOutboundVoiceMessage), so applying migration 12 afterwards exercises
 -- its legacy-outbound backfill exactly as a real upgrade of staging would.
 --
--- Four fixtures, covering every shape the old code could produce:
+-- Six fixtures, covering every shape the old code could produce:
 --   conv-normal:  one inbound -> one AI text reply (also staging's most
 --                 common real shape: sender_type='ai', provider_message_id
 --                 set, sender_member_id null, body set).
@@ -23,6 +23,19 @@
 --                 inbound message with no corresponding reply is left alone
 --                 (source_message_id-less by definition; it's inbound) and
 --                 does not corrupt the older message's claim.
+--   conv-dual:    one inbound -> both a text AND an audio AI reply for the
+--                 SAME inbound message (VOICE_REPLY_MODE dual-channel turn)
+--                 -- proves the per-channel FIFO pairing doesn't let the
+--                 text reply's claim starve the audio reply's independent
+--                 queue for that inbound message, or vice versa.
+--   conv-burst:   one inbound -> four *duplicate* AI text replies (the real
+--                 pre-migration-12 retry-bug incident seen on hosted
+--                 staging: the same reply resent repeatedly for one inbound
+--                 message). Only the first, earliest reply is a
+--                 deterministic pairing; the other three are ambiguous
+--                 historical duplicates that must survive migration 12 with
+--                 source_message_id left null and legacy_outbound=true, not
+--                 deleted and not fabricated a source.
 begin;
 
 insert into companies (id, name, slug, status, is_demo) values
@@ -35,7 +48,9 @@ insert into conversations (id, company_id, contact_id, state) values
   ('f0000000-3000-0000-0000-000000000001', 'f0000000-1000-0000-0000-000000000001', 'f0000000-2000-0000-0000-000000000001', 'ai_active'),
   ('f0000000-3000-0000-0000-000000000002', 'f0000000-1000-0000-0000-000000000001', 'f0000000-2000-0000-0000-000000000001', 'ai_active'),
   ('f0000000-3000-0000-0000-000000000003', 'f0000000-1000-0000-0000-000000000001', 'f0000000-2000-0000-0000-000000000001', 'ai_active'),
-  ('f0000000-3000-0000-0000-000000000004', 'f0000000-1000-0000-0000-000000000001', 'f0000000-2000-0000-0000-000000000001', 'ai_active');
+  ('f0000000-3000-0000-0000-000000000004', 'f0000000-1000-0000-0000-000000000001', 'f0000000-2000-0000-0000-000000000001', 'ai_active'),
+  ('f0000000-3000-0000-0000-000000000005', 'f0000000-1000-0000-0000-000000000001', 'f0000000-2000-0000-0000-000000000001', 'ai_active'),
+  ('f0000000-3000-0000-0000-000000000006', 'f0000000-1000-0000-0000-000000000001', 'f0000000-2000-0000-0000-000000000001', 'ai_active');
 
 -- conv-normal: in1 -> out1 (text)
 insert into messages (id, company_id, conversation_id, direction, channel_type, sender_type, provider_message_id, body, created_at) values
@@ -61,5 +76,23 @@ insert into messages (id, company_id, conversation_id, direction, channel_type, 
   ('f0000000-4000-0000-0000-00000000000a', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000004', 'inbound', 'text', 'customer', 'wamid.LEGACY_IN4A', 'I want to file a complaint', now() - interval '30 minutes'),
   ('f0000000-4000-0000-0000-00000000000b', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000004', 'inbound', 'text', 'customer', 'wamid.LEGACY_IN4B', 'Never mind, what are your hours?', now() - interval '30 minutes' + interval '10 seconds'),
   ('f0000000-4000-0000-0000-00000000000c', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000004', 'outbound', 'text', 'ai', 'wamid.LEGACY_OUT4', 'We are open 9am-6pm.', now() - interval '30 minutes' + interval '20 seconds');
+
+-- conv-dual: in5 -> out5-text AND out5-audio, both replies to the same
+-- inbound message. Must both end up with source_message_id = in5.
+insert into messages (id, company_id, conversation_id, direction, channel_type, sender_type, provider_message_id, body, created_at) values
+  ('f0000000-4000-0000-0000-00000000000d', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000005', 'inbound', 'text', 'customer', 'wamid.LEGACY_IN5', 'Do you have a Malayalam voice option?', now() - interval '20 minutes'),
+  ('f0000000-4000-0000-0000-00000000000e', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000005', 'outbound', 'text', 'ai', 'wamid.LEGACY_OUT5_TEXT', 'Yes, here it is in text form too.', now() - interval '20 minutes' + interval '15 seconds'),
+  ('f0000000-4000-0000-0000-00000000000f', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000005', 'outbound', 'audio', 'ai', 'wamid.LEGACY_OUT5_AUDIO', 'Yes, here it is by voice.', now() - interval '20 minutes' + interval '18 seconds');
+
+-- conv-burst: in6 -> four duplicate AI text replies for the same inbound
+-- message (the real pre-migration-12 retry-bug incident). out6a is the
+-- genuine, deterministic first reply; out6b/c/d are ambiguous duplicates
+-- that must remain source_message_id null after migration 12.
+insert into messages (id, company_id, conversation_id, direction, channel_type, sender_type, provider_message_id, body, created_at) values
+  ('f0000000-4000-0000-0000-000000000010', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000006', 'inbound', 'text', 'customer', 'wamid.LEGACY_IN6', 'Namaskaram, engane undu?', now() - interval '10 minutes'),
+  ('f0000000-4000-0000-0000-000000000011', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000006', 'outbound', 'text', 'ai', 'wamid.LEGACY_OUT6A', 'Njangal thurannu irikkunnu, nandi!', now() - interval '10 minutes' + interval '30 seconds'),
+  ('f0000000-4000-0000-0000-000000000012', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000006', 'outbound', 'text', 'ai', 'wamid.LEGACY_OUT6B', 'Njangal thurannu irikkunnu, nandi!', now() - interval '10 minutes' + interval '43 seconds'),
+  ('f0000000-4000-0000-0000-000000000013', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000006', 'outbound', 'text', 'ai', 'wamid.LEGACY_OUT6C', 'Njangal thurannu irikkunnu, nandi!', now() - interval '10 minutes' + interval '58 seconds'),
+  ('f0000000-4000-0000-0000-000000000014', 'f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000006', 'outbound', 'text', 'ai', 'wamid.LEGACY_OUT6D', 'Njangal thurannu irikkunnu, nandi!', now() - interval '10 minutes' + interval '73 seconds');
 
 commit;
