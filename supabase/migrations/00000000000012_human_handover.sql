@@ -97,6 +97,74 @@ comment on column messages.send_lease_expires_at is
 comment on column messages.retryable is
   'Classification of the most recent send failure: true for transient provider errors (rate limit, 5xx, network failure before acceptance) eligible for automatic reclaim; false for permanent errors (bad token, invalid recipient, malformed payload, non-rate-limit 4xx) requiring a configuration fix or an authorized manual action before any retry.';
 
+-- ---------------------------------------------------------------------------
+-- 3a. Legacy outbound-message backfill, for databases with rows written
+--     before this migration (pre-migration-12 databases only -- a fresh
+--     database has no direction='outbound' rows yet and both statements
+--     below are no-ops on it).
+--
+-- Every pre-migration-12 insert path -- recordOutboundMessage
+-- (message-consumer), recordOutboundTextMessage and
+-- recordOutboundVoiceMessage (voice-consumer), all replaced in "Human
+-- Handover Inbox (4/N)" -- called deps.whatsappProvider.sendText/... first
+-- and only inserted the row afterwards, wrapped in recordOutboundSafely,
+-- with providerMessageId a required (non-optional) parameter sourced from
+-- that call's own successful return value. A thrown send error propagated
+-- out of the caller before any insert was attempted, so no pre-migration
+-- code path ever persisted a reserved/pending/failed outbound row -- every
+-- existing outbound row already represents a send Meta accepted. 'sent' is
+-- therefore the only status this data can correctly hold, not a guess;
+-- 'delivered'/'read' are never assigned here since no pre-migration path
+-- ever recorded a delivery/read receipt on the messages row itself (that
+-- evidence, where it exists, lives in message_status_events, which this
+-- migration does not touch).
+--
+-- Every one of those same call sites also always inserted sender_type =
+-- 'ai' (no human-reply feature existed before this migration --
+-- reserve_human_outbound_message and friends are new in this file), so
+-- source_message_id (also new) has no prior column to read it from.
+-- The safest reconstruction available is temporal: each legacy AI outbound
+-- row is paired, in conversation order, with the oldest not-yet-claimed
+-- inbound message that precedes it -- the FIFO order every inbound message
+-- is actually processed in. Both backfill predicates are "... is null", so
+-- re-running this migration (or this block alone) against an
+-- already-backfilled database is a no-op.
+-- ---------------------------------------------------------------------------
+
+update messages
+  set outbound_status = 'sent'
+  where direction = 'outbound'
+    and outbound_status is null;
+
+do $$
+declare
+  v_conv record;
+  v_msg record;
+  v_pending_inbound uuid[];
+begin
+  for v_conv in
+    select distinct conversation_id
+    from messages
+    where direction = 'outbound' and sender_type = 'ai' and source_message_id is null
+  loop
+    v_pending_inbound := '{}';
+    for v_msg in
+      select id, direction, source_message_id
+      from messages
+      where conversation_id = v_conv.conversation_id
+        and (direction = 'inbound' or (direction = 'outbound' and sender_type = 'ai'))
+      order by created_at, id
+    loop
+      if v_msg.direction = 'inbound' then
+        v_pending_inbound := v_pending_inbound || v_msg.id;
+      elsif v_msg.source_message_id is null and array_length(v_pending_inbound, 1) > 0 then
+        update messages set source_message_id = v_pending_inbound[1] where id = v_msg.id;
+        v_pending_inbound := v_pending_inbound[2 : array_length(v_pending_inbound, 1)];
+      end if;
+    end loop;
+  end loop;
+end $$;
+
 -- Plain (non-partial) unique constraints: Postgres never treats NULL as equal
 -- to NULL for uniqueness, so unlimited inbound rows (which never set these
 -- columns) coexist safely without any WHERE predicate, and a plain
