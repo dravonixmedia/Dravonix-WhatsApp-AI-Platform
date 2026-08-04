@@ -295,34 +295,213 @@ begin
 end;
 $$;
 
--- The critical partial-index proof: conv-burst's in6 already has FOUR
--- legacy_outbound=true 'text' AI replies on file (source_message_id =
--- in6 for one of them, null for the other three). If uniqueness still
--- applied to legacy rows, a fresh (non-legacy) reservation for the exact
--- same (source_message_id, channel_type) pair would be wrongly rejected.
--- It must succeed, because messages_source_message_channel_uq_idx's
--- predicate excludes legacy_outbound rows entirely.
+-- The critical cutover-idempotency proof (this pass's REQUIRED CHANGE 1/2):
+-- conv-burst's in6/text already has a deterministically-linked legacy reply
+-- on file (out6a: source_message_id = in6, legacy_outbound = true,
+-- outbound_status = 'sent'). A replayed pre-migration queue job or retry
+-- calling reserve_ai_outbound_message(in6, 'text') after migration 12
+-- deploys MUST NOT create a second, live outbound row and must never cause
+-- a second WhatsApp send for a message Meta already accepted once.
 do $$
 declare
-  v_reserved_id uuid;
+  v_id uuid;
   v_claimed boolean;
   v_status outbound_delivery_status;
+  v_provider_message_id text;
+  v_count_before integer;
+  v_count_after integer;
 begin
-  select id, claimed, outbound_status into v_reserved_id, v_claimed, v_status
+  select count(*) into v_count_before from messages
+    where source_message_id = 'f0000000-4000-0000-0000-000000000010' and channel_type = 'text';
+  if v_count_before <> 1 then
+    raise exception 'ASSERTION SETUP FAILED: expected exactly 1 pre-existing text row linked to in6 (out6a), found %', v_count_before;
+  end if;
+
+  select id, claimed, outbound_status, provider_message_id into v_id, v_claimed, v_status, v_provider_message_id
     from reserve_ai_outbound_message('f0000000-4000-0000-0000-000000000010', 'text');
 
-  if not v_claimed or v_status <> 'sending' then
-    raise exception 'ASSERTION FAILED: a fresh reservation for in6/text must succeed despite 4 pre-existing legacy_outbound rows on that exact (source_message_id, channel_type), got claimed=%, status=%', v_claimed, v_status;
+  if v_claimed then
+    raise exception 'ASSERTION FAILED: reserving in6/text must NOT claim a new reservation -- out6a already deterministically covers this source/channel';
+  end if;
+  if v_status <> 'sent' then
+    raise exception 'ASSERTION FAILED: reserving in6/text must report the existing terminal status, expected sent, got %', v_status;
+  end if;
+  if v_id <> 'f0000000-4000-0000-0000-000000000011' then
+    raise exception 'ASSERTION FAILED: reserving in6/text must identify out6a (the existing deterministically-linked row), got %', v_id;
+  end if;
+  if v_provider_message_id <> 'wamid.LEGACY_OUT6A' then
+    raise exception 'ASSERTION FAILED: reserving in6/text must return out6a''s real provider_message_id, got %', v_provider_message_id;
   end if;
 
-  if (select legacy_outbound from messages where id = v_reserved_id) <> false then
-    raise exception 'ASSERTION FAILED: a freshly reserved row must never be legacy_outbound=true';
+  select count(*) into v_count_after from messages
+    where source_message_id = 'f0000000-4000-0000-0000-000000000010' and channel_type = 'text';
+  if v_count_after <> v_count_before then
+    raise exception 'ASSERTION FAILED: reserving against a linked legacy reply must never insert a new row (before=%, after=%)', v_count_before, v_count_after;
   end if;
 
-  raise notice 'OK: partial unique index correctly excludes legacy_outbound rows -- a fresh reservation for a source_message_id/channel_type pair already used by legacy duplicates still succeeds';
+  raise notice 'OK: reserve_ai_outbound_message(in6, text) returns the existing legacy sent reply (claimed=false) and inserts no new row -- a replayed pre-migration retry cannot resend this message';
+end;
+$$;
+
+-- Channel independence + continued idempotency: in6 has no audio reply on
+-- file (all 4 duplicates are text). A fresh audio reservation for the same
+-- source must still succeed (channel_type is part of the uniqueness key),
+-- and a second reservation attempt for that same new (source, audio) pair
+-- must then be idempotently rejected exactly like any other in-flight
+-- reservation -- proving the fix doesn't over-block unrelated channels.
+do $$
+declare
+  v_id1 uuid;
+  v_id2 uuid;
+  v_claimed1 boolean;
+  v_claimed2 boolean;
+  v_status1 outbound_delivery_status;
+  v_status2 outbound_delivery_status;
+begin
+  if exists (
+    select 1 from messages
+    where source_message_id = 'f0000000-4000-0000-0000-000000000010' and channel_type = 'audio'
+  ) then
+    raise exception 'ASSERTION SETUP FAILED: in6 must not already have an audio reply for this test to be meaningful';
+  end if;
+
+  select id, claimed, outbound_status into v_id1, v_claimed1, v_status1
+    from reserve_ai_outbound_message('f0000000-4000-0000-0000-000000000010', 'audio');
+  if not v_claimed1 or v_status1 <> 'sending' then
+    raise exception 'ASSERTION FAILED: a fresh audio reservation for in6 must succeed even though in6/text is already linked to a legacy reply, got claimed=%, status=%', v_claimed1, v_status1;
+  end if;
+
+  select id, claimed, outbound_status into v_id2, v_claimed2, v_status2
+    from reserve_ai_outbound_message('f0000000-4000-0000-0000-000000000010', 'audio');
+  if v_claimed2 or v_id2 <> v_id1 or v_status2 <> 'sending' then
+    raise exception 'ASSERTION FAILED: a second reservation for the same new (source, audio) pair must be idempotently rejected (unexpired lease), got claimed=%, id=% (expected %), status=%', v_claimed2, v_id2, v_id1, v_status2;
+  end if;
+
+  raise notice 'OK: a fresh reservation on a different channel for the same source still succeeds, and a second reservation for that new (source, channel) pair is idempotently rejected';
+end;
+$$;
+
+-- The reconciler (expire_stale_outbound_sends) must ignore every legacy
+-- sent row: it only ever touches outbound_status='sending' rows whose lease
+-- has expired, and every legacy row was backfilled straight to 'sent' --
+-- never 'sending' -- so this holds structurally, not by any legacy-specific
+-- carve-out in the function itself. Proven directly here rather than only
+-- inferred.
+do $$
+declare
+  v_expired_count integer;
+begin
+  select count(*) into v_expired_count
+    from expire_stale_outbound_sends() e
+    where e.company_id = 'f0000000-1000-0000-0000-000000000001';
+  if v_expired_count <> 0 then
+    raise exception 'ASSERTION FAILED: expire_stale_outbound_sends must never touch a legacy-upgraded company''s rows (none are outbound_status=sending), expired %', v_expired_count;
+  end if;
+
+  if (select count(*) from messages
+        where company_id = 'f0000000-1000-0000-0000-000000000001'
+          and direction = 'outbound' and legacy_outbound = true and outbound_status <> 'sent') <> 0 then
+    raise exception 'ASSERTION FAILED: no legacy_outbound row should have moved off outbound_status=sent';
+  end if;
+
+  raise notice 'OK: expire_stale_outbound_sends ignores every legacy sent row on a legacy-upgraded database';
 end;
 $$;
 
 reset role;
+
+-- ---------------------------------------------------------------------------
+-- 7. messages_prevent_legacy_outbound_flag: exact transition semantics
+--    (REQUIRED CHANGE 3). Only a no-op reaffirmation of the row's CURRENT
+--    legacy_outbound value is ever allowed; any actual transition is
+--    rejected. This is deliberately different from a cruder rule that
+--    rejects every update where NEW.legacy_outbound=true regardless of
+--    OLD -- that cruder rule would also (wrongly) reject a legitimate
+--    true->true reaffirmation.
+-- ---------------------------------------------------------------------------
+
+do $$
+begin
+  begin
+    insert into messages
+        (company_id, conversation_id, direction, channel_type, sender_type,
+         provider_message_id, outbound_status, legacy_outbound)
+      values
+        ('f0000000-1000-0000-0000-000000000001', 'f0000000-3000-0000-0000-000000000001',
+         'outbound', 'text', 'ai', 'wamid.TRIGGER_TEST_INSERT', 'sent', true);
+    raise exception 'ASSERTION FAILED: INSERT with legacy_outbound=true must be rejected by messages_prevent_legacy_outbound_flag';
+  exception
+    when others then
+      if sqlerrm <> 'legacy_outbound_not_settable' then
+        raise exception 'ASSERTION FAILED: expected legacy_outbound_not_settable, got %', sqlerrm;
+      end if;
+      raise notice 'OK: INSERT with legacy_outbound=true is rejected';
+  end;
+end;
+$$;
+
+do $$
+declare
+  v_fresh_id uuid;
+begin
+  select id into v_fresh_id from messages where provider_message_id = 'wamid.LEGACY_NEW_OUT';
+  if v_fresh_id is null then
+    raise exception 'ASSERTION SETUP FAILED: expected the earlier fresh-reservation smoke-test row to exist';
+  end if;
+  if (select legacy_outbound from messages where id = v_fresh_id) <> false then
+    raise exception 'ASSERTION SETUP FAILED: the fresh-reservation row must start legacy_outbound=false';
+  end if;
+
+  begin
+    update messages set legacy_outbound = true where id = v_fresh_id;
+    raise exception 'ASSERTION FAILED: UPDATE false->true on a non-legacy row must be rejected';
+  exception
+    when others then
+      if sqlerrm <> 'legacy_outbound_not_settable' then
+        raise exception 'ASSERTION FAILED: expected legacy_outbound_not_settable, got %', sqlerrm;
+      end if;
+      raise notice 'OK: UPDATE false->true is rejected';
+  end;
+
+  -- false->false (no-op reaffirmation) must be allowed.
+  update messages set legacy_outbound = false where id = v_fresh_id;
+  if (select legacy_outbound from messages where id = v_fresh_id) <> false then
+    raise exception 'ASSERTION FAILED: false->false reaffirmation should leave legacy_outbound false';
+  end if;
+  raise notice 'OK: UPDATE false->false (reaffirmation) is allowed';
+end;
+$$;
+
+do $$
+declare
+  v_legacy_id constant uuid := 'f0000000-4000-0000-0000-000000000011'; -- out6a, legacy_outbound=true
+begin
+  if (select legacy_outbound from messages where id = v_legacy_id) <> true then
+    raise exception 'ASSERTION SETUP FAILED: out6a must be legacy_outbound=true before this test';
+  end if;
+
+  -- true->true (no-op reaffirmation) must be allowed.
+  update messages set legacy_outbound = true where id = v_legacy_id;
+  if (select legacy_outbound from messages where id = v_legacy_id) <> true then
+    raise exception 'ASSERTION FAILED: true->true reaffirmation should leave legacy_outbound true';
+  end if;
+  raise notice 'OK: UPDATE true->true (reaffirmation) is allowed';
+
+  begin
+    update messages set legacy_outbound = false where id = v_legacy_id;
+    raise exception 'ASSERTION FAILED: UPDATE true->false on a legacy row must be rejected (no justified admin path exists)';
+  exception
+    when others then
+      if sqlerrm <> 'legacy_outbound_not_settable' then
+        raise exception 'ASSERTION FAILED: expected legacy_outbound_not_settable, got %', sqlerrm;
+      end if;
+      raise notice 'OK: UPDATE true->false is rejected';
+  end;
+
+  if (select legacy_outbound from messages where id = v_legacy_id) <> true then
+    raise exception 'ASSERTION FAILED: out6a must still be legacy_outbound=true after the rejected true->false attempt';
+  end if;
+end;
+$$;
 
 rollback;

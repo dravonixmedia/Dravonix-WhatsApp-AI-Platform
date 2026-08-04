@@ -92,13 +92,13 @@ alter table messages
 comment on column messages.idempotency_key is
   'Set only on human-reply outbound rows, before the WhatsApp send is attempted. Server-composited as "<memberId>:<conversationId>:<clientKey>" so a client-generated key is always scoped, never trusted raw. Enforced unique so a second reservation attempt for the same logical reply is rejected before any second WhatsApp send is even considered.';
 comment on column messages.source_message_id is
-  'Set only on AI-reply outbound rows: the inbound message that triggered this reply. Combined with channel_type in a partial unique index (non-legacy rows only, see messages_source_message_channel_uq_idx) so one inbound message can produce at most one new, lifecycle-managed AI reply per reply channel (text/audio). Null on a legacy_outbound row means the backfill in section 3a below could not deterministically reconstruct which inbound message triggered it (an ambiguous historical duplicate) -- never a fabricated guess.';
+  'Set only on AI-reply outbound rows: the inbound message that triggered this reply. Combined with channel_type in a partial unique index (messages_source_message_channel_uq_idx, covering every row here regardless of legacy_outbound) so one inbound message can produce at most one AI reply per reply channel (text/audio) -- including across the migration-12 cutover, so a replayed pre-migration queue job or retry can never resend a reply a deterministically-linked legacy row already covers. Null on a legacy_outbound row means the backfill in section 3a below could not deterministically reconstruct which inbound message triggered it (an ambiguous historical duplicate) -- never a fabricated guess, and therefore also never part of this uniqueness rule (NULL never collides with NULL).';
 comment on column messages.send_lease_expires_at is
   'While outbound_status=sending, no other caller may claim this row until this lease expires. A stale expired lease is either reclaimed by a natural retry or flipped to delivery_unknown by the scheduled outbound-reconciler Worker -- whichever guarded update wins the race is correct either way; never both.';
 comment on column messages.retryable is
   'Classification of the most recent send failure: true for transient provider errors (rate limit, 5xx, network failure before acceptance) eligible for automatic reclaim; false for permanent errors (bad token, invalid recipient, malformed payload, non-rate-limit 4xx) requiring a configuration fix or an authorized manual action before any retry.';
 comment on column messages.legacy_outbound is
-  'True only for a direction=outbound, sender_type=ai row that existed before this migration ran (backfilled by section 3a below), never set by any post-migration insert or update path -- enforced by messages_legacy_outbound_scope_check (scopes it to outbound/ai rows only), messages_ai_reply_source_check (the only way source_message_id may be null), the partial uniqueness index (excludes legacy rows from the new lifecycle-managed uniqueness rule), and the messages_prevent_legacy_outbound_flag trigger (rejects any insert/update outside this migration''s own backfill statements). Every legacy_outbound row is a real historical WhatsApp send that must never be deleted or reattributed.';
+  'True only for a direction=outbound, sender_type=ai row that existed before this migration ran (backfilled by section 3a below), never set by any post-migration insert or update path -- enforced by messages_legacy_outbound_scope_check (scopes it to outbound/ai rows only), messages_ai_reply_source_check (the only way source_message_id may be null), and the messages_prevent_legacy_outbound_flag trigger (rejects any insert, or update, that actually transitions this value -- a no-op reaffirmation of the current value is allowed). Deliberately NOT excluded from the source_message_id/channel_type partial uniqueness index -- a deterministically-linked legacy row must still block a replayed pre-migration queue job or retry from creating a second, live reservation for the same inbound message and channel. Every legacy_outbound row is a real historical WhatsApp send that must never be deleted or reattributed.';
 
 -- ---------------------------------------------------------------------------
 -- 3a. Legacy outbound-message backfill, for databases with rows written
@@ -210,26 +210,26 @@ end $$;
 alter table messages add constraint messages_idempotency_key_uq unique (idempotency_key);
 
 -- source_message_id/channel_type: a partial unique index, not a plain
--- constraint -- scoped to exactly the rows the *new* lifecycle-managed
--- reservation machinery can ever produce (direction=outbound, sender_type=ai,
--- legacy_outbound=false, source_message_id not null). This is the strict
+-- constraint -- scoped to every row with a real source_message_id
+-- (direction=outbound, sender_type=ai, source_message_id not null),
+-- deliberately NOT excluding legacy_outbound rows. This is the strict
 -- "at most one AI reply per inbound message per channel" rule
 -- reserve_ai_outbound_message's ON CONFLICT depends on for its idempotent
--- redelivery handling -- but it must never apply to legacy_outbound rows:
--- section 3a above can leave more than one historical duplicate row
--- unclaimed (source_message_id null, which never collides under any unique
--- index regardless of partial-ness) but could, on other historical data
--- shapes, also leave two legacy rows deterministically paired to the same
--- source_message_id/channel_type (e.g. a send that was itself legitimately
--- retried and both attempts recorded) -- this index's predicate excludes
--- legacy_outbound rows entirely, so preserved historical rows can never be
--- rejected by a uniqueness rule that did not exist when they were written.
--- The predicate must be repeated verbatim in reserve_ai_outbound_message's
--- ON CONFLICT clause for Postgres to infer this index as the arbiter (see
+-- redelivery handling, and it must cover a deterministically-linked legacy
+-- row too: if a pre-migration-12 queue job or retry is replayed after this
+-- migration deploys, reserve_ai_outbound_message must see the already-linked
+-- legacy reply as a conflict and hand back its existing terminal 'sent'
+-- status, never insert a second live row that goes on to resend the same
+-- WhatsApp message. Only rows the section 3a backfill left with
+-- source_message_id null (ambiguous duplicate bursts, never deterministically
+-- claimed) fall outside this index -- NULL never collides with NULL under
+-- any unique index, partial or not, so those are unaffected either way. The
+-- predicate must be repeated verbatim in reserve_ai_outbound_message's ON
+-- CONFLICT clause for Postgres to infer this index as the arbiter (see
 -- section 6 below) -- every row that function inserts always satisfies it,
 -- so this is safe, not merely convenient.
 create unique index messages_source_message_channel_uq_idx on messages (source_message_id, channel_type)
-  where direction = 'outbound' and sender_type = 'ai' and legacy_outbound = false and source_message_id is not null;
+  where direction = 'outbound' and sender_type = 'ai' and source_message_id is not null;
 
 alter table messages add constraint messages_outbound_fields_check check (
   (direction = 'inbound' and outbound_status is null and idempotency_key is null and source_message_id is null and legacy_outbound = false)
@@ -307,20 +307,35 @@ create trigger messages_enforce_outbound_status_transition
 
 -- Defense-in-depth for legacy_outbound itself: created *after* section 3a's
 -- backfill UPDATE has already run (so it never blocks that one, legitimate
--- write), this trigger rejects every other attempt -- insert or update -- to
--- set legacy_outbound = true. No RPC in this migration (or any future one)
--- should ever need to; the column exists to describe rows this migration
--- itself is backfilling, not a flag application code sets. Combined with
--- messages_legacy_outbound_scope_check and messages_ai_reply_source_check
--- above, this is what makes "ordinary future inserts cannot claim to be
--- legacy accidentally" hold even against a buggy future RPC, not just
--- against the RPCs that exist today.
+-- write), this trigger rejects any *transition* of legacy_outbound -- insert
+-- with it true, or update from false to true (fabricating history) or from
+-- true to false (stripping a real historical row of its classification, with
+-- no separately justified admin/migration path implemented to allow it). A
+-- no-op reaffirmation of the row's current value (true->true or false->false
+-- -- e.g. a full-column UPDATE that happens to list legacy_outbound unchanged)
+-- is explicitly allowed: checking `old.legacy_outbound is distinct from
+-- new.legacy_outbound` rather than merely `new.legacy_outbound`, so this
+-- never blocks an ordinary update to an already-legacy row that isn't
+-- actually trying to change the flag. No RPC in this migration (or any
+-- future one) should ever need to transition it at all; the column exists to
+-- describe rows this migration itself is backfilling, not a flag application
+-- code sets. Combined with messages_legacy_outbound_scope_check and
+-- messages_ai_reply_source_check above, this is what makes "ordinary future
+-- inserts cannot claim to be legacy accidentally" hold even against a buggy
+-- future RPC, not just against the RPCs that exist today.
 create or replace function prevent_legacy_outbound_flag() returns trigger
 language plpgsql
 set search_path = ''
 as $$
 begin
-  if new.legacy_outbound then
+  if tg_op = 'INSERT' then
+    if new.legacy_outbound then
+      raise exception 'legacy_outbound_not_settable';
+    end if;
+    return new;
+  end if;
+
+  if old.legacy_outbound is distinct from new.legacy_outbound then
     raise exception 'legacy_outbound_not_settable';
   end if;
   return new;
@@ -520,11 +535,18 @@ begin
   end if;
 
   -- legacy_outbound is never listed here -- it keeps its column default of
-  -- false, which is also exactly the predicate this ON CONFLICT clause must
-  -- repeat verbatim to correctly infer messages_source_message_channel_uq_idx
-  -- (a partial index) as its arbiter. Every row this INSERT can ever produce
-  -- already satisfies that predicate (direction='outbound', sender_type='ai',
-  -- source_message_id always provided), so this is always the correct index.
+  -- false. The ON CONFLICT predicate below deliberately does NOT filter on
+  -- legacy_outbound, so it also matches an existing legacy row -- if
+  -- p_source_message_id/p_channel_type was already deterministically linked
+  -- to a pre-migration-12 reply (section 3a's backfill), this insert
+  -- conflicts against that legacy row instead of creating a second, live
+  -- one; the fallthrough logic below then finds and returns that existing
+  -- (already 'sent') row with claimed=false, exactly as it would for any
+  -- other already-resolved reservation. This is what keeps a replayed
+  -- pre-migration queue job or retry from resending a message Meta already
+  -- accepted once. The predicate must still be repeated verbatim here for
+  -- Postgres to infer messages_source_message_channel_uq_idx (a partial
+  -- index) as this statement's arbiter.
   insert into public.messages
       (company_id, conversation_id, direction, channel_type, sender_type, source_message_id,
        outbound_status, send_claimed_at, send_lease_expires_at, send_attempt_count)
@@ -532,7 +554,7 @@ begin
       (v_source.company_id, v_source.conversation_id, 'outbound', p_channel_type, 'ai', p_source_message_id,
        'sending', now(), now() + interval '2 minutes', 1)
     on conflict (source_message_id, channel_type)
-      where direction = 'outbound' and sender_type = 'ai' and legacy_outbound = false and source_message_id is not null
+      where direction = 'outbound' and sender_type = 'ai' and source_message_id is not null
     do nothing
     returning public.messages.id into v_id;
 
@@ -564,8 +586,13 @@ begin
     return;
   end if;
 
-  -- Could not claim: already sending elsewhere, already sent, a permanent
+  -- Could not claim: already sending elsewhere, already sent (including a
+  -- deterministically-linked legacy_outbound row -- outbound_status='sent'
+  -- never matches the guarded UPDATE above, legacy or not), a permanent
   -- (non-retryable) send_failed, or delivery_unknown (never auto-resent).
+  -- The caller (message-consumer/voice-consumer) treats claimed=false with
+  -- outbound_status='sent' as already fully handled: no Anthropic call, no
+  -- WhatsApp/ElevenLabs send, no finalize call.
   return query
     select m.id, false, m.outbound_status, m.provider_message_id
     from public.messages m
