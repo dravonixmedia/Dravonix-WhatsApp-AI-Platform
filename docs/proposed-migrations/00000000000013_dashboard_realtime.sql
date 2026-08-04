@@ -12,11 +12,10 @@
 -- (dashboard live updates for conversations, messages, assignments,
 -- handovers, and ai_mode changes). A repo-wide search confirmed zero
 -- existing Realtime infrastructure: no table is in the `supabase_realtime`
--- publication, and no REPLICA IDENTITY has ever been set. Without this
--- migration, the client-side subscription code shipped in this branch
--- compiles and typechecks correctly, but will never actually receive any
--- postgres_changes events -- Realtime only broadcasts changes for tables
--- explicitly added to the publication.
+-- publication. Without this migration, the client-side subscription code
+-- shipped in this branch compiles and typechecks correctly, but will never
+-- actually receive any postgres_changes events -- Realtime only broadcasts
+-- changes for tables explicitly added to the publication.
 --
 -- Number: 00000000000013, the correct next contiguous number after
 -- 00000000000012_human_handover.sql (verified via
@@ -31,112 +30,90 @@
 -- ever applied to the hosted staging Supabase project.
 --
 -- ----------------------------------------------------------------------------
--- Empirically verified locally (native PostgreSQL 16 + pgvector, matching
--- the pgvector/pgvector:pg16 image CI uses), not just reasoned about:
---   - Applied cleanly on top of migrations 1-12 in a fresh scratch database.
---   - supabase/tests/rls_tenant_isolation.sql and rls_handover.sql both
---     still pass unmodified afterward -- this migration does not change
---     cross-tenant isolation or any RLS behavior.
---   - Publication ends up with exactly these 4 tables, no more, no less.
---   - REPLICA IDENTITY is FULL on all 4 tables; RLS (relrowsecurity) remains
---     enabled and unchanged on all 4.
---   - Re-running the ADD TABLE guard below a second time, and running it
---     against a database where a table was already manually added to the
---     publication beforehand (simulating a teammate toggling Realtime on
---     via the Supabase dashboard UI before this migration ships), both
---     complete with zero errors and zero duplicate publication rows.
---     (An earlier draft of this file used bare `alter publication
---     supabase_realtime add table ...` statements, which are NOT
---     idempotent -- PostgreSQL raises `ERROR: relation "..." is already
---     member of publication "supabase_realtime"` and aborts the whole
---     migration if a table is already a member. Reproduced locally, then
---     fixed below with an existence-checked guard.)
--- ============================================================================
-
--- REPLICA IDENTITY FULL -- required per table, not just for app convenience:
+-- REVISION 2 -- corrects a security misstatement in the previous revision.
+-- ----------------------------------------------------------------------------
+-- The previous revision of this file set REPLICA IDENTITY FULL on all four
+-- tables and justified it partly as "gives RLS the company_id it needs to
+-- correctly scope DELETE broadcasts". That justification was wrong. Per
+-- Supabase's documented Postgres Changes behavior:
+--   - Row Level Security is evaluated for INSERT and UPDATE events (Realtime
+--     re-checks the row's visibility per subscriber).
+--   - RLS is NOT applied to DELETE events at all. A DELETE is broadcast to
+--     every subscriber on that table, regardless of their own RLS
+--     visibility -- REPLICA IDENTITY FULL does not change this; it only
+--     changes how much of the deleted row's data is included in that
+--     unfiltered broadcast, which would make the exposure worse, not safer.
+--   - Even for UPDATE, when RLS is enabled on a table, `old_record` on a
+--     realtime payload is documented to only ever contain primary-key
+--     columns -- not the rest of the row -- regardless of REPLICA IDENTITY.
+--     Setting FULL does not actually deliver old.company_id (or any other
+--     old column) to a Postgres Changes subscriber for these RLS-enabled
+--     tables; it only affects what Postgres itself logs to the WAL.
 --
--- Every one of these tables' SELECT RLS policies
--- (conversations_select_member, messages_select_member,
--- conversation_assignments' select policy, handover_events_select_member)
--- checks the row's `company_id`. Supabase Realtime enforces these same
--- policies per subscriber before forwarding a postgres_changes event, and
--- for UPDATE/DELETE it evaluates the policy against `old_record` (the
--- previous row image from the WAL). With the default REPLICA IDENTITY,
--- `old_record` only ever contains the primary key (`id`) -- `company_id`
--- would be missing, so the RLS check backing an UPDATE or DELETE broadcast
--- could never be satisfied correctly. FULL is what makes `company_id` (and
--- every other column the RLS policy or the client's own merge logic needs)
--- available on every UPDATE/DELETE event, which is what keeps tenant
--- scoping correct for those events, not just complete.
---
--- Per table:
---   conversations: state/ai_mode/assigned_member_id/handover_last_read_at
---     change on almost every UPDATE the dashboard needs to react to
---     (Pause/Resume AI, assign, start/end human assistance, handover
---     state transitions) -- FULL required for correct RLS-scoped
---     UPDATE broadcasts.
---   messages: outbound_status transitions (reserved -> sending -> sent/
---     send_failed/delivery_unknown) fire on every AI/human reply --
---     the highest-volume table here -- FULL required for the same reason.
---   conversation_assignments: assigned_to/unassigned_at UPDATEs on every
---     assign/reassign/end-human-assistance action -- FULL required.
---   handover_events: this table is INSERT-only in the application today
---     (trigger_handover's `insert ... on conflict (handover_event_key) do
---     nothing`; no UPDATE or DELETE code path exists anywhere in this
---     repo for it, confirmed by a repo-wide search). DEFAULT would
---     therefore be *sufficient* for this table's actual write pattern --
---     it is set to FULL here anyway only for consistency with the other
---     three and as a safety net (e.g. a future manual cleanup of a
---     mis-fired event, or an ON DELETE CASCADE from a company being
---     off-boarded) rather than because a live gap demands it. If the
---     reviewer prefers minimizing WAL overhead, `handover_events` is the
---     one table in this set that can safely be switched to DEFAULT.
-alter table conversations replica identity full;
-alter table messages replica identity full;
-alter table conversation_assignments replica identity full;
-alter table handover_events replica identity full;
+-- Given that, the correct, minimal fix has two parts, both applied in this
+-- revision:
+--   1. No subscription in this branch (apps/web/lib/realtime/*) is
+--      registered for DELETE, or for "*" (which silently includes DELETE),
+--      for any of these four tables -- see
+--      apps/web/lib/realtime/tenantChannel.ts (RealtimeWatch's `event` type
+--      no longer accepts "DELETE"/"*" at all -- a compile error, not just a
+--      convention) and apps/web/lib/realtime/watchConfigs.ts (every actual
+--      subscription, audited in apps/web/test/watchConfigs.test.ts).
+--      There are no DELETE code paths against any of these four tables
+--      anywhere in this repo today, so there is nothing to subscribe to,
+--      and no "just in case" DELETE subscription has been added.
+--   2. REPLICA IDENTITY is left at its default on all four tables (no
+--      `alter table ... replica identity full` statements below at all).
+--      Every subscription in this branch reads only `payload.new` --
+--      confirmed by inspection of apps/web/app/dashboard/handover/
+--      [conversationId]/ConversationThread.tsx (the only handler that reads
+--      payload data at all; RealtimeRefreshBoundary's handler ignores the
+--      payload entirely and just triggers a refetch through the existing,
+--      already-correct, already-RLS-scoped server data loader). Since
+--      nothing consumes `payload.old`, and old_record wouldn't reliably
+--      contain more than the primary key for these RLS-enabled tables
+--      regardless, REPLICA IDENTITY FULL would add WAL overhead (the full
+--      previous row logged on every UPDATE, heaviest on `messages` --
+--      widest rows, highest update frequency via outbound_status
+--      transitions) for zero actual benefit to this application. DEFAULT
+--      (primary-key-only old-row tracking) is correct for all four tables.
+-- ----------------------------------------------------------------------------
 
--- WAL/performance impact: REPLICA IDENTITY FULL logs the entire previous
--- row (not just the primary key) into the WAL for every UPDATE/DELETE on
--- that table, increasing WAL volume and logical-decoding cost roughly in
--- proportion to row width and update frequency. `messages` is the table
--- most worth watching in production: it has the widest rows here (`body`
--- text, `ai_structured_response` jsonb) and the highest UPDATE frequency
--- (an outbound_status transition on every reply). `conversations` sees
--- moderate UPDATE volume (state/ai_mode changes, not per-message).
--- `conversation_assignments` and `handover_events` are comparatively
--- low-volume (assignment/handover events happen far less often than
--- messages) and negligible either way. None of this affects INSERT-only
--- workloads or SELECT reads at all -- REPLICA IDENTITY only changes what's
--- logged for UPDATE/DELETE. This is a bounded, acceptable cost at this
--- application's scale; if `messages` WAL volume ever becomes a measured
--- problem, a future optimization would be `REPLICA IDENTITY USING INDEX`
--- against a covering (id, company_id) index instead of FULL -- not
--- implemented here since no such index exists today and RLS-on-DELETE
--- correctness (above) still needs `company_id` present either way.
+do $$
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    raise exception
+      'supabase_realtime publication does not exist. This migration assumes a '
+      'real Supabase project, which provisions this publication automatically '
+      '-- it deliberately never creates or drops it itself. Aborting rather '
+      'than silently creating one, since that would indicate this is being '
+      'run against an unexpected environment.';
+  end if;
+end $$;
 
 -- Idempotent add-to-publication: `alter publication ... add table` is NOT
--- safe to run twice (see the empirical note above) -- this guards each
--- one with an existence check against pg_publication_tables so applying
--- this migration is a no-op for any table that's already a member,
--- whether from a prior run of this same migration or a table someone
--- already enabled by hand via the Supabase dashboard's per-table Realtime
--- toggle. Never creates, drops, or alters the `supabase_realtime`
--- publication itself (Supabase provisions it automatically); never touches
--- any row, column, constraint, RLS policy, or GRANT on these tables --
--- publication membership only controls what Realtime *can* broadcast, not
--- who is authorized to read it. Authorization is unchanged: every existing
--- SELECT RLS policy on these four tables remains the sole boundary, now
--- additionally enforced by Realtime itself against the connecting client's
--- own JWT (set client-side via supabase.realtime.setAuth(accessToken)
--- before subscribing -- see apps/web/lib/realtime/useTenantRealtimeChannel.ts)
--- -- a client only ever receives postgres_changes events, including DELETE
--- events, for rows its own membership/permissions already allow it to see.
--- No DELETE code path exists against any of these four tables anywhere in
--- this repo today (verified by search); if one is ever added (or a company
--- off-boarding cascades a delete), the FULL old row -- company_id included
--- -- is exactly what keeps that DELETE broadcast correctly tenant-scoped
--- instead of silently malformed.
+-- safe to run twice -- empirically reproduced locally (PostgreSQL 16):
+-- running it against a table already in the publication raises
+-- `ERROR: relation "..." is already member of publication "supabase_realtime"`
+-- and aborts the whole migration. This guards each one with an existence
+-- check against pg_publication_tables so applying this migration is a
+-- no-op for any table that's already a member, whether from a prior run of
+-- this same migration or a table someone already enabled by hand via the
+-- Supabase dashboard's per-table Realtime toggle. Never creates, drops, or
+-- alters the `supabase_realtime` publication itself; never touches any
+-- row, column, constraint, RLS policy, or GRANT on these tables --
+-- publication membership only controls what Realtime *can* broadcast for
+-- INSERT/UPDATE, not who is authorized to read it. Authorization for
+-- INSERT/UPDATE is unchanged: every existing SELECT RLS policy on these
+-- four tables remains the sole boundary, additionally enforced by Realtime
+-- itself against the connecting client's own JWT (set client-side via
+-- supabase.realtime.setAuth(accessToken) before subscribing -- see
+-- apps/web/lib/realtime/useTenantRealtimeChannel.ts). This migration adds
+-- exactly these four tables and no others:
+--   public.conversations
+--   public.messages
+--   public.conversation_assignments
+--   public.handover_events
 do $$
 declare
   target_table text;
@@ -155,7 +132,7 @@ begin
         and schemaname = 'public'
         and tablename = target_table
     ) then
-      execute format('alter publication supabase_realtime add table %I', target_table);
+      execute format('alter publication supabase_realtime add table public.%I', target_table);
     end if;
   end loop;
 end $$;
@@ -169,33 +146,50 @@ end $$;
 -- if live lead updates are wanted later, out of scope for this proposal.
 
 -- ----------------------------------------------------------------------------
--- Rollback (additive only -- reverses cleanly, touches no data):
+-- Rollback (additive only -- reverses cleanly, touches no data, no RLS/
+-- grant changes to undo since none were made):
 -- ----------------------------------------------------------------------------
--- alter publication supabase_realtime drop table conversations;
--- alter publication supabase_realtime drop table messages;
--- alter publication supabase_realtime drop table conversation_assignments;
--- alter publication supabase_realtime drop table handover_events;
--- alter table conversations replica identity default;
--- alter table messages replica identity default;
--- alter table conversation_assignments replica identity default;
--- alter table handover_events replica identity default;
+-- alter publication supabase_realtime drop table public.conversations;
+-- alter publication supabase_realtime drop table public.messages;
+-- alter publication supabase_realtime drop table public.conversation_assignments;
+-- alter publication supabase_realtime drop table public.handover_events;
 
 -- ----------------------------------------------------------------------------
+-- Empirically verified locally (native PostgreSQL 16 + pgvector, matching
+-- the pgvector/pgvector:pg16 image CI uses), not just reasoned about:
+--   - Applied cleanly on top of migrations 1-12 in a fresh scratch database
+--     that already has a `supabase_realtime` publication (mirroring what a
+--     real Supabase project provisions automatically).
+--   - Running it a second time (idempotency), and running it against a
+--     database where a table was already manually added to the publication
+--     beforehand (simulating a teammate toggling Realtime on via the
+--     Supabase dashboard UI before this migration ships), both complete
+--     with zero errors and zero duplicate publication rows.
+--   - Dropping the `supabase_realtime` publication first and re-applying:
+--     aborts with the controlled RAISE EXCEPTION message above, not a
+--     generic Postgres error.
+--   - Publication ends up with exactly these 4 tables, no more, no less.
+--   - supabase/tests/rls_tenant_isolation.sql and rls_handover.sql both
+--     still pass unmodified afterward -- this migration does not change
+--     cross-tenant isolation, RLS, or any grant.
+--   - REPLICA IDENTITY is left at its default (no ALTER TABLE statements
+--     in this file at all) -- there is nothing to verify changed there.
+--
 -- Suggested test assertions for supabase/tests/ once this migration is
 -- approved and moved into supabase/migrations/ (not added as a live test
--- file yet, per "update only the proposed migration document" -- kept here
--- for review, to be split into its own supabase/tests/rls_realtime.sql
--- alongside the actual migration move):
+-- file yet, per "update only ... where required" -- to be split into
+-- supabase/tests/rls_realtime.sql alongside the actual migration move):
 --
 -- 1. Publication membership is exactly the 4 intended tables, no more:
 --   select array_agg(tablename order by tablename) from pg_publication_tables
 --     where pubname = 'supabase_realtime' and schemaname = 'public';
 --   -- expect: {conversation_assignments,conversations,handover_events,messages}
 --
--- 2. Replica identity is FULL on all 4:
+-- 2. Replica identity remains DEFAULT on all 4 (this migration must never
+--   set it to FULL or anything else):
 --   select relname, relreplident from pg_class
 --     where relname in ('conversations','messages','conversation_assignments','handover_events');
---   -- expect: relreplident = 'f' for all 4 rows
+--   -- expect: relreplident = 'd' (default) for all 4 rows
 --
 -- 3. RLS remains enabled (this migration must never touch relrowsecurity):
 --   select relname, relrowsecurity from pg_class
@@ -204,15 +198,19 @@ end $$;
 --   -- implicitly today by rls_tenant_isolation.sql/rls_handover.sql
 --   -- continuing to pass unmodified after this migration).
 --
--- 4. Company A cannot receive Company B's rows: this is a property of the
---   underlying SELECT RLS policies (conversations_select_member,
---   messages_select_member, etc.), already covered end-to-end by the
---   existing rls_tenant_isolation.sql/rls_handover.sql suites (both
---   re-verified passing after this migration, see the empirical note
---   above) -- publication membership does not change what those policies
---   allow, only whether a change event is broadcast at all. A dedicated
---   Realtime-specific test would need a running Realtime server (outside
---   what supabase/tests/run.sh's plain-Postgres harness can exercise) to
---   assert the websocket-level behavior directly; the RLS layer it depends
---   on is what's covered locally today.
+-- 4. Company A cannot receive Company B's INSERT/UPDATE rows: this is a
+--   property of the underlying SELECT RLS policies (conversations_select_
+--   member, messages_select_member, etc.), already covered end-to-end by
+--   the existing rls_tenant_isolation.sql/rls_handover.sql suites (both
+--   re-verified passing after this migration). Whether a client's
+--   *application code* ever asks for another tenant's rows in the first
+--   place is covered client-side by apps/web/test/tenantChannel.test.ts
+--   and apps/web/test/watchConfigs.test.ts (every watch list audited to
+--   confirm INSERT/UPDATE only, filters always embed the caller's own
+--   scopeId, never a second tenant's id). A dedicated Realtime-specific
+--   integration test would need a running Realtime server (outside what
+--   supabase/tests/run.sh's plain-Postgres harness can exercise) to assert
+--   the websocket-level broadcast behavior directly; the RLS layer and the
+--   client subscription construction it depends on are both covered
+--   locally today.
 -- ----------------------------------------------------------------------------

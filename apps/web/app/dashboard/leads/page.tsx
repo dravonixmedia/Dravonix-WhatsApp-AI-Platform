@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { RealtimeRefreshBoundary } from "../../../lib/realtime/RealtimeRefreshBoundary.js";
+import { LEADS_LIST_WATCHES } from "../../../lib/realtime/watchConfigs.js";
 import {
   listLeads,
   type LeadListAssignmentFilter,
@@ -100,7 +101,7 @@ export default async function LeadsPage({
         namespace="leads-list"
         scopeId={session.activeCompanyId}
         accessToken={session.accessToken}
-        watches={[{ table: "leads", filterColumn: "company_id" }]}
+        watches={LEADS_LIST_WATCHES}
       />
       <h1 style={{ fontSize: "1.4rem" }}>Leads</h1>
       <p className="dvx-muted">

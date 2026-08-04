@@ -15,6 +15,7 @@ import {
   resumeAiAction,
 } from "../../../../lib/actions/handover.js";
 import { RealtimeRefreshBoundary } from "../../../../lib/realtime/RealtimeRefreshBoundary.js";
+import { CONVERSATION_DETAIL_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { ConversationThread } from "./ConversationThread.js";
@@ -85,11 +86,7 @@ export default async function ConversationDetailPage({
         namespace="conversation-detail"
         scopeId={conversationId}
         accessToken={session.accessToken}
-        watches={[
-          { table: "conversations", filterColumn: "id" },
-          { table: "conversation_assignments", filterColumn: "conversation_id" },
-          { table: "handover_events", filterColumn: "conversation_id" },
-        ]}
+        watches={CONVERSATION_DETAIL_WATCHES}
       />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>

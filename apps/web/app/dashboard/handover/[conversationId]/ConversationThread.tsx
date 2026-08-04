@@ -8,6 +8,7 @@ import {
   reconcileOutboundMessageAction,
 } from "../../../../lib/actions/handover.js";
 import { useTenantRealtimeChannel } from "../../../../lib/realtime/useTenantRealtimeChannel.js";
+import { MESSAGE_THREAD_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
 import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
 import { mapRealtimeMessageRow } from "./realtimeMessageMapper.js";
 import {
@@ -60,7 +61,7 @@ export function ConversationThread({
     namespace: "conversation-thread",
     scopeId: conversationId,
     accessToken,
-    watches: [{ table: "messages", filterColumn: "conversation_id", event: "*" }],
+    watches: MESSAGE_THREAD_WATCHES,
     onChange: (_table, payload) => {
       if (payload.eventType === "INSERT") {
         setState((prev) => appendRealtimeMessage(prev, mapRealtimeMessageRow(payload.new)));

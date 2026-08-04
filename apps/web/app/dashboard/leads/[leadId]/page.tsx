@@ -7,6 +7,7 @@ import {
 } from "../../../../lib/actions/leads.js";
 import { getDashboardCapabilities } from "../../../../lib/permissions.js";
 import { RealtimeRefreshBoundary } from "../../../../lib/realtime/RealtimeRefreshBoundary.js";
+import { LEAD_DETAIL_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
 import {
   getLead,
   listLeadEvents,
@@ -72,7 +73,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ lea
         namespace="lead-detail"
         scopeId={leadId}
         accessToken={session.accessToken}
-        watches={[{ table: "leads", filterColumn: "id" }]}
+        watches={LEAD_DETAIL_WATCHES}
       />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>

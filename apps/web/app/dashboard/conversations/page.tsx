@@ -6,6 +6,7 @@ import {
   type ConversationListHandoverFilter,
 } from "../../../lib/repositories/conversationsRepository.js";
 import { RealtimeRefreshBoundary } from "../../../lib/realtime/RealtimeRefreshBoundary.js";
+import { CONVERSATIONS_LIST_WATCHES } from "../../../lib/realtime/watchConfigs.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
 
@@ -101,11 +102,7 @@ export default async function ConversationsPage({
         namespace="conversations-list"
         scopeId={session.activeCompanyId}
         accessToken={session.accessToken}
-        watches={[
-          { table: "conversations", filterColumn: "company_id" },
-          { table: "messages", filterColumn: "company_id" },
-          { table: "conversation_assignments", filterColumn: "company_id" },
-        ]}
+        watches={CONVERSATIONS_LIST_WATCHES}
       />
       <h1 style={{ fontSize: "1.4rem" }}>Live Conversations</h1>
       <p className="dvx-muted">All conversations for this company, across every channel.</p>
