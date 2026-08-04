@@ -290,6 +290,38 @@ a {
 }
 
 /* ---------------------------------------------------------------------
+ * Sidebar nav links -- current-route highlighting (NavLinks.tsx sets
+ * dvx-nav-link--active based on usePathname()).
+ * ------------------------------------------------------------------- */
+
+.dvx-nav-link {
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-small);
+  font-size: 0.9rem;
+  text-decoration: none;
+  color: var(--text-secondary);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.dvx-nav-link:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.dvx-nav-link--active {
+  background: var(--surface-selected);
+  color: var(--brand-cyan);
+  font-weight: 500;
+}
+
+.dvx-nav-link--active:hover {
+  background: var(--surface-selected);
+  color: var(--brand-cyan);
+}
+
+/* ---------------------------------------------------------------------
  * Skip link -- visible only on keyboard focus, lets a keyboard user
  * bypass the sidebar navigation entirely.
  * ------------------------------------------------------------------- */
