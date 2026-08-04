@@ -1,10 +1,11 @@
 import { countHandoverBadge, SupabaseHandoverRepository } from "@dravonix/handover";
-import Link from "next/link";
 import { platformBrand } from "@dravonix/config";
 import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
 import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
+import { BrandIcon, BrandLogo } from "../BrandLogo.js";
+import { NavLinks } from "./NavLinks.js";
 
 // Every /dashboard/* route depends on the request's session cookie (real
 // Supabase Auth, Human Handover Inbox final plan section 15) -- never
@@ -16,12 +17,22 @@ export const dynamic = "force-dynamic";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Overview" },
-  { href: "/dashboard/inbox", label: "Inbox" },
+  { href: "/dashboard/conversations", label: "Live Conversations" },
   { href: "/dashboard/leads", label: "Leads" },
   { href: "/dashboard/knowledge", label: "Knowledge Base" },
   { href: "/dashboard/billing", label: "Billing" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
+
+const ROLE_LABELS: Record<string, string> = {
+  company_owner: "Owner",
+  company_admin: "Admin",
+  manager: "Manager",
+  agent: "Agent",
+  knowledge_editor: "Knowledge Editor",
+  billing_viewer: "Billing Viewer",
+  viewer: "Viewer",
+};
 
 function NoCompanyAccessPage() {
   return (
@@ -67,24 +78,47 @@ export default async function DashboardLayout({ children }: { children: React.Re
     session.activeCompanyId,
   );
 
+  const roleLabel = ROLE_LABELS[session.activeRole] ?? session.activeRole;
+
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
+      <input
+        type="checkbox"
+        id="dvx-nav-toggle"
+        className="dvx-nav-toggle-input"
+        aria-label="Toggle navigation menu"
+      />
+      <label htmlFor="dvx-nav-toggle" className="dvx-nav-toggle-label" aria-hidden="true">
+        <BrandIcon size={22} />
+      </label>
+      <a href="#dvx-main-content" className="dvx-skip-link">
+        Skip to content
+      </a>
       <aside
+        id="dvx-sidebar-nav"
+        className="dvx-sidebar"
         style={{
           width: 240,
           flexShrink: 0,
-          borderRight: "1px solid var(--dravonix-border)",
+          background: "var(--surface-elevated)",
+          borderRight: "1px solid var(--border-default)",
           padding: "1.5rem 1rem",
           display: "flex",
           flexDirection: "column",
         }}
       >
-        <div style={{ fontWeight: 700, fontSize: "1.1rem", marginBottom: "0.25rem" }}>
-          {platformBrand.dashboard.subheading}
+        <div style={{ marginBottom: "0.5rem" }}>
+          <BrandLogo height={28} />
         </div>
-        <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "1rem" }}>
+        <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
           {platformBrand.companyName}
         </div>
+        <span
+          className="dvx-badge dvx-badge--neutral"
+          style={{ alignSelf: "flex-start", marginBottom: "1rem" }}
+        >
+          {roleLabel}
+        </span>
 
         {session.memberships.length > 1 ? (
           <form
@@ -92,13 +126,22 @@ export default async function DashboardLayout({ children }: { children: React.Re
               "use server";
               await switchCompanyAction(String(formData.get("companyId")));
             }}
-            style={{ marginBottom: "1rem", display: "flex", gap: "0.35rem" }}
+            style={{
+              marginBottom: "1rem",
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.4rem",
+            }}
           >
             <select
               name="companyId"
               defaultValue={session.activeCompanyId}
               className="dvx-input"
-              style={{ flex: 1, fontSize: "0.85rem" }}
+              title={
+                session.memberships.find((m) => m.companyId === session.activeCompanyId)
+                  ?.companyName ?? undefined
+              }
+              style={{ fontSize: "0.85rem" }}
             >
               {session.memberships.map((m) => (
                 <option key={m.companyId} value={m.companyId}>
@@ -106,8 +149,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
                 </option>
               ))}
             </select>
-            <button className="dvx-button" type="submit" style={{ fontSize: "0.8rem" }}>
-              Switch
+            <button
+              className="dvx-button"
+              type="submit"
+              style={{ fontSize: "0.8rem", width: "100%" }}
+            >
+              Switch company
             </button>
           </form>
         ) : (
@@ -116,49 +163,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
           </div>
         )}
 
-        <nav style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-          {NAV_ITEMS.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              style={{
-                padding: "0.5rem 0.75rem",
-                borderRadius: 8,
-                fontSize: "0.9rem",
-                textDecoration: "none",
-              }}
-            >
-              {item.label}
-            </Link>
-          ))}
-          <Link
-            href="/dashboard/handover"
-            style={{
-              padding: "0.5rem 0.75rem",
-              borderRadius: 8,
-              fontSize: "0.9rem",
-              textDecoration: "none",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <span>Human Handover</span>
-            {handoverBadgeCount > 0 ? (
-              <span
-                style={{
-                  background: "#dc2626",
-                  color: "white",
-                  borderRadius: 999,
-                  fontSize: "0.7rem",
-                  padding: "0.05rem 0.45rem",
-                }}
-              >
-                {handoverBadgeCount}
-              </span>
-            ) : null}
-          </Link>
-        </nav>
+        <NavLinks
+          items={NAV_ITEMS}
+          handoverHref="/dashboard/handover"
+          handoverBadgeCount={handoverBadgeCount}
+        />
 
         <div style={{ marginTop: "auto", paddingTop: "1rem" }}>
           <div className="dvx-muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
@@ -171,7 +180,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
           </form>
         </div>
       </aside>
-      <main style={{ flex: 1, padding: "2rem" }}>{children}</main>
+      <main id="dvx-main-content" style={{ flex: 1, padding: "2rem", minWidth: 0 }}>
+        {children}
+      </main>
     </div>
   );
 }

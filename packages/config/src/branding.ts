@@ -22,6 +22,7 @@ export interface PlatformBrand {
   websiteUrl: string;
   supportEmail: string;
   logoPath: string;
+  iconPath: string;
   faviconPath: string;
   colors: {
     primary: string;
@@ -44,7 +45,11 @@ const defaultBrand: PlatformBrand = {
   tagline: "AI-powered WhatsApp conversations for growing businesses.",
   websiteUrl: "https://dravonix.example",
   supportEmail: "support@dravonix.example",
-  logoPath: "/branding/logo.svg",
+  // Official asset, provided as-is (uploaded WebP, not converted/re-encoded).
+  logoPath: "/branding/logo.webp",
+  iconPath: "/branding/icon.webp",
+  // No dedicated favicon.ico has been supplied yet; the icon-only asset
+  // above is used as the browser-tab icon in the meantime (apps/web/app/layout.tsx).
   faviconPath: "/branding/favicon.ico",
   colors: {
     primary: "#1F6FEB",

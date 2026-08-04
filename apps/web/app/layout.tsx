@@ -8,7 +8,10 @@ export const metadata: Metadata = {
     template: `%s · ${platformBrand.shortName}`,
   },
   description: platformBrand.tagline,
-  icons: { icon: platformBrand.faviconPath },
+  // No dedicated favicon.ico asset has been supplied yet; reuse the
+  // official icon-only mark directly (same bytes, no format conversion)
+  // rather than fabricate a converted .ico.
+  icons: { icon: { url: platformBrand.iconPath, type: "image/webp" } },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
