@@ -18,6 +18,7 @@ import {
   normalizeTranscript,
   prepareMalayalamSpeechText,
   resolveReplyMode,
+  sanitizeKeyterms,
   type SpeechToTextProvider,
   type TextToSpeechProvider,
 } from "@dravonix/speech";
@@ -204,6 +205,23 @@ export async function processVoiceJob(
   const isConfidentlyMalayalam =
     context.aiContext.enabledLanguages.length === 1 &&
     context.aiContext.enabledLanguages[0] === "ml";
+  // Sanitized at assembly time (not just relying on the provider's own
+  // defensive re-check) so a future edit to MALAYALAM_STT_KEYTERMS -- or any
+  // other future source of keyterms -- can never reintroduce the
+  // 2026-08-04 incident (an oversized/malformed term making the entire STT
+  // request fail). Only safe counts are logged, never the terms themselves.
+  const keytermCandidates = isConfidentlyMalayalam ? [] : MALAYALAM_STT_KEYTERMS;
+  const { keyterms: sanitizedKeyterms, summary: keytermSummary } =
+    sanitizeKeyterms(keytermCandidates);
+  if (keytermSummary.rejectedCount > 0) {
+    log.warn("Dropped invalid STT keyterms before request", {
+      inputCount: keytermSummary.inputCount,
+      acceptedCount: keytermSummary.acceptedCount,
+      rejectedCount: keytermSummary.rejectedCount,
+      rejectionReasons: keytermSummary.rejectionReasons,
+    });
+  }
+
   const sttInput = {
     audio: audioBytes,
     mimeType,
@@ -212,7 +230,7 @@ export async function processVoiceJob(
       .slice(1)
       .map((code) => toSttLanguageCode(code)),
     forceLanguageCode: isConfidentlyMalayalam ? "ml" : undefined,
-    keyterms: isConfidentlyMalayalam ? undefined : MALAYALAM_STT_KEYTERMS,
+    keyterms: sanitizedKeyterms.length > 0 ? sanitizedKeyterms : undefined,
   };
 
   let transcription = await deps.sttProvider.transcribe(sttInput);

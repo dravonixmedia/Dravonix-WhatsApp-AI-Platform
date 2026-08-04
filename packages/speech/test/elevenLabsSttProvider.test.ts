@@ -129,4 +129,65 @@ describe("ElevenLabsSpeechToTextProvider", () => {
     expect(body.get("language_code")).toBeNull();
     expect(JSON.parse(body.get("keyterms") as string)).toEqual(["Dravonix", "branding", "Kerala"]);
   });
+
+  describe("keyterm sanitization (regression: 2026-08-04 HTTP 400 invalid_keyword_length)", () => {
+    it("never sends a keyterm of 50 or more characters, even if the caller supplies one", async () => {
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ text: "hello", language_code: "en", language_probability: 0.8 }),
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const provider = new ElevenLabsSpeechToTextProvider({
+        apiKey: "test-key",
+        modelId: "scribe_v2",
+      });
+
+      // Reproduces the incident shape: one oversized term mixed in with
+      // otherwise-valid short terms.
+      const oversizedTerm = "a".repeat(60);
+      const result = await provider.transcribe({
+        audio: new ArrayBuffer(4),
+        mimeType: "audio/ogg",
+        languageCode: "en-US",
+        keyterms: ["Dravonix", oversizedTerm, "Kerala"],
+      });
+
+      // The request must still succeed -- a malformed keyterm never fails
+      // the transcription.
+      expect(result.text).toBe("hello");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      const [, requestInit] = fetchMock.mock.calls[0]!;
+      const body = (requestInit as RequestInit).body as FormData;
+      const sentKeyterms = JSON.parse(body.get("keyterms") as string) as string[];
+      expect(sentKeyterms).toEqual(["Dravonix", "Kerala"]);
+      expect(sentKeyterms.every((term) => term.length < 50)).toBe(true);
+    });
+
+    it("omits the keyterms parameter entirely (and still transcribes) when every supplied term is invalid", async () => {
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ text: "hello", language_code: "en", language_probability: 0.8 }),
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const provider = new ElevenLabsSpeechToTextProvider({
+        apiKey: "test-key",
+        modelId: "scribe_v2",
+      });
+
+      const result = await provider.transcribe({
+        audio: new ArrayBuffer(4),
+        mimeType: "audio/ogg",
+        languageCode: "en-US",
+        keyterms: ["a".repeat(60), "", "one two three four five six"],
+      });
+
+      expect(result.text).toBe("hello");
+      const [, requestInit] = fetchMock.mock.calls[0]!;
+      const body = (requestInit as RequestInit).body as FormData;
+      expect(body.get("keyterms")).toBeNull();
+    });
+  });
 });

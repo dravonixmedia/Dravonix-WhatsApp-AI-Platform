@@ -2,6 +2,7 @@ export * from "./provider.js";
 export * from "./replyMode.js";
 export * from "./normalizeTranscript.js";
 export * from "./malayalamSpeechText.js";
+export * from "./keytermSanitizer.js";
 export * from "./googleAuth.js";
 export * from "./providers/googleSttProvider.js";
 export * from "./providers/googleTtsProvider.js";

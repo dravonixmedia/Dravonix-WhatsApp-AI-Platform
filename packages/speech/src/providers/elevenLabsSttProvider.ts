@@ -1,3 +1,4 @@
+import { sanitizeKeyterms } from "../keytermSanitizer.js";
 import type { SpeechToTextInput, SpeechToTextProvider, SpeechToTextResult } from "../provider.js";
 
 export interface ElevenLabsSttConfig {
@@ -38,8 +39,14 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
     if (input.forceLanguageCode) {
       formData.append("language_code", input.forceLanguageCode);
     }
-    if (input.keyterms && input.keyterms.length > 0) {
-      formData.append("keyterms", JSON.stringify(input.keyterms));
+    // Re-validated here regardless of what the caller already did (defense
+    // in depth, per the 2026-08-04 incident) -- an invalid, oversized, or
+    // malformed keyterm must never reach ElevenLabs and must never fail this
+    // request. Only the sanitized survivors are ever sent; the parameter is
+    // omitted entirely once none remain.
+    const { keyterms } = sanitizeKeyterms(input.keyterms);
+    if (keyterms.length > 0) {
+      formData.append("keyterms", JSON.stringify(keyterms));
     }
 
     const response = await fetch(this.baseUrl, {
