@@ -21,6 +21,8 @@ export interface PlatformBrand {
   tagline: string;
   websiteUrl: string;
   supportEmail: string;
+  /** `mailto:` href for `supportEmail` -- always derived from it, never set independently, so the two can't drift out of sync. */
+  supportEmailHref: string;
   logoPath: string;
   iconPath: string;
   faviconPath: string;
@@ -44,7 +46,8 @@ const defaultBrand: PlatformBrand = {
   internalSlug: "dravonix-whatsapp-ai-platform",
   tagline: "AI-powered WhatsApp conversations for growing businesses.",
   websiteUrl: "https://dravonix.example",
-  supportEmail: "support@dravonix.example",
+  supportEmail: "Support@dravonixmedia.com",
+  supportEmailHref: "mailto:support@dravonixmedia.com",
   // Official asset, provided as-is (uploaded WebP, not converted/re-encoded).
   logoPath: "/branding/logo.webp",
   iconPath: "/branding/icon.webp",
@@ -66,12 +69,17 @@ const defaultBrand: PlatformBrand = {
 function overrideFromEnv(brand: PlatformBrand): PlatformBrand {
   const env =
     typeof process !== "undefined" ? process.env : ({} as Record<string, string | undefined>);
+  const supportEmail = env.PLATFORM_SUPPORT_EMAIL ?? brand.supportEmail;
   return {
     ...brand,
     productName: env.PLATFORM_PRODUCT_NAME ?? brand.productName,
     shortName: env.PLATFORM_SHORT_NAME ?? brand.shortName,
     companyName: env.PLATFORM_COMPANY_NAME ?? brand.companyName,
-    supportEmail: env.PLATFORM_SUPPORT_EMAIL ?? brand.supportEmail,
+    supportEmail,
+    // Always derived from supportEmail (lower-cased -- mailto: hrefs don't
+    // need to preserve display casing) so an env override can never leave
+    // the visible address and the link it's wrapped in out of sync.
+    supportEmailHref: `mailto:${supportEmail.toLowerCase()}`,
     websiteUrl: env.PLATFORM_WEBSITE_URL ?? brand.websiteUrl,
   };
 }

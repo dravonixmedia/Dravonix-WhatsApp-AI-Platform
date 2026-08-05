@@ -261,6 +261,38 @@ describe("reconcileAiOutboundMessage", () => {
     });
   });
 
+  it("forwards a supplied providerMessageId through to the repository unchanged", async () => {
+    const messages = new Map([
+      [
+        AI_MESSAGE_ID,
+        {
+          id: AI_MESSAGE_ID,
+          companyId: COMPANY_A,
+          senderType: "ai" as const,
+          outboundStatus: "delivery_unknown" as const,
+        },
+      ],
+    ]);
+    const repo = new FakeWorkerRepository(messages, "sent");
+    const auditWriter = new FakeAuditLogWriter();
+
+    await reconcileAiOutboundMessage(repo, auditWriter, managerContext(COMPANY_A), {
+      messageId: AI_MESSAGE_ID,
+      resolution: "confirm_sent",
+      reason: "confirmed via Meta Business dashboard",
+      providerMessageId: "wamid.CONFIRMED_ID",
+    });
+
+    expect(repo.reconcileCalls).toEqual([
+      {
+        messageId: AI_MESSAGE_ID,
+        resolution: "confirm_sent",
+        providerMessageId: "wamid.CONFIRMED_ID",
+        reason: "confirmed via Meta Business dashboard",
+      },
+    ]);
+  });
+
   it("never calls any AI-send/reserve capability -- structurally cannot send a WhatsApp message", async () => {
     // FakeWorkerRepository's triggerHandover/reserveAiOutboundMessage/
     // finalizeAiOutboundMessage all throw if called at all -- this

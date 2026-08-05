@@ -15,6 +15,7 @@ export const platformBrand: PlatformBrand = {
   tagline: "...",
   websiteUrl: "...",
   supportEmail: "...",
+  supportEmailHref: "mailto:...", // always derived from supportEmail, never set independently
   logoPath: "/branding/logo.svg",
   faviconPath: "/branding/favicon.ico",
   colors: { primary: "...", secondary: "...", accent: "..." },

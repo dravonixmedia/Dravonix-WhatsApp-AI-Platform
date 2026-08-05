@@ -149,6 +149,26 @@ jobs:
         # a mistake wrangler's own --dry-run output can't catch (it doesn't
         # print queue consumer bindings at all). See scripts/verify-wrangler-
         # env-bindings.sh for exactly what's checked.
+        #
+        # DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS=true additionally makes
+        # verify-web-staging-config.sh confirm CLOUDFLARE_API_TOKEN/
+        # CLOUDFLARE_ACCOUNT_ID (already job-level env above) and
+        # NEXT_PUBLIC_SUPABASE_URL/NEXT_PUBLIC_SUPABASE_ANON_KEY (this step's
+        # own env, below -- needed here, not just in the later build step, so
+        # a missing GitHub Environment secret fails before any deploy step
+        # runs) are present -- checked for presence only, never printed. Only
+        # set here, in the real deploy job -- ci.yml's own two calls to this
+        # script never set it and never have these values, by design.
+        # SUPABASE_PROJECT_ID (vars.*, non-secret) is the same GitHub
+        # Environment variable supabase-migration-repair.yml already asserts
+        # against -- reused here so a staging deploy also fails fast if the
+        # environment somehow isn't configured against the confirmed staging
+        # project ref.
+        env:
+          DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS: "true"
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_PROJECT_ID: ${{ vars.SUPABASE_PROJECT_ID }}
         run: |
           for toml in apps/api/wrangler.toml \
                       apps/workers/message-consumer/wrangler.toml \

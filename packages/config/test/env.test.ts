@@ -10,6 +10,13 @@ describe("loadEnv", () => {
     expect(env.RAZORPAY_MODE).toBe("test");
     expect(env.isProduction).toBe(false);
     expect(env.whatsappConfigured).toBe(false);
+    // Already the version every deployed Worker actually uses in staging --
+    // dravonix-whatsapp-ai-platform-staging and dravonixapp-staging have
+    // never set META_GRAPH_API_VERSION and are already sending real
+    // WhatsApp Graph API traffic on this default (see CLOUDFLARE_SETUP.md
+    // §5) -- so leaving it unset for dravonix-dashboard-staging is safe,
+    // not an unverified assumption.
+    expect(env.META_GRAPH_API_VERSION).toBe("v21.0");
   });
 
   it("rejects an invalid APP_ENV value", () => {

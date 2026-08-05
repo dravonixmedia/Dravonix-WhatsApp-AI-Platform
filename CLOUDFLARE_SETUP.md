@@ -148,15 +148,51 @@ other Worker in this repo — a staging deploy cannot collide with production.
 
 ### Required environment variables
 
-| Variable                          | Where it's set                                                     | Browser-exposed? |
-| --------------------------------- | ------------------------------------------------------------------ | ---------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`        | **Build-time only** — the CI job's own `env:` (see below)          | Yes (by design)  |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY`   | **Build-time only** — the CI job's own `env:` (see below)          | Yes (by design)  |
-| `SUPABASE_URL`                    | `wrangler.jsonc` `vars` (non-secret; same value as the public URL) | No               |
-| `SUPABASE_ANON_KEY`               | `wrangler.jsonc` `vars` (non-secret; RLS-protected by design)      | No               |
-| `SUPABASE_SERVICE_ROLE_KEY`       | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`        | **Never**        |
-| `APP_ENV`                         | `wrangler.jsonc` `vars` (already set: `staging` / `production`)    | No               |
-| `PLATFORM_*` (branding, optional) | `wrangler.jsonc` `vars` if overriding the default brand            | No               |
+| Variable                                                 | Where it's set                                                  | Browser-exposed? |
+| -------------------------------------------------------- | --------------------------------------------------------------- | ---------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`                               | **Build-time only** — the CI job's own `env:` (see below)       | Yes (by design)  |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY`                          | **Build-time only** — the CI job's own `env:` (see below)       | Yes (by design)  |
+| `SUPABASE_URL`                                           | `wrangler secret put SUPABASE_URL --env <env>`                  | No               |
+| `SUPABASE_ANON_KEY`                                      | `wrangler secret put SUPABASE_ANON_KEY --env <env>`             | No               |
+| `SUPABASE_SERVICE_ROLE_KEY`                              | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`     | **Never**        |
+| `META_ACCESS_TOKEN`                                      | `wrangler secret put META_ACCESS_TOKEN --env <env>`             | No               |
+| `META_GRAPH_API_VERSION` (optional, defaults to `v21.0`) | `wrangler.jsonc` `vars` if overriding the default               | No               |
+| `APP_ENV`                                                | `wrangler.jsonc` `vars` (already set: `staging` / `production`) | No               |
+| `PLATFORM_*` (branding, optional)                        | `wrangler.jsonc` `vars` if overriding the default brand         | No               |
+
+**`META_ACCESS_TOKEN` is required for the human-reply Server Action
+specifically** (`sendHumanReplyAction`, `apps/web/lib/actions/handover.ts`) —
+it constructs its own `GraphApiWhatsAppProvider` to send a manager/agent's
+typed reply directly to WhatsApp, independent of `apps/api`'s own copy of
+this same credential (a separate Cloudflare account-level secret, on a
+separate Worker — the two are never shared automatically, and provisioning
+one does not provision the other). Diagnosed from a real staging incident:
+this was never listed here, so it was never provisioned for
+`dravonix-dashboard-staging`, and every human-reply attempt threw
+`META_ACCESS_TOKEN is not configured` before ever reserving a message row —
+a fail-fast, no-partial-write failure (confirmed via the hosted database:
+zero `sender_type='human_agent'` rows were ever created despite repeated
+attempts), but one that surfaced to the browser only as Next.js's generic
+redacted Server Components error. Provision this the same way as
+`SUPABASE_SERVICE_ROLE_KEY` below, once per environment.
+
+**`META_GRAPH_API_VERSION` should be left unset — do not add it as a
+Cloudflare binding.** It is genuinely optional: `packages/config/src/env.ts`
+gives it a hard-coded schema default (`v21.0`, asserted by
+`packages/config/test/env.test.ts`), applied whenever the raw environment
+variable is absent, so `env.META_GRAPH_API_VERSION` is never `undefined`.
+This is not a new/unverified assumption — the two existing WhatsApp-sending
+staging Workers, `dravonix-whatsapp-ai-platform-staging` (message-consumer)
+and `dravonixapp-staging` (API), have never set it either and are already
+sending real Graph API traffic on this exact default (confirmed against the
+hosted staging database: outbound AI replies carry real `wamid.…` Meta
+provider message IDs). `packages/whatsapp/test/graphApiProvider.test.ts`
+confirms the resulting base URL is built correctly
+(`https://graph.facebook.com/v21.0`). Only set this explicitly if Meta ever
+deprecates `v21.0` for this app's Graph API calls specifically — and even
+then, update the default in `packages/config/src/env.ts` first so every
+Worker that reads it (apps/web, message-consumer, voice-consumer) stays in
+sync, rather than overriding it per-Worker.
 
 **`SUPABASE_SERVICE_ROLE_KEY`'s scope in this app is deliberately narrow —
 audited, not assumed:** every ordinary dashboard read/write (Leads,
@@ -195,16 +231,123 @@ deploy-preflight time, before any Cloudflare credential is used.
 
 ### One-time setup
 
+All three of `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY`
+are provisioned as Worker secrets, not committed `wrangler.jsonc` `vars` —
+this repo's convention keeps every Supabase connection value (including the
+technically-non-sensitive URL/anon key) out of the committed file entirely,
+so a `git diff` of `wrangler.jsonc` never needs to be Supabase-project-aware.
+
+**Safe sequence for a Worker's first-ever deployment (before it exists at
+all):** `wrangler secret put <NAME> --env <env>` will create and deploy a
+placeholder Worker to attach the secret to if no script has ever been
+uploaded for that name — meaning running `secret put` before the Worker's
+real code has ever been deployed puts an unknown, uncontrolled placeholder
+live at the Worker's public URL, however briefly. Deploying the real
+application code first avoids this entirely: once a real script exists,
+`secret put` only adds the secret binding to a new version of that _same_
+script — it never replaces it. So, for a Worker that doesn't exist yet
+(e.g. `dravonix-dashboard-staging`'s first deployment):
+
+1. **Deploy the real code first, secrets absent.** Run `deploy.yml` with
+   `target_environment: staging` (or the manual equivalent below) with none
+   of the three Worker secrets set yet. The real OpenNext bundle goes live —
+   `GET /api/health` succeeds immediately (it makes no Supabase call by
+   design); every other route 500s until secrets are attached, since
+   `getSupabaseConnectionConfig()` throws before ever reaching Supabase. This
+   is a functional gap, not a security exposure — no secret is read, sent,
+   or logged during it.
+2. **Provision `SUPABASE_URL` and `SUPABASE_ANON_KEY` first:**
+   ```bash
+   cd apps/web
+   npx wrangler secret put SUPABASE_URL --env staging
+   npx wrangler secret put SUPABASE_ANON_KEY --env staging
+   ```
+   These two alone are enough for every ordinary RLS-scoped dashboard read
+   (login, Leads, Conversations, Human Handover) to start working — smoke
+   test the bulk of the app now, **before** the highest-privilege secret
+   below is ever attached.
+3. **Provision `SUPABASE_SERVICE_ROLE_KEY` last:**
+   ```bash
+   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
+   ```
+   This is the one credential that bypasses RLS entirely (see "scope in this
+   app is deliberately narrow" above) — attaching it only once the rest of
+   the deployment is already confirmed healthy minimizes how long it's live
+   on a Worker whose other config might still be in question.
+4. **Provision `META_ACCESS_TOKEN`** (required only for the human-reply
+   Server Action — everything else in the dashboard works without it, which
+   is exactly why its absence was easy to miss during the first deployment):
+   ```bash
+   npx wrangler secret put META_ACCESS_TOKEN --env staging
+   ```
+   Test this specifically before considering the deployment complete:
+   open a `human_active` conversation and send one reply. A missing
+   `META_ACCESS_TOKEN` fails fast, before any message row is reserved (see
+   `apps/web/test/sendHumanReplyGuard.test.ts`) — safe, but easy to miss if
+   only the read-only pages are smoke-tested.
+5. Repeat steps 2–4 for `--env production`, pointed at the production
+   Supabase project and `apps/api`'s production `META_ACCESS_TOKEN` value,
+   once staging is verified.
+
+Paste each secret's value only from the Supabase dashboard while it is
+actively showing the intended project (staging: `lshfkxirfbjwlklqwqnf`) — a
+value copied from the wrong open tab is exactly the mistake this manual step
+exists to guard against, and it isn't detectable by anything downstream
+(the app itself has no way to tell "correct project, wrong key" from
+"correct key, wrong project"). `scripts/verify-web-staging-config.sh`, run
+with `DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS=true` (only set by `deploy.yml`'s
+own deploy job), confirms `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`
+are present before the build step runs, and — for staging — that the
+`SUPABASE_PROJECT_ID` GitHub Environment variable (`vars.SUPABASE_PROJECT_ID`,
+non-secret, the same one `.github/workflows/supabase-migration-repair.yml`
+already asserts against) equals `lshfkxirfbjwlklqwqnf`. It cannot check any
+of the four `wrangler secret put` values above at all — Wrangler gives no
+way to read a secret's value, or even confirm its presence, without full
+Cloudflare authentication — so verifying those four by name only stays a
+manual step:
+
 ```bash
-cd apps/web
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
-# repeat for --env production, pointed at the production Supabase project
+wrangler secret list --env staging
 ```
 
-Non-secret vars (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) can be added directly
-to `wrangler.jsonc`'s `env.staging`/`env.production` `vars` blocks (safe to
-commit — the anon key is RLS-protected by design, and the project URL isn't
-sensitive), or set with `wrangler secret put` too if preferred.
+This prints `[{"name": "SUPABASE_URL", "type": "secret_text"}, ...]` — names
+only, Cloudflare's API has no endpoint that returns a secret's value at all,
+so there is nothing to accidentally expose by running or logging this
+command.
+
+**Failure handling for a first deployment:** if step 1's deploy fails,
+nothing is live yet — fix and retry, no rollback needed. If a `secret put`
+call in steps 2–4 fails partway, the Worker is left with a partial secret
+set — still safe (still throws before any Supabase call, for the same
+reason as step 1), just retry the failed command; `secret put` is
+idempotent by name. `wrangler rollback --name dravonix-dashboard-staging`
+only has a prior version to revert to starting with the Worker's _second_
+real deployment — for this first one, a code-level failure is fixed by
+re-running steps 1 onward, and a wrong-project-secret failure is fixed by
+re-running the specific `secret put` command with the corrected value
+(never a version rollback, since the code itself was never wrong). Full
+teardown (`wrangler delete --name dravonix-dashboard-staging`) is available
+as a last resort but should not be needed for either failure mode above.
+
+**Environment separation is enforced by GitHub's Environment feature, not by
+this workflow's YAML — configure it correctly or staging can silently
+resolve production values:** `deploy.yml`'s `deploy` job already declares
+`environment: ${{ inputs.target_environment }}` (resolves to exactly
+`staging` or `production`, enforced by the `workflow_dispatch` input's own
+`type: choice` enumeration — GitHub rejects any other value before the run
+even starts). GitHub Actions resolves a same-named secret from that job's
+bound Environment first, falling back to a repository-level secret of the
+same name if no environment-scoped one exists. This means: if
+`CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`/`NEXT_PUBLIC_SUPABASE_URL`/
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` are ever configured only as repository-level
+secrets (Settings → Secrets and variables → Actions) instead of
+**environment-scoped** secrets (Settings → Environments → staging → Add
+secret, and separately for production), a staging run and a production run
+would resolve the _same_ value for that secret — with no error from this
+workflow, since a script running inside the job cannot distinguish "this
+came from the staging Environment" from "this came from the repo." Always
+add these four under the **environment**, never only at the repository
+level, and verify **separately** for staging and production.
 
 ### Required manual action — Supabase Auth redirect URLs (NOT yet performed)
 

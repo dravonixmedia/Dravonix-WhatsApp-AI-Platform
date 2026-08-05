@@ -495,6 +495,43 @@ begin
 end;
 $$;
 
+-- Still `service_role` with auth.uid() cleared (the exact context production
+-- uses) -- confirm the reconciled row was updated in place (never duplicated)
+-- and that the supplied provider_message_id was actually persisted, then
+-- confirm a second reconciliation attempt against the now-'sent' row is
+-- rejected the same way the human-agent branch already proved above (lines
+-- 415-424), closing that gap for the AI/service_role branch specifically.
+do $$
+declare
+  v_ai_message_id uuid := 'f0000001-1000-0000-0000-000000000001';
+  v_row_count int;
+  v_provider_message_id text;
+begin
+  select count(*) into v_row_count from messages where id = v_ai_message_id;
+  perform test_assert(
+    'reconciling an AI message updates the existing row in place -- exactly one row exists for this id, never duplicated',
+    v_row_count = 1
+  );
+
+  select provider_message_id into v_provider_message_id from messages where id = v_ai_message_id;
+  perform test_assert(
+    'the provider_message_id supplied to reconcile_outbound_message is persisted on the message row',
+    v_provider_message_id = 'wamid.AI_RECONCILED'
+  );
+
+  begin
+    perform reconcile_outbound_message(v_ai_message_id, 'confirm_sent', null, null);
+    raise exception 'ASSERTION FAILED: an already-reconciled (now sent) AI message must not be reconcilable again';
+  exception
+    when others then
+      if sqlerrm <> 'invalid_status_transition' then
+        raise exception 'ASSERTION FAILED: expected invalid_status_transition but got %', sqlerrm;
+      end if;
+      raise notice 'OK: reconcile_outbound_message rejects a second reconciliation attempt on the same now-sent AI message via the same service_role path production uses';
+  end;
+end;
+$$;
+
 set local role authenticated;
 
 -- ---------------------------------------------------------------------------
