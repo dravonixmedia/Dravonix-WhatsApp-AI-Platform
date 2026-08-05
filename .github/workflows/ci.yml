@@ -48,7 +48,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # apps/web's wrangler (^4.118.0, required by @opennextjs/cloudflare)
+          # refuses to run at all under Node < 22 ("Wrangler requires at
+          # least Node.js v22.0.0") -- verified against the installed
+          # version. apps/api/apps/workers/* still pin wrangler ^3.99.0,
+          # which only requires Node >=16.17.0, so this bump is backward
+          # compatible with every other build in this job.
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
