@@ -1,18 +1,15 @@
+import { redirect } from "next/navigation";
+
+/**
+ * No client-ready billing/subscription system exists yet: this page used to
+ * render a fabricated "Starter (trial) — demo tenant" plan with no real data
+ * behind it. The full subscription system (plans, Razorpay, invoices,
+ * upgrades/downgrades, usage metering) is deferred to a separate branch
+ * (claude/subscriptions-team-management); until then, the honest
+ * "not configured" subscription status lives in Settings. Removed from the
+ * sidebar nav; this route redirects rather than showing a developer
+ * placeholder in case anything still links here.
+ */
 export default function BillingPage() {
-  return (
-    <div>
-      <h1 style={{ fontSize: "1.4rem" }}>Billing</h1>
-      <p className="dvx-muted">
-        Subscription status, invoices, and the one-time implementation charge. This page remains
-        accessible even if the company is suspended, so billing and payment stay available to
-        restore service.
-      </p>
-      <div className="dvx-card" style={{ marginTop: "1rem" }}>
-        <div style={{ fontWeight: 600 }}>Current plan</div>
-        <p className="dvx-muted" style={{ marginTop: "0.25rem" }}>
-          Starter (trial) — demo tenant
-        </p>
-      </div>
-    </div>
-  );
+  redirect("/dashboard/settings");
 }

@@ -11,7 +11,6 @@ import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
 import { GlobalSearch } from "./GlobalSearch.js";
 import {
-  BillingIcon,
   ChevronDownIcon,
   ConversationsIcon,
   HandoverIcon,
@@ -41,10 +40,15 @@ const HANDOVER_NAV_ITEM: NavLinkItem = {
  * Nav is built per-request from the caller's real, permission-derived
  * capabilities -- never a hardcoded email or role string. Knowledge Base is
  * omitted entirely (no client-ready management module exists yet -- see
- * app/dashboard/knowledge/page.tsx); Settings and WhatsApp Connection are
- * included only for roles holding the matching permission, so an agent or
- * viewer never sees a link to a page RLS or the page itself would then have
- * to reject them from.
+ * app/dashboard/knowledge/page.tsx). Billing is also omitted: it has no
+ * client-ready subscription system yet either (its route now redirects to
+ * Settings, which shows an honest "not configured" subscription-status
+ * card instead -- see app/dashboard/billing/page.tsx). Settings is shown to
+ * any role holding at least one of the permissions a Settings section is
+ * gated on (company details, team, or billing), and WhatsApp Connection
+ * only to roles holding its own permission, so an agent or viewer never
+ * sees a link to a page RLS or the page itself would then have to reject
+ * them from.
  */
 export function buildNavItems(
   capabilities: ReturnType<typeof getDashboardCapabilities>,
@@ -53,9 +57,12 @@ export function buildNavItems(
     { href: "/dashboard", label: "Overview", icon: <OverviewIcon /> },
     { href: "/dashboard/conversations", label: "Live Conversations", icon: <ConversationsIcon /> },
     { href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> },
-    { href: "/dashboard/billing", label: "Billing", icon: <BillingIcon /> },
   ];
-  if (capabilities.canManageSettings) {
+  if (
+    capabilities.canManageSettings ||
+    capabilities.canManageTeam ||
+    capabilities.canManageBilling
+  ) {
     items.push({ href: "/dashboard/settings", label: "Settings", icon: <SettingsIcon /> });
   }
   if (capabilities.canManageWhatsapp) {
