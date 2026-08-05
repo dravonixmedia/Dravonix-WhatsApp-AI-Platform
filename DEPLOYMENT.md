@@ -207,6 +207,21 @@ look at _that_ commit's checks, not an old one's.
    per-environment once separate accounts/tokens exist. Add required
    reviewers to the `production` environment so `deploy.yml` pauses for
    approval whenever `target_environment: production` is selected.
+
+   Also add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` as
+   secrets on each environment — **these two must be scoped per-environment,
+   never shared at the repository level**, unlike the two Cloudflare values
+   above: staging and production point at two entirely different Supabase
+   projects (staging is `lshfkxirfbjwlklqwqnf`; see `CLOUDFLARE_SETUP.md`'s
+   resource-name table), and a repository-level secret would make a staging
+   deploy silently build against the production project with no error from
+   this workflow. `scripts/verify-web-staging-config.sh` (run with
+   `DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS=true` inside `deploy.yml`'s own
+   preflight step) confirms these are _present_ before the build step runs,
+   but cannot detect a present-but-wrong-project value — getting the scoping
+   right here is a manual responsibility this preflight cannot substitute
+   for.
+
 4. **Disable Workers Builds' git integration** for `dravonixapp`,
    `dravonix-whatsapp-ai-platform`, and `dravonix-audio` — see "Cloudflare
    Workers Builds still auto-deploying — required manual action" above for

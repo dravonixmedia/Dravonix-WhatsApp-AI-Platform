@@ -148,15 +148,15 @@ other Worker in this repo — a staging deploy cannot collide with production.
 
 ### Required environment variables
 
-| Variable                          | Where it's set                                                     | Browser-exposed? |
-| --------------------------------- | ------------------------------------------------------------------ | ---------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`        | **Build-time only** — the CI job's own `env:` (see below)          | Yes (by design)  |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY`   | **Build-time only** — the CI job's own `env:` (see below)          | Yes (by design)  |
-| `SUPABASE_URL`                    | `wrangler.jsonc` `vars` (non-secret; same value as the public URL) | No               |
-| `SUPABASE_ANON_KEY`               | `wrangler.jsonc` `vars` (non-secret; RLS-protected by design)      | No               |
-| `SUPABASE_SERVICE_ROLE_KEY`       | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`        | **Never**        |
-| `APP_ENV`                         | `wrangler.jsonc` `vars` (already set: `staging` / `production`)    | No               |
-| `PLATFORM_*` (branding, optional) | `wrangler.jsonc` `vars` if overriding the default brand            | No               |
+| Variable                          | Where it's set                                                  | Browser-exposed? |
+| --------------------------------- | --------------------------------------------------------------- | ---------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`        | **Build-time only** — the CI job's own `env:` (see below)       | Yes (by design)  |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY`   | **Build-time only** — the CI job's own `env:` (see below)       | Yes (by design)  |
+| `SUPABASE_URL`                    | `wrangler secret put SUPABASE_URL --env <env>`                  | No               |
+| `SUPABASE_ANON_KEY`               | `wrangler secret put SUPABASE_ANON_KEY --env <env>`             | No               |
+| `SUPABASE_SERVICE_ROLE_KEY`       | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`     | **Never**        |
+| `APP_ENV`                         | `wrangler.jsonc` `vars` (already set: `staging` / `production`) | No               |
+| `PLATFORM_*` (branding, optional) | `wrangler.jsonc` `vars` if overriding the default brand         | No               |
 
 **`SUPABASE_SERVICE_ROLE_KEY`'s scope in this app is deliberately narrow —
 audited, not assumed:** every ordinary dashboard read/write (Leads,
@@ -197,14 +197,45 @@ deploy-preflight time, before any Cloudflare credential is used.
 
 ```bash
 cd apps/web
+npx wrangler secret put SUPABASE_URL --env staging
+npx wrangler secret put SUPABASE_ANON_KEY --env staging
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
-# repeat for --env production, pointed at the production Supabase project
+# repeat all three for --env production, pointed at the production Supabase project
 ```
 
-Non-secret vars (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) can be added directly
-to `wrangler.jsonc`'s `env.staging`/`env.production` `vars` blocks (safe to
-commit — the anon key is RLS-protected by design, and the project URL isn't
-sensitive), or set with `wrangler secret put` too if preferred.
+All three are provisioned as Worker secrets, not committed `wrangler.jsonc`
+`vars` — this repo's convention keeps every Supabase connection value
+(including the technically-non-sensitive URL/anon key) out of the committed
+file entirely, so a `git diff` of `wrangler.jsonc` never needs to be
+Supabase-project-aware. `scripts/verify-web-staging-config.sh`, run with
+`DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS=true` (only set by `deploy.yml`'s own
+deploy job), confirms `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`
+are present before the build step runs — it cannot check the three
+`wrangler secret put` values above, since Wrangler itself gives no way to
+read a secret's value or even confirm its presence without full Cloudflare
+authentication; verifying those three is the one part of this process that
+stays manual (`wrangler secret list --env staging`, name only, right after
+provisioning).
+
+**Environment separation is enforced by GitHub's Environment feature, not by
+this workflow's YAML — configure it correctly or staging can silently
+resolve production values:** `deploy.yml`'s `deploy` job already declares
+`environment: ${{ inputs.target_environment }}` (resolves to exactly
+`staging` or `production`, enforced by the `workflow_dispatch` input's own
+`type: choice` enumeration — GitHub rejects any other value before the run
+even starts). GitHub Actions resolves a same-named secret from that job's
+bound Environment first, falling back to a repository-level secret of the
+same name if no environment-scoped one exists. This means: if
+`CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`/`NEXT_PUBLIC_SUPABASE_URL`/
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` are ever configured only as repository-level
+secrets (Settings → Secrets and variables → Actions) instead of
+**environment-scoped** secrets (Settings → Environments → staging → Add
+secret, and separately for production), a staging run and a production run
+would resolve the _same_ value for that secret — with no error from this
+workflow, since a script running inside the job cannot distinguish "this
+came from the staging Environment" from "this came from the repo." Always
+add these four under the **environment**, never only at the repository
+level, and verify **separately** for staging and production.
 
 ### Required manual action — Supabase Auth redirect URLs (NOT yet performed)
 
