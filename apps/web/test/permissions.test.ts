@@ -111,4 +111,18 @@ describe("getDashboardCapabilities", () => {
       expect(capabilities.canManageAiSettings).toBe(true);
     }
   });
+
+  it("viewer can view AI settings and WhatsApp connection info but cannot manage either", () => {
+    const capabilities = getDashboardCapabilities("viewer");
+    expect(capabilities.canViewAiSettings).toBe(true);
+    expect(capabilities.canManageAiSettings).toBe(false);
+    expect(capabilities.canViewWhatsapp).toBe(true);
+    expect(capabilities.canManageWhatsapp).toBe(false);
+  });
+
+  it("agent holds neither ai_settings.view nor whatsapp.view (no settings/WhatsApp visibility)", () => {
+    const capabilities = getDashboardCapabilities("agent");
+    expect(capabilities.canViewAiSettings).toBe(false);
+    expect(capabilities.canViewWhatsapp).toBe(false);
+  });
 });

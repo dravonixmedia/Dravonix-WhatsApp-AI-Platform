@@ -9,6 +9,8 @@ import {
 } from "../../../../lib/actions/handover.js";
 import { useTenantRealtimeChannel } from "../../../../lib/realtime/useTenantRealtimeChannel.js";
 import { MESSAGE_THREAD_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
+import { OutboundStatusBadge } from "../../badges.js";
+import { MicIcon } from "../../Icons.js";
 import { resolveMessageBodyDisplay } from "./messageBodyDisplay.js";
 import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
 import { mapRealtimeMessageRow } from "./realtimeMessageMapper.js";
@@ -58,7 +60,7 @@ export function ConversationThread({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
-  useTenantRealtimeChannel({
+  const { status: realtimeStatus } = useTenantRealtimeChannel({
     namespace: "conversation-thread",
     scopeId: conversationId,
     accessToken,
@@ -115,14 +117,25 @@ export function ConversationThread({
     <div
       ref={scrollContainerRef}
       style={{
-        marginTop: "1.5rem",
+        flex: 1,
+        minHeight: 0,
+        padding: "1rem 1.25rem",
         display: "flex",
         flexDirection: "column",
         gap: "0.6rem",
-        maxHeight: "55vh",
         overflowY: "auto",
       }}
     >
+      {realtimeStatus === "reconnecting" ? (
+        <span
+          className="dvx-badge dvx-badge--warning"
+          style={{ alignSelf: "center" }}
+          role="status"
+        >
+          Reconnecting…
+        </span>
+      ) : null}
+
       {state.hasMore ? (
         <button
           type="button"
@@ -155,24 +168,36 @@ export function ConversationThread({
           const needsReconcile =
             message.outboundStatus === "delivery_unknown" ||
             message.outboundStatus === "send_failed";
+          const bubbleClass =
+            message.senderType === "customer" || message.senderType === "system"
+              ? message.senderType === "system"
+                ? "dvx-msg-bubble dvx-msg-bubble--system"
+                : "dvx-msg-bubble dvx-msg-bubble--inbound"
+              : message.senderType === "ai"
+                ? "dvx-msg-bubble dvx-msg-bubble--outbound-ai"
+                : "dvx-msg-bubble dvx-msg-bubble--outbound-human";
           return (
             <div
               key={message.id}
-              className="dvx-card"
-              style={{
-                alignSelf: isCustomer ? "flex-start" : "flex-end",
-                maxWidth: "70%",
-              }}
+              className={`dvx-msg-row ${isCustomer ? "dvx-msg-row--inbound" : "dvx-msg-row--outbound"}`}
             >
-              <div className="dvx-muted" style={{ fontSize: "0.7rem", marginBottom: "0.25rem" }}>
-                {message.senderType} · {message.channelType} ·{" "}
-                {new Date(message.createdAt).toLocaleString()}
-                {message.outboundStatus ? ` · ${message.outboundStatus}` : ""}
+              <div className="dvx-msg-meta">
+                <span style={{ textTransform: "capitalize" }}>
+                  {message.senderType === "human_agent" ? "Agent" : message.senderType}
+                </span>
+                {message.channelType === "audio" ? <MicIcon size={11} /> : null}
+                <span>
+                  {new Date(message.createdAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+                <OutboundStatusBadge status={message.outboundStatus} />
               </div>
-              <div>{resolveMessageBodyDisplay(message)}</div>
+              <div className={bubbleClass}>{resolveMessageBodyDisplay(message)}</div>
               {needsReconcile ? (
                 <div style={{ marginTop: "0.4rem" }}>
-                  <p style={{ color: "#b45309", fontSize: "0.75rem", margin: "0 0 0.3rem" }}>
+                  <p style={{ color: "var(--warning)", fontSize: "0.75rem", margin: "0 0 0.3rem" }}>
                     {message.outboundStatus === "delivery_unknown"
                       ? "Delivery could not be confirmed -- manual reconciliation required."
                       : "This send failed."}

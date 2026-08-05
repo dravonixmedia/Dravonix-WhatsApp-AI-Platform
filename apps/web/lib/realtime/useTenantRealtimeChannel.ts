@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { createBrowserSupabaseClient } from "../supabase/client.js";
 import { buildTenantWatchConfig, tenantChannelName, type RealtimeWatch } from "./tenantChannel.js";
@@ -29,12 +29,18 @@ export interface UseTenantRealtimeChannelOptions {
   enabled?: boolean;
 }
 
+export type TenantRealtimeStatus = "connecting" | "connected" | "reconnecting";
+
 /**
  * Opens one tenant-scoped Supabase Realtime channel and keeps it alive:
  * reconnects with bounded exponential backoff on error/close/timeout, and
  * proactively resyncs when the tab is foregrounded or the browser comes back
  * online (a dropped channel doesn't always fire its own error event
  * promptly when a laptop sleeps or a tab is backgrounded).
+ *
+ * Returns the channel's current status purely for UI purposes (e.g. showing
+ * a "Reconnecting..." indicator) -- it never affects reconnect behavior
+ * itself, which is unconditional regardless of whether anything reads it.
  */
 export function useTenantRealtimeChannel({
   namespace,
@@ -44,11 +50,12 @@ export function useTenantRealtimeChannel({
   onChange,
   onStaleReconnect,
   enabled = true,
-}: UseTenantRealtimeChannelOptions): void {
+}: UseTenantRealtimeChannelOptions): { status: TenantRealtimeStatus } {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const onStaleReconnectRef = useRef(onStaleReconnect);
   onStaleReconnectRef.current = onStaleReconnect;
+  const [status, setStatus] = useState<TenantRealtimeStatus>("connecting");
 
   useEffect(() => {
     if (!enabled || !accessToken || !scopeId || watches.length === 0) return;
@@ -81,15 +88,20 @@ export function useTenantRealtimeChannel({
         );
       }
 
-      channel.subscribe((status: string) => {
+      channel.subscribe((channelStatus: string) => {
         if (cancelled) return;
-        if (status === "SUBSCRIBED") {
+        if (channelStatus === "SUBSCRIBED") {
           if (hasConnectedOnce) onStaleReconnectRef.current();
           hasConnectedOnce = true;
           attempt = 0;
+          setStatus("connected");
           return;
         }
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        if (
+          channelStatus === "CHANNEL_ERROR" ||
+          channelStatus === "TIMED_OUT" ||
+          channelStatus === "CLOSED"
+        ) {
           scheduleReconnect();
         }
       });
@@ -98,6 +110,7 @@ export function useTenantRealtimeChannel({
     function scheduleReconnect() {
       if (cancelled) return;
       if (channel) client.removeChannel(channel);
+      setStatus(hasConnectedOnce ? "reconnecting" : "connecting");
       const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)];
       attempt += 1;
       reconnectTimer = setTimeout(connect, delay);
@@ -124,4 +137,6 @@ export function useTenantRealtimeChannel({
       teardown();
     };
   }, [namespace, scopeId, accessToken, enabled, JSON.stringify(watches)]);
+
+  return { status };
 }

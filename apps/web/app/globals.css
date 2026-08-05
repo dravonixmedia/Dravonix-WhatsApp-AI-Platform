@@ -98,10 +98,13 @@
 
 html {
   color-scheme: light dark;
+  height: 100%;
 }
 
 body {
   margin: 0;
+  height: 100%;
+  overflow-x: hidden;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--background-primary);
   color: var(--text-primary);
@@ -399,5 +402,543 @@ a {
   .dvx-nav-toggle-input:checked ~ .dvx-sidebar {
     transform: translateX(0);
     box-shadow: var(--shadow-soft);
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Dashboard shell -- sidebar nav rail (icon + label), top header bar,
+ * avatar, KPI cards, and the shared conversation/handover workspace
+ * (list + detail + metadata panels). Everything here composes the same
+ * tokens defined at the top of this file; no new colors are introduced.
+ * ------------------------------------------------------------------- */
+
+/**
+ * Applied to a page's own root wrapper <div> only when that page's content
+ * (the three-panel workspace) must fill exactly the available height inside
+ * <main> and manage its own internal scrolling -- every other page is left
+ * at its default auto height, so its natural content height triggers
+ * <main>'s own overflow-y:auto instead. This is the single mechanism that
+ * keeps the dashboard to exactly one scrolling region at a time, whichever
+ * kind of page is showing.
+ */
+.dvx-page-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dvx-nav-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.dvx-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.dvx-nav-link svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.dvx-nav-link--active svg {
+  opacity: 1;
+}
+
+.dvx-nav-badge {
+  margin-left: auto;
+  background: var(--danger);
+  color: white;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.22rem 0.4rem;
+  min-width: 1.1rem;
+  text-align: center;
+}
+
+.dvx-topbar {
+  flex-shrink: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--background-primary);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.dvx-topbar-search {
+  flex: 1;
+  max-width: 420px;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-medium);
+  padding: 0.5rem 0.8rem;
+  color: var(--text-muted);
+}
+
+.dvx-topbar-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  outline: none;
+  min-width: 0;
+}
+
+.dvx-topbar-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.dvx-topbar-search input:disabled {
+  cursor: not-allowed;
+}
+
+.dvx-search-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-medium);
+  box-shadow: var(--shadow-soft);
+  z-index: 30;
+  padding: 0.4rem;
+}
+
+.dvx-search-status {
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.dvx-search-status--error {
+  color: var(--danger);
+}
+
+.dvx-search-group + .dvx-search-group {
+  margin-top: 0.4rem;
+  border-top: 1px solid var(--border-default);
+  padding-top: 0.4rem;
+}
+
+.dvx-search-group-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0.3rem 0.5rem;
+}
+
+.dvx-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-small);
+  padding: 0.5rem;
+  cursor: pointer;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.dvx-search-result:hover,
+.dvx-search-result--active {
+  background: var(--surface-hover);
+}
+
+.dvx-search-result span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dvx-topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.dvx-icon-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border-default);
+  background: var(--surface-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.dvx-icon-button:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.dvx-icon-button-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: var(--danger);
+  color: white;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.2rem 0.35rem;
+  min-width: 1rem;
+  text-align: center;
+  border: 2px solid var(--background-primary);
+}
+
+.dvx-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--brand-gradient);
+  color: white;
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.dvx-user-menu {
+  position: relative;
+}
+
+.dvx-user-menu > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dvx-user-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dvx-user-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  min-width: 220px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-medium);
+  box-shadow: var(--shadow-soft);
+  padding: 0.75rem;
+  z-index: 30;
+}
+
+/* ---------------------------------------------------------------------
+ * KPI cards
+ * ------------------------------------------------------------------- */
+
+.dvx-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.dvx-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.dvx-kpi-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-small);
+}
+
+.dvx-kpi-value {
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dvx-kpi-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------------
+ * Conversation / Handover workspace -- shared three-panel layout.
+ * `.dvx-workspace-detail--active` is set by a detail route (a specific
+ * conversation open); its presence flips the mobile visibility rules
+ * below via :has() so no client JS is needed to decide which pane shows.
+ * ------------------------------------------------------------------- */
+
+.dvx-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) 1fr;
+  gap: 1rem;
+  align-items: stretch;
+  flex: 1;
+  min-height: 420px;
+}
+
+.dvx-workspace-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dvx-workspace-list-scroll {
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-right: 0.15rem;
+}
+
+.dvx-workspace-detail {
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+  border-radius: var(--radius-medium);
+}
+
+.dvx-workspace-center {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-medium);
+  overflow: hidden;
+}
+
+.dvx-workspace-right {
+  width: 300px;
+  flex-shrink: 0;
+  margin-left: 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.dvx-conv-row {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border-radius: var(--radius-medium);
+  border: 1px solid transparent;
+  padding: 0.75rem 0.85rem;
+}
+
+.dvx-conv-row:hover {
+  background: var(--surface-hover);
+}
+
+.dvx-conv-row--selected {
+  background: var(--surface-selected);
+  border-color: var(--brand-cyan);
+}
+
+.dvx-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.dvx-filter-tabs {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.dvx-filter-pill {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.dvx-filter-pill--active {
+  background: var(--surface-selected);
+  color: var(--brand-cyan);
+  border-color: var(--brand-cyan);
+}
+
+/* ---------------------------------------------------------------------
+ * Message bubbles
+ * ------------------------------------------------------------------- */
+
+.dvx-msg-row {
+  display: flex;
+  flex-direction: column;
+  max-width: 72%;
+}
+
+.dvx-msg-row--outbound {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.dvx-msg-row--inbound {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.dvx-msg-bubble {
+  border-radius: var(--radius-medium);
+  padding: 0.65rem 0.9rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.dvx-msg-bubble--outbound-ai {
+  background: var(--brand-gradient);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.dvx-msg-bubble--outbound-human {
+  background: var(--brand-blue-strong);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.dvx-msg-bubble--inbound {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-default);
+  border-bottom-left-radius: 4px;
+}
+
+.dvx-msg-bubble--system {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+}
+
+.dvx-msg-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 0.2rem;
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+/* ---------------------------------------------------------------------
+ * Empty / loading states
+ * ------------------------------------------------------------------- */
+
+.dvx-empty-state {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 0.5rem;
+  padding: 2.5rem 1.5rem;
+  color: var(--text-muted);
+}
+
+.dvx-empty-state-icon {
+  opacity: 0.6;
+  margin-bottom: 0.25rem;
+}
+
+/* ---------------------------------------------------------------------
+ * Responsive: tablet narrows the right meta panel to collapsible; mobile
+ * shows exactly one of {list, detail} at a time, driven purely by whether
+ * the detail pane rendered its --active marker (CSS :has(), no JS).
+ * ------------------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .dvx-workspace-right {
+    width: 260px;
+  }
+}
+
+@media (max-width: 980px) {
+  .dvx-workspace {
+    grid-template-columns: minmax(240px, 300px) 1fr;
+  }
+  .dvx-workspace-right {
+    display: none;
+  }
+  .dvx-topbar-search {
+    max-width: 220px;
+  }
+}
+
+@media (max-width: 860px) {
+  .dvx-topbar {
+    padding-left: 4rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .dvx-workspace {
+    display: block;
+  }
+  .dvx-workspace-list {
+    display: flex;
+    height: 100%;
+  }
+  .dvx-workspace-detail {
+    display: none;
+  }
+  .dvx-workspace:has(.dvx-workspace-detail--active) .dvx-workspace-list {
+    display: none;
+  }
+  .dvx-workspace:has(.dvx-workspace-detail--active) .dvx-workspace-detail {
+    display: flex;
+    height: 100%;
+  }
+  .dvx-workspace-center {
+    border-radius: var(--radius-medium);
+  }
+  .dvx-topbar-search {
+    display: none;
   }
 }

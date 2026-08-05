@@ -9,6 +9,10 @@ import {
 } from "../../../lib/repositories/leadsRepository.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
+import { Avatar } from "../Avatar.js";
+import { LeadStageBadge } from "../badges.js";
+import { EmptyState } from "../EmptyState.js";
+import { LeadsIcon } from "../Icons.js";
 
 export const dynamic = "force-dynamic";
 
@@ -121,7 +125,7 @@ export default async function LeadsPage({
           name="search"
           placeholder="Search by name, company, phone, or email"
           defaultValue={params.search}
-          style={{ maxWidth: 320 }}
+          style={{ flex: "1 1 260px", minWidth: 220, maxWidth: 420 }}
         />
         <button className="dvx-button dvx-button--secondary" type="submit">
           Search
@@ -129,34 +133,23 @@ export default async function LeadsPage({
       </form>
 
       <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+        <div className="dvx-filter-tabs">
           {STAGE_FILTERS.map((f) => (
             <Link
               key={f.key}
               href={baseQuery({ stage: f.key })}
-              className="dvx-badge"
-              style={{
-                textDecoration: "none",
-                background: stage === f.key ? "var(--surface-selected)" : "var(--surface-hover)",
-                color: stage === f.key ? "var(--brand-cyan)" : "var(--text-secondary)",
-              }}
+              className={`dvx-filter-pill${stage === f.key ? " dvx-filter-pill--active" : ""}`}
             >
               {f.label}
             </Link>
           ))}
         </div>
-        <div style={{ display: "flex", gap: "0.4rem" }}>
+        <div className="dvx-filter-tabs">
           {ASSIGNMENT_FILTERS.map((f) => (
             <Link
               key={f.key}
               href={baseQuery({ assignment: f.key })}
-              className="dvx-badge"
-              style={{
-                textDecoration: "none",
-                background:
-                  assignment === f.key ? "var(--surface-selected)" : "var(--surface-hover)",
-                color: assignment === f.key ? "var(--brand-cyan)" : "var(--text-secondary)",
-              }}
+              className={`dvx-filter-pill${assignment === f.key ? " dvx-filter-pill--active" : ""}`}
             >
               {f.label}
             </Link>
@@ -166,38 +159,49 @@ export default async function LeadsPage({
 
       {items.length === 0 ? (
         <div className="dvx-card">
-          <p className="dvx-muted" style={{ margin: 0 }}>
-            No leads match these filters.
-          </p>
+          <EmptyState
+            icon={<LeadsIcon size={32} />}
+            title="No leads match these filters"
+            description="Try a different search term, stage, or assignment filter."
+          />
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+        <div className="dvx-card" style={{ padding: 0 }}>
           {items.map((item) => (
             <Link
               key={item.id}
               href={`/dashboard/leads/${item.id}`}
-              className="dvx-card dvx-card--interactive"
-              style={{ display: "block", textDecoration: "none", color: "inherit" }}
+              className="dvx-conv-row dvx-card--interactive"
+              style={{ borderRadius: 0, borderBottom: "1px solid var(--border-default)" }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
-                <div style={{ minWidth: 0 }}>
-                  <span style={{ fontWeight: 600 }}>
-                    {item.customerName ?? item.maskedPhoneNumber ?? "Unknown lead"}
-                  </span>
-                  <p
-                    className="dvx-muted"
-                    style={{
-                      fontSize: "0.85rem",
-                      margin: "0.25rem 0 0",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      maxWidth: 480,
-                    }}
-                  >
-                    {[item.companyName, item.serviceInterest].filter(Boolean).join(" — ") ||
-                      "No details yet"}
-                  </p>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "1rem",
+                  alignItems: "center",
+                }}
+              >
+                <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", minWidth: 0 }}>
+                  <Avatar label={item.displayName} size={34} />
+                  <div style={{ minWidth: 0 }}>
+                    <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>{item.displayName}</span>
+                    <p
+                      className="dvx-muted"
+                      style={{
+                        fontSize: "0.82rem",
+                        margin: "0.2rem 0 0",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        maxWidth: 420,
+                      }}
+                    >
+                      {[item.companyName, item.serviceInterest, item.maskedPhoneNumber]
+                        .filter(Boolean)
+                        .join(" — ") || "No details yet"}
+                    </p>
+                  </div>
                 </div>
                 <div
                   style={{
@@ -211,9 +215,7 @@ export default async function LeadsPage({
                   <span className="dvx-muted" style={{ fontSize: "0.75rem" }}>
                     {relativeTime(item.updatedAt)}
                   </span>
-                  <span className="dvx-badge dvx-badge--neutral">
-                    {item.stage.replace(/_/g, " ")}
-                  </span>
+                  <LeadStageBadge stage={item.stage} />
                 </div>
               </div>
             </Link>
