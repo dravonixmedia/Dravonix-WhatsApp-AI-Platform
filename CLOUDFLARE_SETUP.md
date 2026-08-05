@@ -158,6 +158,21 @@ other Worker in this repo — a staging deploy cannot collide with production.
 | `APP_ENV`                         | `wrangler.jsonc` `vars` (already set: `staging` / `production`)    | No               |
 | `PLATFORM_*` (branding, optional) | `wrangler.jsonc` `vars` if overriding the default brand            | No               |
 
+**`SUPABASE_SERVICE_ROLE_KEY`'s scope in this app is deliberately narrow —
+audited, not assumed:** every ordinary dashboard read/write (Leads,
+Conversations, Human Handover assign/start/pause/close, company switching,
+tenant resolution) runs on the signed-in user's own RLS-scoped session, never
+this key. It is read by exactly one module,
+`apps/web/lib/supabase/serviceRole.ts` (guarded by `import "server-only"`,
+enforced by `apps/web/test/serviceRoleGuard.test.ts`), consumed by exactly
+one Server Action, `reconcileAiOutboundMessageAction` — because migration
+12's `reconcile_outbound_message` RPC only permits reconciling an
+AI-authored message for a caller with **no** `auth.uid()` at all, an
+authenticated dashboard JWT structurally cannot perform that one operation,
+regardless of permissions. If a future change ever needs this key for
+anything else, treat that as a new, separately-audited surface, not an
+extension of this one.
+
 **The build-time vs runtime distinction matters and is easy to get wrong:**
 Next.js inlines every `NEXT_PUBLIC_*` reference into the client JavaScript
 bundle at `next build` time (which `opennextjs-cloudflare build` runs
