@@ -125,7 +125,7 @@ export default async function LeadsPage({
           name="search"
           placeholder="Search by name, company, phone, or email"
           defaultValue={params.search}
-          style={{ maxWidth: 320 }}
+          style={{ flex: "1 1 260px", minWidth: 220, maxWidth: 420 }}
         />
         <button className="dvx-button dvx-button--secondary" type="submit">
           Search
@@ -183,11 +183,9 @@ export default async function LeadsPage({
                 }}
               >
                 <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", minWidth: 0 }}>
-                  <Avatar label={item.customerName ?? item.maskedPhoneNumber ?? "?"} size={34} />
+                  <Avatar label={item.displayName} size={34} />
                   <div style={{ minWidth: 0 }}>
-                    <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>
-                      {item.customerName ?? item.maskedPhoneNumber ?? "Unknown lead"}
-                    </span>
+                    <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>{item.displayName}</span>
                     <p
                       className="dvx-muted"
                       style={{
@@ -199,8 +197,9 @@ export default async function LeadsPage({
                         maxWidth: 420,
                       }}
                     >
-                      {[item.companyName, item.serviceInterest].filter(Boolean).join(" — ") ||
-                        "No details yet"}
+                      {[item.companyName, item.serviceInterest, item.maskedPhoneNumber]
+                        .filter(Boolean)
+                        .join(" — ") || "No details yet"}
                     </p>
                   </div>
                 </div>

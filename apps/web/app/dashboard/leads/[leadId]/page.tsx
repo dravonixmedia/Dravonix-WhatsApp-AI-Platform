@@ -27,16 +27,33 @@ const STAGE_OPTIONS: Array<{ value: LeadStage; label: string }> = [
   { value: "lost", label: "Lost" },
 ];
 
+const NOT_PROVIDED = "Not provided";
+
+/**
+ * Always renders the row -- every field here is a real, always-present
+ * column in the leads schema, so the row itself is never hidden. Only the
+ * per-lead *value* is conditional: a null column value renders the neutral
+ * "Not provided" label rather than being fabricated or silently omitted.
+ */
 function DetailRow({ label, value }: { label: string; value: string | null }) {
-  if (!value) return null;
   return (
     <div style={{ marginBottom: "0.5rem" }}>
       <div className="dvx-muted" style={{ fontSize: "0.75rem" }}>
         {label}
       </div>
-      <div>{value}</div>
+      <div className={value ? undefined : "dvx-muted"}>{value ?? NOT_PROVIDED}</div>
     </div>
   );
+}
+
+function relativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }
 
 export default async function LeadDetailPage({ params }: { params: Promise<{ leadId: string }> }) {
@@ -60,6 +77,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ lea
   if (!lead) notFound();
 
   const events = await listLeadEvents(supabase, session.activeCompanyId, leadId);
+  const latestEvent = events[0] ?? null;
 
   const { data: members } = capabilities.canManageLeads
     ? await supabase
@@ -79,11 +97,9 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ lea
       />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-          <Avatar label={lead.customerName ?? lead.maskedPhoneNumber ?? "?"} size={44} />
+          <Avatar label={lead.displayName} size={44} />
           <div>
-            <h1 style={{ fontSize: "1.3rem", margin: 0 }}>
-              {lead.customerName ?? lead.maskedPhoneNumber ?? "Unknown lead"}
-            </h1>
+            <h1 style={{ fontSize: "1.3rem", margin: 0 }}>{lead.displayName}</h1>
             <div
               style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.3rem" }}
             >
@@ -106,6 +122,13 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ lea
         ) : null}
       </div>
 
+      {latestEvent ? (
+        <p className="dvx-muted" style={{ fontSize: "0.8rem", marginTop: "0.5rem" }}>
+          Latest activity: {latestEvent.eventType.replace(/_/g, " ")} ·{" "}
+          {relativeTime(latestEvent.createdAt)}
+        </p>
+      ) : null}
+
       <div
         style={{
           display: "grid",
@@ -115,17 +138,35 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ lea
         }}
       >
         <div className="dvx-card">
+          <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.6rem" }}>
+            Contact
+          </div>
+          <DetailRow label="Customer name" value={lead.customerName} />
           <DetailRow label="Company" value={lead.companyName} />
-          <DetailRow label="Phone" value={lead.maskedPhoneNumber} />
+          <DetailRow label="WhatsApp number" value={lead.maskedPhoneNumber} />
           <DetailRow label="Email" value={lead.email} />
           <DetailRow label="Location" value={lead.location} />
           <DetailRow label="Branch" value={lead.branch} />
         </div>
         <div className="dvx-card">
+          <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.6rem" }}>
+            Interest
+          </div>
           <DetailRow label="Service interest" value={lead.serviceInterest} />
           <DetailRow label="Product interest" value={lead.productInterest} />
           <DetailRow label="Budget" value={lead.budget} />
           <DetailRow label="Preferred timeline" value={lead.preferredTimeline} />
+        </div>
+        <div className="dvx-card">
+          <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.6rem" }}>
+            Ownership
+          </div>
+          <DetailRow
+            label="Assigned to"
+            value={lead.assignedMemberId ? lead.assignedMemberId.slice(0, 8) : null}
+          />
+          <DetailRow label="Created" value={new Date(lead.createdAt).toLocaleString()} />
+          <DetailRow label="Last updated" value={new Date(lead.updatedAt).toLocaleString()} />
         </div>
       </div>
 

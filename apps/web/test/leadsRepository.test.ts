@@ -68,6 +68,7 @@ const LEAD_ROW = {
   conversation_id: "conv-1",
   created_at: "2026-01-01T00:00:00.000Z",
   updated_at: "2026-01-02T00:00:00.000Z",
+  contacts: { whatsapp_wa_id: "+919812345678", display_name: "Priya", profile_name: "Priya N" },
 };
 
 describe("listLeads", () => {
@@ -102,6 +103,7 @@ describe("listLeads", () => {
       {
         id: "lead-1",
         customerName: "Priya Nair",
+        displayName: "Priya Nair",
         companyName: "Priya Clinic",
         maskedPhoneNumber: "********5678",
         serviceInterest: "Website",
@@ -113,6 +115,23 @@ describe("listLeads", () => {
         updatedAt: "2026-01-02T00:00:00.000Z",
       },
     ]);
+  });
+
+  it("selects the joined contacts columns needed for identity fallback", async () => {
+    const chain = fakeChain({ data: [], count: 0, error: null });
+    const client = fakeSupabaseClient(chain);
+
+    await listLeads(client, {
+      companyId: "company-a",
+      callerMemberId: "member-1",
+      page: 1,
+      pageSize: 25,
+    });
+
+    const selectCall = chain.calls.find((c) => c.method === "select");
+    expect(String(selectCall?.args[0])).toContain(
+      "contacts (whatsapp_wa_id, display_name, profile_name)",
+    );
   });
 
   it("filters by stage when a specific stage is requested", async () => {
@@ -227,6 +246,95 @@ describe("listLeads", () => {
   });
 });
 
+describe("lead identity resolution (resolveLeadDisplayName via listLeads)", () => {
+  async function firstDisplayName(row: Record<string, unknown>): Promise<string> {
+    const chain = fakeChain({ data: [row], count: 1, error: null });
+    const client = fakeSupabaseClient(chain);
+    const { items } = await listLeads(client, {
+      companyId: "company-a",
+      callerMemberId: "member-1",
+      page: 1,
+      pageSize: 25,
+    });
+    return items[0]!.displayName;
+  }
+
+  it("prefers the AI-extracted customer_name when present", async () => {
+    expect(await firstDisplayName(LEAD_ROW)).toBe("Priya Nair");
+  });
+
+  it("falls back to the contact's WhatsApp display_name when customer_name is not yet extracted", async () => {
+    expect(await firstDisplayName({ ...LEAD_ROW, customer_name: null, company_name: null })).toBe(
+      "Priya",
+    );
+  });
+
+  it("falls back to the contact's profile_name when neither customer_name nor display_name exist", async () => {
+    expect(
+      await firstDisplayName({
+        ...LEAD_ROW,
+        customer_name: null,
+        company_name: null,
+        contacts: { ...LEAD_ROW.contacts, display_name: null },
+      }),
+    ).toBe("Priya N");
+  });
+
+  it("falls back to company_name when no personal contact name exists at all", async () => {
+    expect(
+      await firstDisplayName({
+        ...LEAD_ROW,
+        customer_name: null,
+        contacts: { ...LEAD_ROW.contacts, display_name: null, profile_name: null },
+      }),
+    ).toBe("Priya Clinic");
+  });
+
+  it("falls back to the masked WhatsApp phone number when no name or company exists", async () => {
+    expect(
+      await firstDisplayName({
+        ...LEAD_ROW,
+        customer_name: null,
+        company_name: null,
+        contacts: { ...LEAD_ROW.contacts, display_name: null, profile_name: null },
+      }),
+    ).toBe("********5678");
+  });
+
+  it("falls back to the contact's whatsapp_wa_id (not leads.phone_number) when the lead's own phone_number was never extracted", async () => {
+    expect(
+      await firstDisplayName({
+        ...LEAD_ROW,
+        customer_name: null,
+        company_name: null,
+        phone_number: null,
+        contacts: { whatsapp_wa_id: "+919999999999", display_name: null, profile_name: null },
+      }),
+    ).toBe("********9999");
+  });
+
+  it("never shows 'Unknown lead' -- the last-resort fallback is a neutral, non-fabricated label", async () => {
+    expect(
+      await firstDisplayName({
+        ...LEAD_ROW,
+        customer_name: null,
+        company_name: null,
+        phone_number: null,
+        contacts: null,
+      }),
+    ).toBe("Unnamed WhatsApp lead");
+    expect(
+      await firstDisplayName({
+        ...LEAD_ROW,
+        customer_name: null,
+        company_name: null,
+        phone_number: null,
+        contacts: null,
+      }),
+    ).not.toBe("Unknown lead");
+  });
+});
+
 describe("getLead", () => {
   it("always scopes by both companyId and leadId", async () => {
     const chain = fakeChain({ data: LEAD_ROW, error: null });
@@ -255,6 +363,7 @@ describe("getLead", () => {
       id: "lead-1",
       companyId: "company-a",
       customerName: "Priya Nair",
+      displayName: "Priya Nair",
       companyName: "Priya Clinic",
       maskedPhoneNumber: "********5678",
       serviceInterest: "Website",

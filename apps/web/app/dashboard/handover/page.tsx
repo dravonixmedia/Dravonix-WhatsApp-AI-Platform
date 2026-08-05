@@ -41,7 +41,7 @@ export default async function HandoverInboxPage({
     .eq("is_active", true);
 
   return (
-    <div>
+    <div className="dvx-page-fill">
       <RealtimeRefreshBoundary
         namespace="handover-inbox"
         scopeId={session.activeCompanyId}

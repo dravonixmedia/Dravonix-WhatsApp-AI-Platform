@@ -1,18 +1,14 @@
+import { redirect } from "next/navigation";
+
+/**
+ * No client-ready Knowledge Base management module exists yet: the
+ * `packages/knowledge` package only has retrieval (used internally by the
+ * AI reply pipeline) and low-level ingestion utilities (file validation,
+ * text extraction, chunking) -- no list/create/edit/upload/delete surface,
+ * no dashboard repository function, and no Server Action anywhere in
+ * apps/web. Removed from the sidebar nav; this route redirects rather than
+ * showing a developer placeholder in case anything still links here.
+ */
 export default function KnowledgePage() {
-  return (
-    <div>
-      <h1 style={{ fontSize: "1.4rem" }}>Knowledge Base</h1>
-      <p className="dvx-muted">
-        Services, pricing, FAQs, policies, and uploaded documents that ground the chatbot's answers
-        (see <code>packages/knowledge</code> for the retrieval and ingestion pipeline). The demo
-        tenant is pre-seeded with sample services, demo pricing, and an FAQ entry — see
-        <code> supabase/seed/002_demo_tenant.sql</code>.
-      </p>
-      <div className="dvx-card" style={{ marginTop: "1rem" }}>
-        <p className="dvx-muted" style={{ margin: 0 }}>
-          Connect a database to list knowledge sources here.
-        </p>
-      </div>
-    </div>
-  );
+  redirect("/dashboard");
 }

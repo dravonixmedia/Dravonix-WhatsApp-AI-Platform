@@ -30,7 +30,7 @@ export default async function ConversationsPage({
   );
 
   return (
-    <div>
+    <div className="dvx-page-fill">
       <RealtimeRefreshBoundary
         namespace="conversations-list"
         scopeId={session.activeCompanyId}

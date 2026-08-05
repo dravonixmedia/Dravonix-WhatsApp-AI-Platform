@@ -115,7 +115,7 @@ export default async function ConversationDetailPage({
   const displayName = contact?.displayName ?? contact?.maskedPhoneNumber ?? "Customer";
 
   return (
-    <div>
+    <div className="dvx-page-fill">
       <RealtimeRefreshBoundary
         namespace="conversation-detail"
         scopeId={conversationId}

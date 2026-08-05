@@ -98,10 +98,13 @@
 
 html {
   color-scheme: light dark;
+  height: 100%;
 }
 
 body {
   margin: 0;
+  height: 100%;
+  overflow-x: hidden;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--background-primary);
   color: var(--text-primary);
@@ -409,6 +412,22 @@ a {
  * tokens defined at the top of this file; no new colors are introduced.
  * ------------------------------------------------------------------- */
 
+/**
+ * Applied to a page's own root wrapper <div> only when that page's content
+ * (the three-panel workspace) must fill exactly the available height inside
+ * <main> and manage its own internal scrolling -- every other page is left
+ * at its default auto height, so its natural content height triggers
+ * <main>'s own overflow-y:auto instead. This is the single mechanism that
+ * keeps the dashboard to exactly one scrolling region at a time, whichever
+ * kind of page is showing.
+ */
+.dvx-page-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .dvx-nav-rail {
   display: flex;
   flex-direction: column;
@@ -444,8 +463,7 @@ a {
 }
 
 .dvx-topbar {
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
   z-index: 20;
   display: flex;
   align-items: center;
@@ -484,6 +502,71 @@ a {
 
 .dvx-topbar-search input:disabled {
   cursor: not-allowed;
+}
+
+.dvx-search-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-medium);
+  box-shadow: var(--shadow-soft);
+  z-index: 30;
+  padding: 0.4rem;
+}
+
+.dvx-search-status {
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.dvx-search-status--error {
+  color: var(--danger);
+}
+
+.dvx-search-group + .dvx-search-group {
+  margin-top: 0.4rem;
+  border-top: 1px solid var(--border-default);
+  padding-top: 0.4rem;
+}
+
+.dvx-search-group-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0.3rem 0.5rem;
+}
+
+.dvx-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-small);
+  padding: 0.5rem;
+  cursor: pointer;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.dvx-search-result:hover,
+.dvx-search-result--active {
+  background: var(--surface-hover);
+}
+
+.dvx-search-result span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dvx-topbar-actions {
@@ -616,15 +699,16 @@ a {
   display: grid;
   grid-template-columns: minmax(280px, 340px) 1fr;
   gap: 1rem;
-  align-items: start;
-  height: calc(100vh - var(--topbar-height, 65px) - 4rem);
-  min-height: 480px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 420px;
 }
 
 .dvx-workspace-list {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -639,6 +723,7 @@ a {
 
 .dvx-workspace-detail {
   height: 100%;
+  min-width: 0;
   display: flex;
   overflow: hidden;
   border-radius: var(--radius-medium);
@@ -647,6 +732,7 @@ a {
 .dvx-workspace-center {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--surface-primary);
@@ -834,11 +920,10 @@ a {
 @media (max-width: 720px) {
   .dvx-workspace {
     display: block;
-    height: auto;
-    min-height: 0;
   }
   .dvx-workspace-list {
     display: flex;
+    height: 100%;
   }
   .dvx-workspace-detail {
     display: none;
@@ -848,7 +933,7 @@ a {
   }
   .dvx-workspace:has(.dvx-workspace-detail--active) .dvx-workspace-detail {
     display: flex;
-    height: calc(100vh - var(--topbar-height, 65px) - 2rem);
+    height: 100%;
   }
   .dvx-workspace-center {
     border-radius: var(--radius-medium);

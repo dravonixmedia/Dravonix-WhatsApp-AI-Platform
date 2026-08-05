@@ -19,6 +19,8 @@ export interface LeadListFilters {
 export interface LeadListItem {
   id: string;
   customerName: string | null;
+  /** Always non-empty: the best real identity available (see resolveLeadDisplayName), never "Unknown lead" when any real data exists. */
+  displayName: string;
   companyName: string | null;
   maskedPhoneNumber: string | null;
   serviceInterest: string | null;
@@ -76,14 +78,48 @@ interface LeadRow {
   conversation_id: string | null;
   created_at: string;
   updated_at: string;
+  contacts: {
+    whatsapp_wa_id: string;
+    display_name: string | null;
+    profile_name: string | null;
+  } | null;
+}
+
+/**
+ * Resolves the best real identity available for a lead, in the priority
+ * order the dashboard requires: (1) a real contact/customer name -- either
+ * the AI-extracted `leads.customer_name` or the WhatsApp profile's
+ * display_name/profile_name (leads.contact_id is a not-null FK to contacts,
+ * but the AI-extracted fields on `leads` itself are genuinely optional --
+ * see packages/ai/src/schema.ts's leadUpdatesSchema, entirely `.partial()`
+ * -- so a brand-new lead legitimately has no customer_name yet even though
+ * its underlying contact is always known); (2) the company name, when no
+ * personal name exists; (3) the WhatsApp number, preferring the lead's own
+ * phone_number but falling back to the linked contact's whatsapp_wa_id
+ * (always present, unlike the AI-extracted phone_number); (4) a neutral,
+ * non-fabricated fallback. Never returns "Unknown lead" when any of these
+ * real fields exist.
+ */
+function resolveLeadDisplayName(row: LeadRow, maskedPhoneNumber: string | null): string {
+  const contactName = row.contacts?.display_name ?? row.contacts?.profile_name ?? null;
+  return (
+    row.customer_name ??
+    contactName ??
+    row.company_name ??
+    maskedPhoneNumber ??
+    "Unnamed WhatsApp lead"
+  );
 }
 
 function toListItem(row: LeadRow): LeadListItem {
+  const rawPhone = row.phone_number ?? row.contacts?.whatsapp_wa_id ?? null;
+  const maskedPhoneNumber = rawPhone ? maskPhoneNumber(rawPhone) : null;
   return {
     id: row.id,
     customerName: row.customer_name,
+    displayName: resolveLeadDisplayName(row, maskedPhoneNumber),
     companyName: row.company_name,
-    maskedPhoneNumber: row.phone_number ? maskPhoneNumber(row.phone_number) : null,
+    maskedPhoneNumber,
     serviceInterest: row.service_interest,
     stage: row.stage,
     score: row.score,
@@ -93,6 +129,11 @@ function toListItem(row: LeadRow): LeadListItem {
     updatedAt: row.updated_at,
   };
 }
+
+const LEAD_SELECT_COLUMNS = `id, company_id, customer_name, company_name, phone_number, service_interest,
+       product_interest, budget, preferred_timeline, email, location, branch, notes,
+       source, score, stage, assigned_member_id, conversation_id, created_at, updated_at,
+       contacts (whatsapp_wa_id, display_name, profile_name)`;
 
 /**
  * Tenant-scoped, paginated, searchable leads list for /dashboard/leads. RLS
@@ -106,12 +147,7 @@ export async function listLeads(
 ): Promise<LeadListPage> {
   let query = client
     .from("leads")
-    .select(
-      `id, company_id, customer_name, company_name, phone_number, service_interest,
-       product_interest, budget, preferred_timeline, email, location, branch, notes,
-       source, score, stage, assigned_member_id, conversation_id, created_at, updated_at`,
-      { count: "exact" },
-    )
+    .select(LEAD_SELECT_COLUMNS, { count: "exact" })
     .eq("company_id", filters.companyId);
 
   if (filters.search && filters.search.trim().length > 0) {
@@ -153,11 +189,7 @@ export async function getLead(
 ): Promise<LeadDetail | null> {
   const { data, error } = await client
     .from("leads")
-    .select(
-      `id, company_id, customer_name, company_name, phone_number, service_interest,
-       product_interest, budget, preferred_timeline, email, location, branch, notes,
-       source, score, stage, assigned_member_id, conversation_id, created_at, updated_at`,
-    )
+    .select(LEAD_SELECT_COLUMNS)
     .eq("company_id", companyId)
     .eq("id", leadId)
     .maybeSingle();

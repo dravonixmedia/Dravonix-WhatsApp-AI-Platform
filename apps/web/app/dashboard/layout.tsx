@@ -2,21 +2,22 @@ import { countHandoverBadge, SupabaseHandoverRepository } from "@dravonix/handov
 import Link from "next/link";
 import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
+import { getDashboardCapabilities } from "../../lib/permissions.js";
 import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
+import { GlobalSearch } from "./GlobalSearch.js";
 import {
   BellIcon,
   BillingIcon,
   ChevronDownIcon,
   ConversationsIcon,
   HandoverIcon,
-  KnowledgeIcon,
   LeadsIcon,
   OverviewIcon,
-  SearchIcon,
   SettingsIcon,
+  WhatsAppIcon,
 } from "./Icons.js";
 import { NavLinks, type NavLinkItem } from "./NavLinks.js";
 
@@ -28,20 +29,42 @@ import { NavLinks, type NavLinkItem } from "./NavLinks.js";
 // sets real provider secrets by design -- see .github/workflows/ci.yml).
 export const dynamic = "force-dynamic";
 
-const NAV_ITEMS: NavLinkItem[] = [
-  { href: "/dashboard", label: "Overview", icon: <OverviewIcon /> },
-  { href: "/dashboard/conversations", label: "Live Conversations", icon: <ConversationsIcon /> },
-  { href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> },
-  { href: "/dashboard/knowledge", label: "Knowledge Base", icon: <KnowledgeIcon /> },
-  { href: "/dashboard/billing", label: "Billing", icon: <BillingIcon /> },
-  { href: "/dashboard/settings", label: "Settings", icon: <SettingsIcon /> },
-];
-
 const HANDOVER_NAV_ITEM: NavLinkItem = {
   href: "/dashboard/handover",
   label: "Human Handover",
   icon: <HandoverIcon />,
 };
+
+/**
+ * Nav is built per-request from the caller's real, permission-derived
+ * capabilities -- never a hardcoded email or role string. Knowledge Base is
+ * omitted entirely (no client-ready management module exists yet -- see
+ * app/dashboard/knowledge/page.tsx); Settings and WhatsApp Connection are
+ * included only for roles holding the matching permission, so an agent or
+ * viewer never sees a link to a page RLS or the page itself would then have
+ * to reject them from.
+ */
+export function buildNavItems(
+  capabilities: ReturnType<typeof getDashboardCapabilities>,
+): NavLinkItem[] {
+  const items: NavLinkItem[] = [
+    { href: "/dashboard", label: "Overview", icon: <OverviewIcon /> },
+    { href: "/dashboard/conversations", label: "Live Conversations", icon: <ConversationsIcon /> },
+    { href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> },
+    { href: "/dashboard/billing", label: "Billing", icon: <BillingIcon /> },
+  ];
+  if (capabilities.canManageSettings) {
+    items.push({ href: "/dashboard/settings", label: "Settings", icon: <SettingsIcon /> });
+  }
+  if (capabilities.canManageWhatsapp) {
+    items.push({
+      href: "/dashboard/settings/whatsapp",
+      label: "WhatsApp Connection",
+      icon: <WhatsAppIcon size={18} />,
+    });
+  }
+  return items;
+}
 
 const ROLE_LABELS: Record<string, string> = {
   company_owner: "Owner",
@@ -57,7 +80,7 @@ function NoCompanyAccessPage() {
   return (
     <main
       style={{
-        minHeight: "100vh",
+        minHeight: "100dvh",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -96,6 +119,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
     new SupabaseHandoverRepository(supabase),
     session.activeCompanyId,
   );
+  const capabilities = getDashboardCapabilities(session.activeRole);
+  const navItems = buildNavItems(capabilities);
 
   const roleLabel = ROLE_LABELS[session.activeRole] ?? session.activeRole;
   const activeCompanyName =
@@ -104,7 +129,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     "";
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh" }}>
+    <div style={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
       <input
         type="checkbox"
         id="dvx-nav-toggle"
@@ -123,6 +148,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
         style={{
           width: 240,
           flexShrink: 0,
+          height: "100%",
+          overflowY: "auto",
           background: "var(--surface-elevated)",
           borderRight: "1px solid var(--border-default)",
           padding: "1.25rem 1rem",
@@ -161,7 +188,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </div>
 
         <NavLinks
-          items={NAV_ITEMS}
+          items={navItems}
           handover={HANDOVER_NAV_ITEM}
           handoverBadgeCount={handoverBadgeCount}
         />
@@ -198,18 +225,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </div>
       </aside>
 
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
         <header className="dvx-topbar">
-          <div className="dvx-topbar-search">
-            <SearchIcon />
-            <input
-              type="search"
-              placeholder="Search conversations, leads..."
-              disabled
-              aria-label="Dashboard search (coming soon)"
-              title="Global search isn't available yet -- use the search fields on the Live Conversations and Leads pages."
-            />
-          </div>
+          <GlobalSearch />
 
           <div className="dvx-topbar-actions">
             {session.memberships.length > 1 ? (
@@ -290,7 +318,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
           </div>
         </header>
 
-        <main id="dvx-main-content" style={{ flex: 1, padding: "1.5rem", minWidth: 0 }}>
+        <main
+          id="dvx-main-content"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            padding: "1.5rem",
+            display: "flex",
+            flexDirection: "column",
+            overflowY: "auto",
+            overflowX: "hidden",
+          }}
+        >
           {children}
         </main>
       </div>
