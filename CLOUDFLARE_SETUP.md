@@ -176,6 +176,24 @@ attempts), but one that surfaced to the browser only as Next.js's generic
 redacted Server Components error. Provision this the same way as
 `SUPABASE_SERVICE_ROLE_KEY` below, once per environment.
 
+**`META_GRAPH_API_VERSION` should be left unset — do not add it as a
+Cloudflare binding.** It is genuinely optional: `packages/config/src/env.ts`
+gives it a hard-coded schema default (`v21.0`, asserted by
+`packages/config/test/env.test.ts`), applied whenever the raw environment
+variable is absent, so `env.META_GRAPH_API_VERSION` is never `undefined`.
+This is not a new/unverified assumption — the two existing WhatsApp-sending
+staging Workers, `dravonix-whatsapp-ai-platform-staging` (message-consumer)
+and `dravonixapp-staging` (API), have never set it either and are already
+sending real Graph API traffic on this exact default (confirmed against the
+hosted staging database: outbound AI replies carry real `wamid.…` Meta
+provider message IDs). `packages/whatsapp/test/graphApiProvider.test.ts`
+confirms the resulting base URL is built correctly
+(`https://graph.facebook.com/v21.0`). Only set this explicitly if Meta ever
+deprecates `v21.0` for this app's Graph API calls specifically — and even
+then, update the default in `packages/config/src/env.ts` first so every
+Worker that reads it (apps/web, message-consumer, voice-consumer) stays in
+sync, rather than overriding it per-Worker.
+
 **`SUPABASE_SERVICE_ROLE_KEY`'s scope in this app is deliberately narrow —
 audited, not assumed:** every ordinary dashboard read/write (Leads,
 Conversations, Human Handover assign/start/pause/close, company switching,
