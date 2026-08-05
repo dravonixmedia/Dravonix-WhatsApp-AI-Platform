@@ -9,6 +9,7 @@ import {
 } from "../../../../lib/actions/handover.js";
 import { useTenantRealtimeChannel } from "../../../../lib/realtime/useTenantRealtimeChannel.js";
 import { MESSAGE_THREAD_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
+import { resolveMessageBodyDisplay } from "./messageBodyDisplay.js";
 import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
 import { mapRealtimeMessageRow } from "./realtimeMessageMapper.js";
 import {
@@ -168,7 +169,7 @@ export function ConversationThread({
                 {new Date(message.createdAt).toLocaleString()}
                 {message.outboundStatus ? ` · ${message.outboundStatus}` : ""}
               </div>
-              <div>{message.body}</div>
+              <div>{resolveMessageBodyDisplay(message)}</div>
               {needsReconcile ? (
                 <div style={{ marginTop: "0.4rem" }}>
                   <p style={{ color: "#b45309", fontSize: "0.75rem", margin: "0 0 0.3rem" }}>

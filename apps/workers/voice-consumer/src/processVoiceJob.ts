@@ -132,10 +132,16 @@ async function sendTextNotice(
  * WhatsApp -> store it -> transcribe -> (same AI pipeline as text messages) ->
  * resolve reply mode -> reply with text and/or synthesized voice.
  *
- * Mirrors apps/workers/message-consumer/src/processMessageJob.ts's structure
- * and enforcement rules (collaborative ai_mode gating, entitlement checks
- * before every paid-provider call, reserve/claim/finalize outbound lifecycle)
- * so voice and text messages behave consistently.
+ * Mirrors apps/workers/message-consumer/src/processMessageJob.ts's
+ * enforcement rules (entitlement checks before every paid-provider call,
+ * reserve/claim/finalize outbound lifecycle) so voice and text messages
+ * behave consistently -- with one deliberate difference: unlike text
+ * messages (whose inbound row is already fully written by the webhook
+ * handler before this function ever runs), download/storage/transcription
+ * for a voice note happen *inside* this function, so the collaborative
+ * ai_mode gate is applied only to the AI-reply half of this pipeline
+ * (knowledge retrieval onward), not to ingestion/transcription -- a human
+ * agent must be able to see the transcript regardless of ai_mode.
  */
 export async function processVoiceJob(
   deps: VoiceConsumerDeps,
@@ -146,14 +152,6 @@ export async function processVoiceJob(
     conversationId: payload.conversationId,
   });
   const context = await deps.repo.loadConversationContext(payload.conversationId);
-
-  if (!isAiReplyAllowed(context.conversationState, context.aiMode)) {
-    log.info("Skipping AI reply: suppressed by conversation state or ai_mode", {
-      state: context.conversationState,
-      aiMode: context.aiMode,
-    });
-    return;
-  }
 
   try {
     await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "speech_to_text");
@@ -254,6 +252,27 @@ export async function processVoiceJob(
     detectedLanguage: transcription.detectedLanguageCode,
     languageConfidence: transcription.confidence,
   });
+
+  // Media download, storage, and transcription above always run, regardless
+  // of ai_mode -- a human agent must be able to see what the customer said
+  // even while AI is paused (Human Handover Inbox final plan section 5: AI
+  // being paused stops *replies*, never ingestion). Everything from here
+  // down -- the empty-transcript notice/escalation, and the full knowledge
+  // retrieval -> Claude -> WhatsApp reply pipeline -- is the actual AI-reply
+  // path, so it's the one gated by isAiReplyAllowed. Moved here (from
+  // immediately after loadConversationContext) after a staging incident
+  // where the old placement skipped the transcript entirely for every voice
+  // note received while ai_mode='paused'.
+  if (!isAiReplyAllowed(context.conversationState, context.aiMode)) {
+    log.info(
+      "Skipping AI reply: suppressed by conversation state or ai_mode (transcript already recorded)",
+      {
+        state: context.conversationState,
+        aiMode: context.aiMode,
+      },
+    );
+    return;
+  }
 
   if (!transcription.text.trim()) {
     const diagnostics = {

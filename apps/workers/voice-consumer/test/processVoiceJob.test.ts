@@ -337,7 +337,12 @@ describe("processVoiceJob", () => {
       expect(aiProvider.calls).toHaveLength(1);
     });
 
-    it("suppresses voice processing whenever ai_mode is paused, regardless of conversation state", async () => {
+    it("still downloads, stores, and transcribes voice notes when ai_mode is paused, but suppresses the AI reply", async () => {
+      // Staging incident (2026-08-05): the ai_mode gate used to sit before
+      // media download/storage/transcription, so a paused conversation lost
+      // the customer's voice note entirely -- the dashboard showed an empty
+      // audio card with no transcript. ai_mode must only gate the AI-reply
+      // half of this pipeline (final plan section 5), never ingestion.
       repo.context = baseConversationContext({
         conversationState: "human_active",
         aiMode: "paused",
@@ -346,8 +351,36 @@ describe("processVoiceJob", () => {
 
       await processVoiceJob(deps, makePayload());
 
-      expect(repo.recordedInboundAudio).toHaveLength(0);
+      expect(repo.recordedInboundAudio).toHaveLength(1);
+      expect(repo.recordedTranscriptions).toHaveLength(1);
       expect(aiProvider.calls).toHaveLength(0);
+      expect(whatsappProvider.sentText).toHaveLength(0);
+      expect(whatsappProvider.sentAudio).toHaveLength(0);
+      expect(handoverRepo.handoverCalls).toHaveLength(0);
+    });
+
+    it("does not re-run transcription or generate an AI reply on a redelivery received while ai_mode is paused", async () => {
+      repo.context = baseConversationContext({
+        conversationState: "human_active",
+        aiMode: "paused",
+      });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+      await processVoiceJob(deps, makePayload()); // redelivery of the same queue message
+
+      // Message-ID deduplication is a property of the queue/repository layer,
+      // not this pipeline (recordInboundAudio/recordTranscription are called
+      // once per delivery) -- this test documents and locks in that current
+      // contract for the paused-AI path specifically, so a future regression
+      // here is caught even though the underlying dedup guarantee lives
+      // elsewhere (see supabaseVoiceConsumerRepository for the persistence
+      // layer's own idempotency behaviour).
+      expect(repo.recordedInboundAudio).toHaveLength(2);
+      expect(repo.recordedTranscriptions).toHaveLength(2);
+      expect(aiProvider.calls).toHaveLength(0);
+      expect(whatsappProvider.sentText).toHaveLength(0);
+      expect(whatsappProvider.sentAudio).toHaveLength(0);
     });
   });
 
