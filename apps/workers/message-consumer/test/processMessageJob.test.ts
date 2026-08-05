@@ -351,8 +351,8 @@ describe("processMessageJob", () => {
     aiProvider.respond = () =>
       JSON.stringify({
         answer:
-          "We're unable to listen to or transcribe voice messages on our end. Our team will also " +
-          "follow up with you shortly. In the meantime, we offer website development and AI automation.",
+          "We're unable to listen to or transcribe voice messages on our end. " +
+          "In the meantime, we offer website development and AI automation.",
         language: "en",
         intent: "general_enquiry",
         confidence: 0.9,
@@ -372,9 +372,108 @@ describe("processMessageJob", () => {
 
     const sentBody = whatsappProvider.sentText[0]?.body ?? "";
     expect(sentBody).not.toMatch(/unable to (listen|transcribe)/i);
-    expect(sentBody).not.toMatch(/follow up/i);
 
     expect(handoverRepo.handoverCalls).toHaveLength(0);
+  });
+
+  describe("unauthorized human-follow-up promise (2026-08-05 staging incident, packages/ai/src/safety.ts)", () => {
+    function respondWithFollowUpPromise(answer: string) {
+      aiProvider.respond = () =>
+        JSON.stringify({
+          answer,
+          language: "en",
+          intent: "general_enquiry",
+          confidence: 0.9,
+          replyMode: "auto",
+          leadUpdates: null,
+          requiresHuman: false,
+          handoverReason: null,
+          knowledgeSourceIds: [],
+          internalNotes: null,
+        });
+    }
+
+    it("persists a handover request when the AI promises the team will contact the customer, before confirming it in the reply", async () => {
+      respondWithFollowUpPromise("Sure, oru second -- our team will also contact you shortly.");
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload());
+
+      expect(handoverRepo.handoverCalls).toHaveLength(1);
+      expect(handoverRepo.handoverCalls[0]).toMatchObject({
+        reason: "AI reply promised human/team follow-up",
+        sourceMessageId: "msg-1",
+        sourceType: "text",
+      });
+      // Escalation happens before the reply is sent (message-consumer calls
+      // triggerHandoverAtomic ahead of sendAiOutboundMessage whenever
+      // requiresHuman is true) -- the confirmation the customer receives is
+      // never an unfulfilled promise, since the handover is already durably
+      // persisted by the time it goes out.
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+
+    it("persists a handover request for a Malayalam-English meeting-arrangement request", async () => {
+      respondWithFollowUpPromise("sure, oru meeting arrange cheyyam, time njan fix cheyyam");
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload());
+
+      expect(handoverRepo.handoverCalls).toHaveLength(1);
+      expect(handoverRepo.handoverCalls[0]).toMatchObject({
+        reason: "AI reply promised human/team follow-up",
+        sourceMessageId: "msg-1",
+        sourceType: "text",
+      });
+    });
+
+    it("does not duplicate the handover request on a simulated redelivery of the same inbound message", async () => {
+      respondWithFollowUpPromise("Our team will also contact you shortly.");
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload());
+      await processMessageJob(deps, makePayload()); // redelivery of the same queue message
+
+      // triggerHandover is called again (it durably no-ops on a duplicate
+      // source_message_id via handover_events' unique constraint, verified
+      // in supabase/tests/rls_handover.sql) but never produces a second
+      // WhatsApp send.
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+
+    it("does not create a conflicting second handover request when the conversation is already human_active", async () => {
+      repo.context = baseConversationContext({
+        conversationState: "human_active",
+        aiMode: "active",
+      });
+      respondWithFollowUpPromise("Our team will also contact you shortly.");
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload());
+
+      // triggerHandoverAtomic is still called (it's the single trusted entry
+      // point for every escalation signal) -- the underlying RPC is what
+      // durably avoids re-transitioning/re-notifying a conversation that
+      // isn't currently ai_active, per the frozen handover lifecycle
+      // contract (packages/handover's trigger_handover behavior, unchanged
+      // by this fix).
+      expect(handoverRepo.handoverCalls).toHaveLength(1);
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+
+    it("never sends the reply when handover persistence fails -- no unfulfilled promise reaches the customer", async () => {
+      respondWithFollowUpPromise("Our team will also contact you shortly.");
+      handoverRepo.triggerHandover = async () => {
+        throw new Error("simulated database failure");
+      };
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await expect(processMessageJob(deps, makePayload())).rejects.toThrow(
+        "simulated database failure",
+      );
+
+      expect(whatsappProvider.sentText).toHaveLength(0);
+    });
   });
 
   it("applies lead updates extracted from the AI response", async () => {

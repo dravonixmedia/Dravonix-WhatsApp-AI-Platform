@@ -2,6 +2,7 @@ import Link from "next/link";
 import { platformBrand } from "@dravonix/config";
 import { listConversations } from "../../lib/repositories/conversationsRepository.js";
 import { listLeads } from "../../lib/repositories/leadsRepository.js";
+import { loadNotificationSummary } from "../../lib/repositories/notificationsRepository.js";
 import { getDashboardSession } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 import { Avatar } from "./Avatar.js";
@@ -25,9 +26,20 @@ function relativeTime(iso: string | null): string {
 
 interface OverviewCounts {
   activeConversations: number;
-  handoverRequests: number;
+  /** Conversations currently awaiting a human response/assignment (handover_requested or queued_for_agent) -- NOT including conversations a human is already actively assisting (see activeHumanAssistance). */
+  pendingHandoverRequests: number;
+  /** Conversations currently in the human_active state -- a human is actively assisting right now. Kept as a distinct metric from pendingHandoverRequests so "still waiting" and "being worked on" are never conflated. */
+  activeHumanAssistance: number;
   aiPaused: number;
+  /** Pending or active handovers without a valid assignee, per the existing lifecycle contract (assigned_member_id is always set once a conversation reaches human_active, so in practice this only ever matches pending states). */
   unassignedHandovers: number;
+  /**
+   * Real unread INBOUND CUSTOMER MESSAGE total (not a conversation count --
+   * see lib/repositories/notificationsRepository.ts's loadNotificationSummary,
+   * the same function backing the notification bell badge) across every
+   * open conversation in this company.
+   */
+  unreadCustomerMessages: number;
   recentLeads: number | null;
 }
 
@@ -35,46 +47,58 @@ async function loadOverviewCounts(companyId: string): Promise<OverviewCounts> {
   const supabase = await createServerSupabaseClient();
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Every query below is a tenant-scoped COUNT (head: true -- no rows
-  // transferred), never a full-row fetch; RLS additionally enforces the
-  // company_id scoping server-side regardless of this filter.
-  const [active, handovers, paused, unassigned, leads] = await Promise.all([
-    supabase
-      .from("conversations")
-      .select("id", { count: "exact", head: true })
-      .eq("company_id", companyId)
-      .neq("state", "closed"),
-    supabase
-      .from("conversations")
-      .select("id", { count: "exact", head: true })
-      .eq("company_id", companyId)
-      .in("state", ["handover_requested", "queued_for_agent"]),
-    supabase
-      .from("conversations")
-      .select("id", { count: "exact", head: true })
-      .eq("company_id", companyId)
-      .eq("ai_mode", "paused"),
-    supabase
-      .from("conversations")
-      .select("id", { count: "exact", head: true })
-      .eq("company_id", companyId)
-      .eq("state", "handover_requested")
-      .is("assigned_member_id", null),
-    // leads.view is enforced by RLS -- a role without it gets a
-    // permission-denied error here, treated as "omit this metric" rather
-    // than surfacing a raw database error on the Overview page.
-    supabase
-      .from("leads")
-      .select("id", { count: "exact", head: true })
-      .eq("company_id", companyId)
-      .gte("created_at", sevenDaysAgo),
-  ]);
+  // Every conversations/leads query below is a tenant-scoped COUNT (head:
+  // true -- no rows transferred), never a full-row fetch; RLS additionally
+  // enforces the company_id scoping server-side regardless of this filter.
+  // Each of the five conversation-state metrics below counts a disjoint
+  // condition (pending vs. human_active vs. ai_paused vs. unassigned), so no
+  // single conversation is ever double-counted within one metric.
+  const [active, pending, activeHuman, paused, unassigned, leads, notificationSummary] =
+    await Promise.all([
+      supabase
+        .from("conversations")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .neq("state", "closed"),
+      supabase
+        .from("conversations")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .in("state", ["handover_requested", "queued_for_agent"]),
+      supabase
+        .from("conversations")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .eq("state", "human_active"),
+      supabase
+        .from("conversations")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .eq("ai_mode", "paused"),
+      supabase
+        .from("conversations")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .in("state", ["handover_requested", "queued_for_agent"])
+        .is("assigned_member_id", null),
+      // leads.view is enforced by RLS -- a role without it gets a
+      // permission-denied error here, treated as "omit this metric" rather
+      // than surfacing a raw database error on the Overview page.
+      supabase
+        .from("leads")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .gte("created_at", sevenDaysAgo),
+      loadNotificationSummary(supabase, companyId),
+    ]);
 
   return {
     activeConversations: active.count ?? 0,
-    handoverRequests: handovers.count ?? 0,
+    pendingHandoverRequests: pending.count ?? 0,
+    activeHumanAssistance: activeHuman.count ?? 0,
     aiPaused: paused.count ?? 0,
     unassignedHandovers: unassigned.count ?? 0,
+    unreadCustomerMessages: notificationSummary.totalUnreadCustomerMessages,
     recentLeads: leads.error ? null : (leads.count ?? 0),
   };
 }
@@ -117,24 +141,38 @@ export default async function DashboardOverviewPage() {
       tone: "brand",
     },
     {
-      label: "Handover requests",
-      value: counts.handoverRequests,
+      label: "Pending handover requests",
+      value: counts.pendingHandoverRequests,
       href: "/dashboard/handover",
       icon: <HandoverIcon />,
       tone: "info",
     },
     {
-      label: "AI-paused conversations",
-      value: counts.aiPaused,
-      href: "/dashboard/conversations?aiMode=paused",
-      icon: <PauseIcon />,
-      tone: "warning",
+      label: "Active human assistance",
+      value: counts.activeHumanAssistance,
+      href: "/dashboard/handover",
+      icon: <HandoverIcon />,
+      tone: "brand",
     },
     {
       label: "Unassigned handovers",
       value: counts.unassignedHandovers,
       href: "/dashboard/handover?filter=unassigned",
       icon: <HandoverIcon />,
+      tone: "warning",
+    },
+    {
+      label: "Unread customer messages",
+      value: counts.unreadCustomerMessages,
+      href: "/dashboard/conversations",
+      icon: <ConversationsIcon />,
+      tone: "warning",
+    },
+    {
+      label: "AI-paused conversations",
+      value: counts.aiPaused,
+      href: "/dashboard/conversations?aiMode=paused",
+      icon: <PauseIcon />,
       tone: "warning",
     },
   ];
@@ -149,7 +187,10 @@ export default async function DashboardOverviewPage() {
   }
 
   const needsAttention =
-    counts.handoverRequests > 0 || counts.aiPaused > 0 || counts.unassignedHandovers > 0;
+    counts.pendingHandoverRequests > 0 ||
+    counts.aiPaused > 0 ||
+    counts.unassignedHandovers > 0 ||
+    counts.unreadCustomerMessages > 0;
 
   return (
     <div>
@@ -175,8 +216,14 @@ export default async function DashboardOverviewPage() {
         <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
           <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Needs attention</div>
           <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
-            {counts.handoverRequests > 0
-              ? `${counts.handoverRequests} conversation(s) requesting human handover. `
+            {counts.pendingHandoverRequests > 0
+              ? `${counts.pendingHandoverRequests} conversation(s) awaiting a human response. `
+              : ""}
+            {counts.unassignedHandovers > 0
+              ? `${counts.unassignedHandovers} handover(s) with no team member assigned. `
+              : ""}
+            {counts.unreadCustomerMessages > 0
+              ? `${counts.unreadCustomerMessages} unread customer message(s). `
               : ""}
             {counts.aiPaused > 0 ? `${counts.aiPaused} conversation(s) with AI paused. ` : ""}
             <Link href="/dashboard/handover">Open Human Handover Inbox →</Link>

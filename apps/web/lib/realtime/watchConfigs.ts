@@ -57,6 +57,27 @@ export const MESSAGE_THREAD_WATCHES: RealtimeWatch[] = [
   { table: "messages", filterColumn: "conversation_id", event: "UPDATE" },
 ];
 
+/**
+ * Dashboard shell (notification bell badge + Human Handover nav badge) --
+ * mounted once in app/dashboard/layout.tsx, since router.refresh() re-runs
+ * the whole current route segment tree (layout AND page), this keeps the
+ * bell/nav badge live on every /dashboard/* route -- including ones with no
+ * list-specific boundary of their own (Overview, Settings, Billing) --
+ * without duplicating any of those pages' own narrower watch lists.
+ * Deliberately the same shape as HANDOVER_INBOX_WATCHES plus a
+ * messages INSERT watch (the bell's unread-customer-message count depends
+ * on new inbound messages, which HANDOVER_INBOX_WATCHES alone doesn't
+ * cover).
+ */
+export const DASHBOARD_SHELL_WATCHES: RealtimeWatch[] = [
+  { table: "conversations", filterColumn: "company_id", event: "INSERT" },
+  { table: "conversations", filterColumn: "company_id", event: "UPDATE" },
+  { table: "messages", filterColumn: "company_id", event: "INSERT" },
+  { table: "conversation_assignments", filterColumn: "company_id", event: "INSERT" },
+  { table: "conversation_assignments", filterColumn: "company_id", event: "UPDATE" },
+  { table: "handover_events", filterColumn: "company_id", event: "INSERT" },
+];
+
 /** /dashboard/leads (Leads list). */
 export const LEADS_LIST_WATCHES: RealtimeWatch[] = [
   { table: "leads", filterColumn: "company_id", event: "INSERT" },
@@ -76,4 +97,5 @@ export const ALL_WATCH_LISTS: Record<string, RealtimeWatch[]> = {
   MESSAGE_THREAD_WATCHES,
   LEADS_LIST_WATCHES,
   LEAD_DETAIL_WATCHES,
+  DASHBOARD_SHELL_WATCHES,
 };

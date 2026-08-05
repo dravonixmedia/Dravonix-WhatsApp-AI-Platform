@@ -1,15 +1,16 @@
-import { countHandoverBadge, SupabaseHandoverRepository } from "@dravonix/handover";
-import Link from "next/link";
+import { handoverItemNeedsAttention, SupabaseHandoverRepository } from "@dravonix/handover";
+import { getDashboardCapabilities } from "../../lib/permissions.js";
 import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
-import { getDashboardCapabilities } from "../../lib/permissions.js";
+import { RealtimeRefreshBoundary } from "../../lib/realtime/RealtimeRefreshBoundary.js";
+import { DASHBOARD_SHELL_WATCHES } from "../../lib/realtime/watchConfigs.js";
+import { loadNotificationSummary } from "../../lib/repositories/notificationsRepository.js";
 import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
 import { GlobalSearch } from "./GlobalSearch.js";
 import {
-  BellIcon,
   BillingIcon,
   ChevronDownIcon,
   ConversationsIcon,
@@ -20,6 +21,7 @@ import {
   WhatsAppIcon,
 } from "./Icons.js";
 import { NavLinks, type NavLinkItem } from "./NavLinks.js";
+import { NotificationBell } from "./NotificationBell.js";
 
 // Every /dashboard/* route depends on the request's session cookie (real
 // Supabase Auth, Human Handover Inbox final plan section 15) -- never
@@ -115,10 +117,33 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   const supabase = await createServerSupabaseClient();
-  const handoverBadgeCount = await countHandoverBadge(
-    new SupabaseHandoverRepository(supabase),
-    session.activeCompanyId,
-  );
+  const handoverRepo = new SupabaseHandoverRepository(supabase);
+  const [notificationSummary, handoverInboxItems] = await Promise.all([
+    loadNotificationSummary(supabase, session.activeCompanyId),
+    handoverRepo.listHandoverInbox({
+      companyId: session.activeCompanyId,
+      filter: "all_active",
+      sort: "newest_first",
+    }),
+  ]);
+  // Both the Human Handover nav badge and the bell's handover-attention
+  // sections are derived from this one query, via the same shared
+  // handoverItemNeedsAttention predicate SupabaseHandoverRepository's own
+  // countHandoverBadge uses -- so calling that function again here would
+  // just re-run an identical query; deriving locally avoids that.
+  const handoverBadgeCount = handoverInboxItems.filter(handoverItemNeedsAttention).length;
+  const pendingHandoverRequests = handoverInboxItems
+    .filter((item) => item.state !== "human_active")
+    .map((item) => ({
+      conversationId: item.conversationId,
+      maskedPhoneNumber: item.maskedPhoneNumber,
+    }));
+  const unassignedHandovers = handoverInboxItems
+    .filter((item) => item.assignedMemberId === null)
+    .map((item) => ({
+      conversationId: item.conversationId,
+      maskedPhoneNumber: item.maskedPhoneNumber,
+    }));
   const capabilities = getDashboardCapabilities(session.activeRole);
   const navItems = buildNavItems(capabilities);
 
@@ -130,6 +155,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <div style={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
+      <RealtimeRefreshBoundary
+        namespace="dashboard-shell"
+        scopeId={session.activeCompanyId}
+        accessToken={session.accessToken}
+        watches={DASHBOARD_SHELL_WATCHES}
+      />
       <input
         type="checkbox"
         id="dvx-nav-toggle"
@@ -271,16 +302,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
               </form>
             ) : null}
 
-            <Link
-              href="/dashboard/handover"
-              className="dvx-icon-button"
-              aria-label={`Human Handover notifications: ${handoverBadgeCount} unread`}
-            >
-              <BellIcon />
-              {handoverBadgeCount > 0 ? (
-                <span className="dvx-icon-button-badge">{handoverBadgeCount}</span>
-              ) : null}
-            </Link>
+            <NotificationBell
+              totalUnreadCustomerMessages={notificationSummary.totalUnreadCustomerMessages}
+              unreadConversations={notificationSummary.unreadConversations}
+              pendingHandoverRequests={pendingHandoverRequests}
+              unassignedHandovers={unassignedHandovers}
+            />
 
             <details className="dvx-user-menu">
               <summary>
