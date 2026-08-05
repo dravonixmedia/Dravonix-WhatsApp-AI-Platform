@@ -2,13 +2,13 @@
 
 ## Resources needed
 
-| Resource                         | Used by                                                                                   | Purpose                                                                                                               |
-| -------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Workers                          | `apps/api`, `apps/workers/*`                                                              | HTTP API + queue consumers                                                                                            |
-| Queues                           | `apps/api` (producer), `apps/workers/*` (consumers)                                       | async message/voice/billing/knowledge/notification processing                                                         |
-| R2 bucket                        | `apps/workers/voice-consumer`, `apps/workers/knowledge-consumer` (via `packages/storage`) | temporary audio + processed media                                                                                     |
-| Pages (or Workers static assets) | `apps/web`                                                                                | Next.js dashboard hosting                                                                                             |
-| Cron Triggers                    | `apps/workers/billing-consumer`, `apps/workers/outbound-reconciler`                       | grace-period checks, usage aggregation, retention cleanup, outbound-message lease-expiry sweep (Human Handover Inbox) |
+| Resource                       | Used by                                                                                   | Purpose                                                                                                               |
+| ------------------------------ | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Workers                        | `apps/api`, `apps/workers/*`                                                              | HTTP API + queue consumers                                                                                            |
+| Queues                         | `apps/api` (producer), `apps/workers/*` (consumers)                                       | async message/voice/billing/knowledge/notification processing                                                         |
+| R2 bucket                      | `apps/workers/voice-consumer`, `apps/workers/knowledge-consumer` (via `packages/storage`) | temporary audio + processed media                                                                                     |
+| Workers (via OpenNext adapter) | `apps/web`                                                                                | Next.js dashboard hosting (see §5 — deployed as a Worker, not Cloudflare Pages)                                       |
+| Cron Triggers                  | `apps/workers/billing-consumer`, `apps/workers/outbound-reconciler`                       | grace-period checks, usage aggregation, retention cleanup, outbound-message lease-expiry sweep (Human Handover Inbox) |
 
 ## Deployed resource names (staging vs production)
 
@@ -30,6 +30,7 @@ account — keep this table up to date if any of them change.
 | Voice queue                      | `dravonix-voice-queue-staging`                           | `dravonix-voice-queue`                     |
 | Voice queue DLQ                  | `dravonix-voice-queue-staging-dlq`                       | `dravonix-voice-queue-dlq`                 |
 | Audio R2 bucket (`AUDIO_BUCKET`) | `dravonix-audio-staging`                                 | `dravonix-audio`                           |
+| Dashboard Worker (`apps/web`)    | `dravonix-dashboard-staging`                             | `dravonix-dashboard`                       |
 | Supabase project                 | `lshfkxirfbjwlklqwqnf` — see `SUPABASE_SETUP.md` §0, §3a | separate project — see `SUPABASE_SETUP.md` |
 
 The production Worker names/queues above are already deployed and serving
@@ -136,14 +137,130 @@ in version control.
 
 ## 5. Deploy apps/web
 
-`apps/web` is a standard Next.js app; deploy via Cloudflare Pages
-(`npx wrangler pages deploy`) with the OpenNext or `@cloudflare/next-on-pages`
-adapter, or to any other Next.js-compatible host. Set `NEXT_PUBLIC_*`
-variables in the Pages project's environment configuration — these are the
-only variables safe to expose to the browser (see `.env.example`). Use
-separate Pages projects (or separate environment configs within one project)
-for staging and production, pointed at the matching `apps/api` Worker
-(`dravonixapp-staging` vs `dravonixapp`) via `API_URL`/`NEXT_PUBLIC_*`.
+`apps/web` deploys as a Cloudflare Worker via the OpenNext adapter
+(`@opennextjs/cloudflare`), **not** Cloudflare Pages — this keeps it
+consistent with `apps/api`/`apps/workers/*` (one Cloudflare product, one
+deploy mechanism, one `wrangler deploy --env` convention) instead of
+introducing a second hosting product. `apps/web/wrangler.jsonc` declares
+`env.staging`/`env.production` blocks with distinct Worker names
+(`dravonix-dashboard-staging` / `dravonix-dashboard`), exactly like every
+other Worker in this repo — a staging deploy cannot collide with production.
+
+### Required environment variables
+
+| Variable                          | Where it's set                                                     | Browser-exposed? |
+| --------------------------------- | ------------------------------------------------------------------ | ---------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`        | **Build-time only** — the CI job's own `env:` (see below)          | Yes (by design)  |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY`   | **Build-time only** — the CI job's own `env:` (see below)          | Yes (by design)  |
+| `SUPABASE_URL`                    | `wrangler.jsonc` `vars` (non-secret; same value as the public URL) | No               |
+| `SUPABASE_ANON_KEY`               | `wrangler.jsonc` `vars` (non-secret; RLS-protected by design)      | No               |
+| `SUPABASE_SERVICE_ROLE_KEY`       | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`        | **Never**        |
+| `APP_ENV`                         | `wrangler.jsonc` `vars` (already set: `staging` / `production`)    | No               |
+| `PLATFORM_*` (branding, optional) | `wrangler.jsonc` `vars` if overriding the default brand            | No               |
+
+**`SUPABASE_SERVICE_ROLE_KEY`'s scope in this app is deliberately narrow —
+audited, not assumed:** every ordinary dashboard read/write (Leads,
+Conversations, Human Handover assign/start/pause/close, company switching,
+tenant resolution) runs on the signed-in user's own RLS-scoped session, never
+this key. It is read by exactly one module,
+`apps/web/lib/supabase/serviceRole.ts` (guarded by `import "server-only"`,
+enforced by `apps/web/test/serviceRoleGuard.test.ts`), consumed by exactly
+one Server Action, `reconcileAiOutboundMessageAction` — because migration
+12's `reconcile_outbound_message` RPC only permits reconciling an
+AI-authored message for a caller with **no** `auth.uid()` at all, an
+authenticated dashboard JWT structurally cannot perform that one operation,
+regardless of permissions. If a future change ever needs this key for
+anything else, treat that as a new, separately-audited surface, not an
+extension of this one.
+
+**The build-time vs runtime distinction matters and is easy to get wrong:**
+Next.js inlines every `NEXT_PUBLIC_*` reference into the client JavaScript
+bundle at `next build` time (which `opennextjs-cloudflare build` runs
+internally) — setting `NEXT_PUBLIC_SUPABASE_URL` as a Worker `vars`/secret
+has **no effect** on an already-built bundle, since that code path never
+re-reads `process.env` at request time. `SUPABASE_URL`/`SUPABASE_ANON_KEY`
+(no `NEXT_PUBLIC_` prefix) are read server-side, at request time, by the
+deployed Worker — those genuinely do come from `wrangler.jsonc` `vars`/
+`wrangler secret put`, the normal way. `.github/workflows/deploy.yml` sets
+`NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` from that
+workflow's own environment-scoped secrets (Settings → Environments →
+staging/production) immediately before the build step — configure those
+once there, they are never committed.
+
+`DEV_TENANT_SELECTOR_ENABLED` must not be set (or must be `false`) for either
+environment — `packages/config/src/env.ts` already refuses to start if
+`APP_ENV` is `staging`/`production` and this is `true`, and
+`scripts/verify-web-staging-config.sh` checks the same thing at
+deploy-preflight time, before any Cloudflare credential is used.
+
+### One-time setup
+
+```bash
+cd apps/web
+npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
+# repeat for --env production, pointed at the production Supabase project
+```
+
+Non-secret vars (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) can be added directly
+to `wrangler.jsonc`'s `env.staging`/`env.production` `vars` blocks (safe to
+commit — the anon key is RLS-protected by design, and the project URL isn't
+sensitive), or set with `wrangler secret put` too if preferred.
+
+### Required manual action — Supabase Auth redirect URLs (NOT yet performed)
+
+`apps/web/app/auth/callback/route.ts` completes Supabase's magic-link/
+password-reset flow by exchanging a code for a session and redirecting back
+into the dashboard. Supabase only allows that redirect to a URL that's on
+the project's own allow-list — against `localhost` today, nothing else. Once
+this branch's staging Worker has an assigned `*.workers.dev` URL (or a custom
+domain, if one is mapped to it), the following must be added, **by a human,
+in the Supabase dashboard**, before staging sign-in/password-reset email
+links will work end to end:
+
+- **Authentication → URL Configuration → Redirect URLs**: add
+  `https://<staging-dashboard-url>/auth/callback`.
+- **Authentication → URL Configuration → Site URL**: only needs to change if
+  password-reset/magic-link emails should point at the staging dashboard by
+  default instead of `localhost` — confirm with whoever owns the staging
+  Supabase project (`lshfkxirfbjwlklqwqnf`) before changing this, since it
+  affects every auth email the project sends, not just this one flow.
+
+This is **not** done as part of this branch — it requires the exact staging
+URL (confirmed only after the first staging deploy is approved and run) and
+a change to the Supabase project's Auth settings, both explicitly out of
+scope for this preparation-only round (see `DEPLOYMENT.md`'s staging
+checklist). `SUPABASE_SETUP.md` does not document this yet either — add it
+there once the staging URL is confirmed and this step has actually been
+performed.
+
+### Deploying
+
+Deployment goes through `.github/workflows/deploy.yml` alongside the other
+four services (same `workflow_dispatch`, same `check-ci` gate, same
+`target_environment` input) — see `DEPLOYMENT.md`. To run the equivalent
+manually:
+
+```bash
+cd apps/web
+NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_ANON_KEY=... \
+  pnpm exec opennextjs-cloudflare build
+pnpm exec wrangler deploy --env staging      # or --env production
+```
+
+### Smoke test after deploying
+
+`GET /api/health` (unauthenticated, no Supabase call) returns
+`{"status":"ok","appEnv":"staging"}` — confirms the Worker is serving and
+reports the environment it was actually built/deployed for. Beyond that,
+confirm: `/login` renders, an unauthenticated request to `/dashboard`
+redirects to `/login`, and `/dashboard` itself is reachable after signing in.
+
+### Rollback
+
+`apps/web` deploys as a normal versioned Cloudflare Worker via `wrangler
+deploy` (through the OpenNext adapter) — `wrangler rollback --name
+dravonix-dashboard-staging` (or `dravonix-dashboard` for production) reverts
+to the previous deployed version, the same as `apps/api`/`apps/workers/*`.
 
 ## 6. Cron Triggers
 

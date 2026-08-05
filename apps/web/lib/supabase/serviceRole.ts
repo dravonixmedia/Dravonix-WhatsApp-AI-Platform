@@ -1,3 +1,4 @@
+import "server-only";
 import { loadEnv } from "@dravonix/config";
 import { createServiceRoleClient } from "@dravonix/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -12,6 +13,14 @@ import { getSupabaseConnectionConfig } from "./env.js";
  * authorization before using this client for anything -- RLS provides no
  * protection here at all. Reserved for the one narrow, audited use in this
  * app: apps/web/lib/actions/reconcileAiOutboundMessage.ts.
+ *
+ * The `import "server-only"` above is not just documentation: Next.js's
+ * bundler resolves it to a no-op only inside the server/RSC module graph
+ * (the "react-server" export condition) -- if this file were ever pulled
+ * into a Client Component's bundle, or evaluated outside that graph (e.g.
+ * this repo's own Vitest suite, which has no react-server condition
+ * configured), the import throws immediately. See
+ * apps/web/test/serviceRoleGuard.test.ts.
  */
 export function createServerOnlyServiceRoleClient(): SupabaseClient {
   const { url, anonKey } = getSupabaseConnectionConfig();

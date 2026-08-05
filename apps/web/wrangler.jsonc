@@ -1,0 +1,56 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Top-level (unnamed environment) config -- used only by local `wrangler
+  // dev`/`wrangler deploy` without an explicit --env, exactly like
+  // apps/api/wrangler.toml's convention. Every real deploy goes through
+  // .github/workflows/deploy.yml, which always passes an explicit
+  // --env staging or --env production (see below). Nothing here is ever
+  // deployed directly.
+  "name": "dravonix-dashboard",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2024-11-01",
+  // nodejs_compat: required -- Next.js SSR (and @supabase/ssr) depend on
+  // Node built-ins OpenNext's Cloudflare adapter shims via this flag.
+  // global_fetch_strictly_public: hardening default recommended by OpenNext
+  // -- this Worker's own fetch() can only reach public addresses, never
+  // Cloudflare's internal/private network.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS",
+  },
+  "vars": {
+    "APP_ENV": "development",
+  },
+  // ---------------------------------------------------------------------------
+  // Staging and production are isolated Workers with distinct names, exactly
+  // like apps/api/wrangler.toml and apps/workers/*/wrangler.toml -- a staging
+  // deploy (`wrangler deploy --env staging`, run via the OpenNext build
+  // output) cannot touch the production Worker; there is no shared name for
+  // wrangler/Cloudflare to collide on. See CLOUDFLARE_SETUP.md for the
+  // resource-name table.
+  //
+  // Secrets (SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY) are
+  // set per-environment with `wrangler secret put <NAME> --env <env>`, never
+  // committed here -- see CLOUDFLARE_SETUP.md §5. NEXT_PUBLIC_* variables are
+  // NOT set here at all: Next.js inlines them into the client bundle at
+  // `next build` time (which `opennextjs-cloudflare build` runs internally),
+  // so they must be present in the *build* environment (the CI job's own
+  // `env:`), not as a Worker runtime var/secret -- setting them only here
+  // would have zero effect on the already-built client JavaScript.
+  // ---------------------------------------------------------------------------
+  "env": {
+    "staging": {
+      "name": "dravonix-dashboard-staging",
+      "vars": {
+        "APP_ENV": "staging",
+      },
+    },
+    "production": {
+      "name": "dravonix-dashboard",
+      "vars": {
+        "APP_ENV": "production",
+      },
+    },
+  },
+}

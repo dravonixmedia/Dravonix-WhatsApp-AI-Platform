@@ -2,13 +2,13 @@
 
 ## Overview
 
-| Component        | Target                                               |
-| ---------------- | ---------------------------------------------------- |
-| `apps/api`       | Cloudflare Workers                                   |
-| `apps/workers/*` | Cloudflare Workers (queue consumers) + Cron Triggers |
-| `apps/web`       | Cloudflare Pages (or any Next.js-compatible host)    |
-| Database         | Supabase Postgres                                    |
-| Object storage   | Cloudflare R2                                        |
+| Component        | Target                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------- |
+| `apps/api`       | Cloudflare Workers                                                                                      |
+| `apps/workers/*` | Cloudflare Workers (queue consumers) + Cron Triggers                                                    |
+| `apps/web`       | Cloudflare Workers, via the OpenNext adapter (`apps/web/wrangler.jsonc`) — see `CLOUDFLARE_SETUP.md` §5 |
+| Database         | Supabase Postgres                                                                                       |
+| Object storage   | Cloudflare R2                                                                                           |
 
 See `CLOUDFLARE_SETUP.md` and `SUPABASE_SETUP.md` for provisioning details;
 this file is the deployment sequence.
@@ -17,6 +17,11 @@ this file is the deployment sequence.
 
 - [ ] All required environment variables set as Cloudflare Worker
       secrets/vars (see `.env.example`) — never committed.
+- [ ] For `apps/web`: `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`
+      configured as the deploy workflow's own environment secrets (these must
+      be present at _build_ time, not just as a Worker var — see
+      `CLOUDFLARE_SETUP.md` §5), and `scripts/verify-web-staging-config.sh
+<env>` passes.
 - [ ] Supabase migrations applied (`SUPABASE_SETUP.md` §3) and RLS verified
       (`supabase/tests/README.md`).
 - [ ] Seed data applied for at least the plan templates
@@ -42,8 +47,13 @@ this file is the deployment sequence.
    `CLOUDFLARE_SETUP.md` §2). Verify a queue message is consumed successfully
    before relying on it in production (send a test message through the full
    webhook → queue → consumer path).
-4. **apps/web**: deploy last, pointed at the deployed `apps/api` origin via
-   `NEXT_PUBLIC_*`/`API_URL`.
+4. **apps/web**: deploy last. Build with `NEXT_PUBLIC_SUPABASE_URL`/
+   `NEXT_PUBLIC_SUPABASE_ANON_KEY` set in the _build_ environment (they're
+   inlined into the client bundle at `next build` time, not read at
+   runtime — see `CLOUDFLARE_SETUP.md` §5), then `wrangler deploy --env
+<target>`. Verify `GET /api/health` responds `{"status":"ok",...}`, then
+   verify `/login` renders and an unauthenticated request to `/dashboard`
+   redirects to `/login`.
 
 ## Environments
 
@@ -51,22 +61,31 @@ this file is the deployment sequence.
 `wrangler.toml` each declare `[env.staging]`/`[env.production]` blocks with
 genuinely distinct Worker names, queues, and (for voice-consumer) R2 bucket —
 see `CLOUDFLARE_SETUP.md`'s resource-name table for the exact deployed names.
-There is no shared name between the two environments, so a staging deploy
-cannot overwrite, rebind, or otherwise touch a production resource. Use a
-distinct Supabase project per environment too (see `SUPABASE_SETUP.md`) —
-never point a staging deployment at the production database. `APP_ENV` is set
-per-environment in each `[env.*]` block; `packages/config/src/env.ts` enforces
-production-only guardrails (no dev tenant selector, no live Razorpay mode
-without a secret) based on this value.
+`apps/web/wrangler.jsonc` follows the identical pattern
+(`dravonix-dashboard-staging` / `dravonix-dashboard`). There is no shared name
+between the two environments, so a staging deploy cannot overwrite, rebind, or
+otherwise touch a production resource. Use a distinct Supabase project per
+environment too (see `SUPABASE_SETUP.md`) — never point a staging deployment
+at the production database; `apps/web`'s approved staging project is
+`lshfkxirfbjwlklqwqnf`. `APP_ENV` is set per-environment in each `[env.*]`
+block; `packages/config/src/env.ts` enforces production-only guardrails (no
+dev tenant selector, no live Razorpay mode without a secret) based on this
+value — `scripts/verify-web-staging-config.sh` checks the dev-tenant-selector
+guardrail (and that no server-only secret leaked into `apps/web/
+wrangler.jsonc`'s committed `vars`) at deploy-preflight time, before either
+gate above would even run.
 
 ## Rollback
 
 Cloudflare Workers deployments are versioned; `wrangler rollback` reverts
-`apps/api`/`apps/workers/*` to the previous deployment. Database migrations are
-forward-only in this repository (no down-migrations authored yet) — a
-migration rollback requires a hand-written compensating migration; avoid
-deploying a migration and an application change that depends on it in the
-same release without a tested rollback plan.
+`apps/api`/`apps/workers/*`/`apps/web` to the previous deployment (`apps/web`
+deploys as a normal Worker via the OpenNext adapter, so the same rollback
+mechanism applies — `wrangler rollback --name dravonix-dashboard-staging`, or
+`dravonix-dashboard` for production). Database migrations are forward-only in
+this repository (no down-migrations authored yet) — a migration rollback
+requires a hand-written compensating migration; avoid deploying a migration
+and an application change that depends on it in the same release without a
+tested rollback plan.
 
 ## CI vs CD: two separate workflows
 
@@ -85,8 +104,9 @@ deliberately separate:
   branch/PR arrives (`concurrency` with `cancel-in-progress: true`).
 - **`deploy.yml`** is `workflow_dispatch`-only (manually triggered from the
   Actions tab, never on push) and deploys `apps/api`,
-  `apps/workers/message-consumer`, and `apps/workers/voice-consumer` via
-  `wrangler deploy --env <target_environment>` with a custom-scoped
+  `apps/workers/message-consumer`, `apps/workers/voice-consumer`,
+  `apps/workers/outbound-reconciler`, and `apps/web` (via the OpenNext
+  adapter) via `wrangler deploy --env <target_environment>` with a custom-scoped
   `CLOUDFLARE_API_TOKEN`. It takes a `target_environment` input (`staging` or
   `production`) that both selects which `wrangler.toml` `[env.*]` block gets
   deployed (see "Environments" below — genuinely separate Worker/queue/bucket

@@ -115,7 +115,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # apps/web's wrangler (^4.118.0, required by @opennextjs/cloudflare)
+          # refuses to run at all under Node < 22 ("Wrangler requires at
+          # least Node.js v22.0.0") -- verified against the installed
+          # version. apps/api/apps/workers/* still pin wrangler ^3.99.0,
+          # which only requires Node >=16.17.0, so this bump is backward
+          # compatible with every other deploy step in this job.
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
@@ -150,6 +156,7 @@ jobs:
                       apps/workers/outbound-reconciler/wrangler.toml; do
             bash scripts/verify-wrangler-env-bindings.sh "$toml" "${{ inputs.target_environment }}"
           done
+          bash scripts/verify-web-staging-config.sh "${{ inputs.target_environment }}"
 
       - name: Deploy apps/api
         working-directory: apps/api
@@ -166,6 +173,24 @@ jobs:
       - name: Deploy outbound-reconciler
         working-directory: apps/workers/outbound-reconciler
         run: bash ../../../scripts/deploy-with-diagnostics.sh "${{ inputs.target_environment }}" apps/workers/outbound-reconciler
+
+      - name: Build apps/web (OpenNext Cloudflare adapter)
+        # NEXT_PUBLIC_* variables must be present here, at *build* time --
+        # `opennextjs-cloudflare build` runs `next build` internally, which
+        # is what actually inlines them into the client bundle. Setting them
+        # only in wrangler.jsonc (or as a Worker secret/var) has zero effect
+        # on already-built client JavaScript. Configure these as this
+        # workflow's own environment-scoped secrets (Settings → Environments
+        # → staging/production), never committed.
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: pnpm exec opennextjs-cloudflare build
+
+      - name: Deploy apps/web
+        working-directory: apps/web
+        run: pnpm exec wrangler deploy --env "${{ inputs.target_environment }}"
 
       - name: Print Wrangler logs on failure
         if: failure()
