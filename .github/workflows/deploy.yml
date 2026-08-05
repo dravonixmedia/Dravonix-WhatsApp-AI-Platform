@@ -159,10 +159,16 @@ jobs:
         # runs) are present -- checked for presence only, never printed. Only
         # set here, in the real deploy job -- ci.yml's own two calls to this
         # script never set it and never have these values, by design.
+        # SUPABASE_PROJECT_ID (vars.*, non-secret) is the same GitHub
+        # Environment variable supabase-migration-repair.yml already asserts
+        # against -- reused here so a staging deploy also fails fast if the
+        # environment somehow isn't configured against the confirmed staging
+        # project ref.
         env:
           DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS: "true"
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_PROJECT_ID: ${{ vars.SUPABASE_PROJECT_ID }}
         run: |
           for toml in apps/api/wrangler.toml \
                       apps/workers/message-consumer/wrangler.toml \

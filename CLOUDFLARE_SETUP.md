@@ -195,27 +195,90 @@ deploy-preflight time, before any Cloudflare credential is used.
 
 ### One-time setup
 
+All three of `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY`
+are provisioned as Worker secrets, not committed `wrangler.jsonc` `vars` —
+this repo's convention keeps every Supabase connection value (including the
+technically-non-sensitive URL/anon key) out of the committed file entirely,
+so a `git diff` of `wrangler.jsonc` never needs to be Supabase-project-aware.
+
+**Safe sequence for a Worker's first-ever deployment (before it exists at
+all):** `wrangler secret put <NAME> --env <env>` will create and deploy a
+placeholder Worker to attach the secret to if no script has ever been
+uploaded for that name — meaning running `secret put` before the Worker's
+real code has ever been deployed puts an unknown, uncontrolled placeholder
+live at the Worker's public URL, however briefly. Deploying the real
+application code first avoids this entirely: once a real script exists,
+`secret put` only adds the secret binding to a new version of that _same_
+script — it never replaces it. So, for a Worker that doesn't exist yet
+(e.g. `dravonix-dashboard-staging`'s first deployment):
+
+1. **Deploy the real code first, secrets absent.** Run `deploy.yml` with
+   `target_environment: staging` (or the manual equivalent below) with none
+   of the three Worker secrets set yet. The real OpenNext bundle goes live —
+   `GET /api/health` succeeds immediately (it makes no Supabase call by
+   design); every other route 500s until secrets are attached, since
+   `getSupabaseConnectionConfig()` throws before ever reaching Supabase. This
+   is a functional gap, not a security exposure — no secret is read, sent,
+   or logged during it.
+2. **Provision `SUPABASE_URL` and `SUPABASE_ANON_KEY` first:**
+   ```bash
+   cd apps/web
+   npx wrangler secret put SUPABASE_URL --env staging
+   npx wrangler secret put SUPABASE_ANON_KEY --env staging
+   ```
+   These two alone are enough for every ordinary RLS-scoped dashboard read
+   (login, Leads, Conversations, Human Handover) to start working — smoke
+   test the bulk of the app now, **before** the highest-privilege secret
+   below is ever attached.
+3. **Provision `SUPABASE_SERVICE_ROLE_KEY` last:**
+   ```bash
+   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
+   ```
+   This is the one credential that bypasses RLS entirely (see "scope in this
+   app is deliberately narrow" above) — attaching it only once the rest of
+   the deployment is already confirmed healthy minimizes how long it's live
+   on a Worker whose other config might still be in question.
+4. Repeat steps 2–3 for `--env production`, pointed at the production
+   Supabase project, once staging is verified.
+
+Paste each secret's value only from the Supabase dashboard while it is
+actively showing the intended project (staging: `lshfkxirfbjwlklqwqnf`) — a
+value copied from the wrong open tab is exactly the mistake this manual step
+exists to guard against, and it isn't detectable by anything downstream
+(the app itself has no way to tell "correct project, wrong key" from
+"correct key, wrong project"). `scripts/verify-web-staging-config.sh`, run
+with `DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS=true` (only set by `deploy.yml`'s
+own deploy job), confirms `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`
+are present before the build step runs, and — for staging — that the
+`SUPABASE_PROJECT_ID` GitHub Environment variable (`vars.SUPABASE_PROJECT_ID`,
+non-secret, the same one `.github/workflows/supabase-migration-repair.yml`
+already asserts against) equals `lshfkxirfbjwlklqwqnf`. It cannot check the
+three `wrangler secret put` values above at all — Wrangler gives no way to
+read a secret's value, or even confirm its presence, without full Cloudflare
+authentication — so verifying those three by name only stays a manual step:
+
 ```bash
-cd apps/web
-npx wrangler secret put SUPABASE_URL --env staging
-npx wrangler secret put SUPABASE_ANON_KEY --env staging
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
-# repeat all three for --env production, pointed at the production Supabase project
+wrangler secret list --env staging
 ```
 
-All three are provisioned as Worker secrets, not committed `wrangler.jsonc`
-`vars` — this repo's convention keeps every Supabase connection value
-(including the technically-non-sensitive URL/anon key) out of the committed
-file entirely, so a `git diff` of `wrangler.jsonc` never needs to be
-Supabase-project-aware. `scripts/verify-web-staging-config.sh`, run with
-`DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS=true` (only set by `deploy.yml`'s own
-deploy job), confirms `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`
-are present before the build step runs — it cannot check the three
-`wrangler secret put` values above, since Wrangler itself gives no way to
-read a secret's value or even confirm its presence without full Cloudflare
-authentication; verifying those three is the one part of this process that
-stays manual (`wrangler secret list --env staging`, name only, right after
-provisioning).
+This prints `[{"name": "SUPABASE_URL", "type": "secret_text"}, ...]` — names
+only, Cloudflare's API has no endpoint that returns a secret's value at all,
+so there is nothing to accidentally expose by running or logging this
+command.
+
+**Failure handling for a first deployment:** if step 1's deploy fails,
+nothing is live yet — fix and retry, no rollback needed. If a `secret put`
+call in steps 2–4 fails partway, the Worker is left with a partial secret
+set — still safe (still throws before any Supabase call, for the same
+reason as step 1), just retry the failed command; `secret put` is
+idempotent by name. `wrangler rollback --name dravonix-dashboard-staging`
+only has a prior version to revert to starting with the Worker's _second_
+real deployment — for this first one, a code-level failure is fixed by
+re-running steps 1 onward, and a wrong-project-secret failure is fixed by
+re-running the specific `secret put` command with the corrected value
+(never a version rollback, since the code itself was never wrong). Full
+teardown (`wrangler delete --name dravonix-dashboard-staging`) is available
+as a last resort but should not be needed for either failure mode above.
 
 **Environment separation is enforced by GitHub's Environment feature, not by
 this workflow's YAML — configure it correctly or staging can silently

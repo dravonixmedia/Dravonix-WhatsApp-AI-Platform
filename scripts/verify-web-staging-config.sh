@@ -155,6 +155,27 @@ if [[ "${DVX_PREFLIGHT_REQUIRE_RUNTIME_SECRETS:-}" == "true" ]]; then
       status=1
     fi
   done
+
+  # SUPABASE_PROJECT_ID is a non-secret GitHub Environment *variable*
+  # (vars.SUPABASE_PROJECT_ID, not a secret -- safe to read and print),
+  # already used by .github/workflows/supabase-migration-repair.yml's
+  # identical assertion. It cannot verify the *value* of any wrangler
+  # secret (structurally impossible without reading them, which this
+  # script never does), but it does confirm the environment itself is
+  # configured against the expected staging project ref -- the same
+  # reference a human provisioning SUPABASE_URL/SUPABASE_ANON_KEY/
+  # SUPABASE_SERVICE_ROLE_KEY should be copying values from.
+  if [[ "$ENVIRONMENT" == "staging" ]]; then
+    if [[ -z "${SUPABASE_PROJECT_ID:-}" ]]; then
+      echo "FAIL: SUPABASE_PROJECT_ID is not set on the staging GitHub Environment (Settings → Environments → staging → Variables)"
+      status=1
+    elif [[ "$SUPABASE_PROJECT_ID" != "lshfkxirfbjwlklqwqnf" ]]; then
+      echo "FAIL: SUPABASE_PROJECT_ID ('$SUPABASE_PROJECT_ID') does not equal the confirmed staging project ref lshfkxirfbjwlklqwqnf"
+      status=1
+    else
+      echo "  OK: SUPABASE_PROJECT_ID matches the confirmed staging project ref."
+    fi
+  fi
 fi
 
 if [[ "$status" -eq 0 ]]; then
