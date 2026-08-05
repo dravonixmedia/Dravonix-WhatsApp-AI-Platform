@@ -21,7 +21,7 @@ this file is the deployment sequence.
       configured as the deploy workflow's own environment secrets (these must
       be present at _build_ time, not just as a Worker var — see
       `CLOUDFLARE_SETUP.md` §5), and `scripts/verify-web-staging-config.sh
-    <env>` passes.
+<env>` passes.
 - [ ] Supabase migrations applied (`SUPABASE_SETUP.md` §3) and RLS verified
       (`supabase/tests/README.md`).
 - [ ] Seed data applied for at least the plan templates
