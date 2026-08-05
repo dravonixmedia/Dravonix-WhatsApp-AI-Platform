@@ -8,6 +8,11 @@ describe("platformBrand", () => {
     expect(platformBrand.companyName).toBe("Dravonix Media");
   });
 
+  it("exposes the support email alongside a matching mailto: href", () => {
+    expect(platformBrand.supportEmail).toBe("Support@dravonixmedia.com");
+    expect(platformBrand.supportEmailHref).toBe("mailto:support@dravonixmedia.com");
+  });
+
   it("builds a section page title using the short name", () => {
     expect(pageTitle("Inbox")).toBe("Inbox · Dravonix AI");
   });

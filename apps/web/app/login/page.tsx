@@ -73,7 +73,8 @@ export default async function LoginPage({
           className="dvx-muted"
           style={{ fontSize: "0.8rem", textAlign: "center", marginTop: "1.5rem" }}
         >
-          Need help? Contact {platformBrand.supportEmail}
+          Need help? Contact{" "}
+          <a href={platformBrand.supportEmailHref}>{platformBrand.supportEmail}</a>
         </p>
       </div>
     </main>
