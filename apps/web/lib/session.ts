@@ -1,5 +1,6 @@
 import type { CompanyRole } from "@dravonix/database";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { createServerSupabaseClient } from "./supabase/server.js";
 
 export const ACTIVE_COMPANY_COOKIE = "dvx_active_company";
@@ -42,15 +43,26 @@ export class NoCompanyAccessError extends Error {
 /**
  * Resolves the dashboard session for the current request (Human Handover
  * Inbox final plan section 15): live company_members query on every call
- * (never cached across requests), an HttpOnly active-company cookie treated
- * only as a *hint* -- if it doesn't match a currently-active membership, this
- * falls back to the first active membership and attempts to reset the
- * cookie (a client can never force an arbitrary company_id into effect this
- * way, since the fallback always re-derives from the live membership list).
- * Returns null if there is no signed-in user at all (middleware.ts already
- * redirects that case for /dashboard/*, but pages should not assume).
+ * (never cached across requests -- React's cache() below only memoizes
+ * *within* a single request's render, never across requests or users), an
+ * HttpOnly active-company cookie treated only as a *hint* -- if it doesn't
+ * match a currently-active membership, this falls back to the first active
+ * membership and attempts to reset the cookie (a client can never force an
+ * arbitrary company_id into effect this way, since the fallback always
+ * re-derives from the live membership list). Returns null if there is no
+ * signed-in user at all (middleware.ts already redirects that case for
+ * /dashboard/*, but pages should not assume).
+ *
+ * Wrapped in React's cache(): every /dashboard/* route calls this once from
+ * dashboard/layout.tsx and again from its own page.tsx -- without this, that
+ * duplication meant two independent auth.getUser() round trips plus two
+ * independent company_members queries per navigation (verified by reading
+ * every call site). cache() is Next.js's documented per-request-only
+ * memoization primitive for exactly this shape of duplicate call: the
+ * memoized result is scoped to the current request's render and is never
+ * reused for a different request or a different user.
  */
-export async function getDashboardSession(): Promise<DashboardSession | null> {
+export const getDashboardSession = cache(async (): Promise<DashboardSession | null> => {
   const supabase = await createServerSupabaseClient();
   const {
     data: { user },
@@ -116,4 +128,4 @@ export async function getDashboardSession(): Promise<DashboardSession | null> {
     activeRole: active.role,
     accessToken,
   };
-}
+});
