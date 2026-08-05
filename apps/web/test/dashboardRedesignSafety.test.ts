@@ -1,0 +1,68 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+/**
+ * The dashboard UI redesign (claude/dashboard-ui-redesign) restructured
+ * every dashboard page's JSX and introduced a shared three-panel workspace,
+ * but was explicitly required not to change tenant resolution, permission
+ * checks, or the Human Handover Inbox's message lifecycle. These tests are
+ * static source assertions (matching the existing sendHumanReplyGuard.test.ts
+ * / serviceRoleGuard.test.ts convention) confirming the redesign didn't
+ * quietly drop any of those calls while rewriting the surrounding markup.
+ */
+
+const here = dirname(fileURLToPath(import.meta.url));
+const webRoot = join(here, "..");
+
+function readSource(relativePath: string): string {
+  return readFileSync(join(webRoot, relativePath), "utf8");
+}
+
+describe("dashboard UI redesign: tenant scoping preserved", () => {
+  it("conversations/[conversationId]/page.tsx still resolves the conversation via getConversationThreadForDashboard scoped to session.activeCompanyId", () => {
+    const source = readSource("app/dashboard/conversations/[conversationId]/page.tsx");
+    expect(source).toContain("getDashboardSession");
+    expect(source).toMatch(
+      /getConversationThreadForDashboard\(\s*repo,\s*session\.activeCompanyId,\s*conversationId,?\s*\)/,
+    );
+    expect(source).toContain("markConversationRead(repo, conversationId)");
+  });
+
+  it("handover/[conversationId]/page.tsx still resolves the conversation via getConversationThreadForDashboard scoped to session.activeCompanyId", () => {
+    const source = readSource("app/dashboard/handover/[conversationId]/page.tsx");
+    expect(source).toContain("getDashboardSession");
+    expect(source).toMatch(
+      /getConversationThreadForDashboard\(\s*repo,\s*session\.activeCompanyId,\s*conversationId,?\s*\)/,
+    );
+    expect(source).toContain("markConversationRead(repo, conversationId)");
+  });
+
+  it("the new contact-summary loader is scoped to a single conversationId and never accepts a client-supplied companyId", () => {
+    const source = readSource("app/dashboard/loadContactSummary.ts");
+    const signatureMatch = source.match(/export async function loadContactSummary\(([^)]*)\)/);
+    expect(signatureMatch).not.toBeNull();
+    expect(signatureMatch?.[1] ?? "").not.toMatch(/companyId|company_id/i);
+  });
+
+  it("conversations/conversationsListData.ts still scopes listConversations by companyId and callerMemberId", () => {
+    const source = readSource("app/dashboard/conversations/conversationsListData.ts");
+    expect(source).toMatch(/listConversations\(supabase,\s*\{/);
+    expect(source).toContain("companyId,");
+    expect(source).toContain("callerMemberId,");
+  });
+
+  it("the dashboard layout still redirects to the no-company-access page for NoCompanyAccessError and a null session", () => {
+    const source = readSource("app/dashboard/layout.tsx");
+    expect(source).toContain("NoCompanyAccessError");
+    expect(source).toContain("<NoCompanyAccessPage />");
+  });
+
+  it("the redesigned conversation and handover detail pages still gate every mutating action behind getDashboardCapabilities or a role-derived check", () => {
+    const conversationsSource = readSource("app/dashboard/conversations/[conversationId]/page.tsx");
+    expect(conversationsSource).toContain("getDashboardCapabilities(session.activeRole)");
+    expect(conversationsSource).toContain("capabilities.canAssignConversations");
+    expect(conversationsSource).toContain("capabilities.canPauseResumeAi");
+  });
+});

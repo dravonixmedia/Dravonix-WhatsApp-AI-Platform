@@ -15,6 +15,8 @@ import {
 } from "../../../../lib/repositories/leadsRepository.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
+import { Avatar } from "../../Avatar.js";
+import { LeadStageBadge } from "../../badges.js";
 
 const STAGE_OPTIONS: Array<{ value: LeadStage; label: string }> = [
   { value: "new", label: "New" },
@@ -76,14 +78,22 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ lea
         watches={LEAD_DETAIL_WATCHES}
       />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <div>
-          <h1 style={{ fontSize: "1.3rem", margin: 0 }}>
-            {lead.customerName ?? lead.maskedPhoneNumber ?? "Unknown lead"}
-          </h1>
-          <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
-            stage: {lead.stage.replace(/_/g, " ")} · source: {lead.source}
-            {lead.score !== null ? ` · score: ${lead.score}` : ""}
-          </p>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+          <Avatar label={lead.customerName ?? lead.maskedPhoneNumber ?? "?"} size={44} />
+          <div>
+            <h1 style={{ fontSize: "1.3rem", margin: 0 }}>
+              {lead.customerName ?? lead.maskedPhoneNumber ?? "Unknown lead"}
+            </h1>
+            <div
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.3rem" }}
+            >
+              <LeadStageBadge stage={lead.stage} />
+              <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+                source: {lead.source}
+                {lead.score !== null ? ` · score: ${lead.score}` : ""}
+              </span>
+            </div>
+          </div>
         </div>
         {lead.conversationId ? (
           <Link

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 export interface NavLinkItem {
   href: string;
   label: string;
+  icon: React.ReactNode;
 }
 
 function isActive(pathname: string, href: string): boolean {
@@ -21,17 +22,17 @@ function isActive(pathname: string, href: string): boolean {
  */
 export function NavLinks({
   items,
-  handoverHref,
+  handover,
   handoverBadgeCount,
 }: {
   items: NavLinkItem[];
-  handoverHref: string;
+  handover: NavLinkItem;
   handoverBadgeCount: number;
 }) {
   const pathname = usePathname();
 
   return (
-    <nav style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+    <nav className="dvx-nav-rail">
       {items.map((item) => (
         <Link
           key={item.href}
@@ -39,28 +40,19 @@ export function NavLinks({
           aria-current={isActive(pathname, item.href) ? "page" : undefined}
           className={`dvx-nav-link${isActive(pathname, item.href) ? " dvx-nav-link--active" : ""}`}
         >
-          {item.label}
+          {item.icon}
+          <span>{item.label}</span>
         </Link>
       ))}
       <Link
-        href={handoverHref}
-        aria-current={isActive(pathname, handoverHref) ? "page" : undefined}
-        className={`dvx-nav-link${isActive(pathname, handoverHref) ? " dvx-nav-link--active" : ""}`}
-        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+        href={handover.href}
+        aria-current={isActive(pathname, handover.href) ? "page" : undefined}
+        className={`dvx-nav-link${isActive(pathname, handover.href) ? " dvx-nav-link--active" : ""}`}
       >
-        <span>Human Handover</span>
+        {handover.icon}
+        <span>{handover.label}</span>
         {handoverBadgeCount > 0 ? (
-          <span
-            style={{
-              background: "#dc2626",
-              color: "white",
-              borderRadius: 999,
-              fontSize: "0.7rem",
-              padding: "0.05rem 0.45rem",
-            }}
-          >
-            {handoverBadgeCount}
-          </span>
+          <span className="dvx-nav-badge">{handoverBadgeCount}</span>
         ) : null}
       </Link>
     </nav>

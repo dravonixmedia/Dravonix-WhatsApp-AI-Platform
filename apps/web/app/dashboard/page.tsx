@@ -1,9 +1,27 @@
 import Link from "next/link";
 import { platformBrand } from "@dravonix/config";
+import { listConversations } from "../../lib/repositories/conversationsRepository.js";
+import { listLeads } from "../../lib/repositories/leadsRepository.js";
 import { getDashboardSession } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
+import { Avatar } from "./Avatar.js";
+import { AiModeBadge, LeadStageBadge } from "./badges.js";
+import { EmptyState } from "./EmptyState.js";
+import { ConversationsIcon, HandoverIcon, LeadsIcon, PauseIcon, UserPlusIcon } from "./Icons.js";
+import { KpiCard } from "./KpiCard.js";
 
 export const dynamic = "force-dynamic";
+
+function relativeTime(iso: string | null): string {
+  if (!iso) return "—";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
 
 interface OverviewCounts {
   activeConversations: number;
@@ -65,33 +83,68 @@ export default async function DashboardOverviewPage() {
   const session = await getDashboardSession();
   if (!session) return null; // middleware.ts already guarantees this can't happen for /dashboard/*
 
-  const counts = await loadOverviewCounts(session.activeCompanyId);
+  const supabase = await createServerSupabaseClient();
+  const [counts, recentConversations, recentLeads] = await Promise.all([
+    loadOverviewCounts(session.activeCompanyId),
+    listConversations(supabase, {
+      companyId: session.activeCompanyId,
+      callerMemberId: session.activeMemberId,
+      page: 1,
+      pageSize: 5,
+    }),
+    listLeads(supabase, {
+      companyId: session.activeCompanyId,
+      callerMemberId: session.activeMemberId,
+      page: 1,
+      pageSize: 5,
+    }).catch(() => ({ items: [], totalCount: 0 })), // leads.view may be denied by RLS for this role
+  ]);
   const activeCompanyName =
     session.memberships.find((m) => m.companyId === session.activeCompanyId)?.companyName ?? "";
 
-  const statCards: { label: string; value: number; href: string }[] = [
+  const kpis: Array<{
+    label: string;
+    value: number;
+    href: string;
+    icon: React.ReactNode;
+    tone: "brand" | "warning" | "info" | "success";
+  }> = [
     {
       label: "Active conversations",
       value: counts.activeConversations,
       href: "/dashboard/conversations",
+      icon: <ConversationsIcon />,
+      tone: "brand",
     },
-    { label: "Handover requests", value: counts.handoverRequests, href: "/dashboard/handover" },
+    {
+      label: "Handover requests",
+      value: counts.handoverRequests,
+      href: "/dashboard/handover",
+      icon: <HandoverIcon />,
+      tone: "info",
+    },
     {
       label: "AI-paused conversations",
       value: counts.aiPaused,
       href: "/dashboard/conversations?aiMode=paused",
+      icon: <PauseIcon />,
+      tone: "warning",
     },
     {
       label: "Unassigned handovers",
       value: counts.unassignedHandovers,
       href: "/dashboard/handover?filter=unassigned",
+      icon: <HandoverIcon />,
+      tone: "warning",
     },
   ];
   if (counts.recentLeads !== null) {
-    statCards.push({
+    kpis.push({
       label: "New leads (7d)",
       value: counts.recentLeads,
       href: "/dashboard/leads",
+      icon: <UserPlusIcon />,
+      tone: "success",
     });
   }
 
@@ -105,28 +158,9 @@ export default async function DashboardOverviewPage() {
         {platformBrand.productName} — {activeCompanyName}
       </p>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: "1rem",
-          marginTop: "1.5rem",
-        }}
-      >
-        {statCards.map((card) => (
-          <Link
-            key={card.label}
-            href={card.href}
-            className="dvx-card dvx-card--interactive"
-            style={{ display: "block", textDecoration: "none", color: "inherit" }}
-          >
-            <div className="dvx-muted" style={{ fontSize: "0.8rem" }}>
-              {card.label}
-            </div>
-            <div style={{ fontSize: "1.8rem", fontWeight: 700, marginTop: "0.25rem" }}>
-              {card.value}
-            </div>
-          </Link>
+      <div className="dvx-kpi-grid" style={{ marginTop: "1.5rem" }}>
+        {kpis.map((kpi) => (
+          <KpiCard key={kpi.label} {...kpi} />
         ))}
       </div>
 
@@ -149,6 +183,129 @@ export default async function DashboardOverviewPage() {
           </p>
         </div>
       )}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+          gap: "1rem",
+          marginTop: "1.5rem",
+        }}
+      >
+        <div className="dvx-card" style={{ padding: 0 }}>
+          <div className="dvx-panel-header">
+            <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Recent conversations</span>
+            <Link
+              href="/dashboard/conversations"
+              className="dvx-muted"
+              style={{ fontSize: "0.8rem" }}
+            >
+              View all →
+            </Link>
+          </div>
+          {recentConversations.items.length === 0 ? (
+            <EmptyState
+              icon={<ConversationsIcon size={28} />}
+              title="No conversations yet"
+              description="Inbound WhatsApp conversations for this company will appear here."
+            />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {recentConversations.items.map((item) => (
+                <Link
+                  key={item.conversationId}
+                  href={`/dashboard/conversations/${item.conversationId}`}
+                  className="dvx-conv-row dvx-card--interactive"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    borderBottom: "1px solid var(--border-default)",
+                    borderRadius: 0,
+                  }}
+                >
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: "0.6rem", minWidth: 0 }}
+                  >
+                    <Avatar label={item.displayName ?? item.maskedPhoneNumber} size={30} />
+                    <span
+                      style={{
+                        fontSize: "0.85rem",
+                        fontWeight: 500,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {item.displayName ?? item.maskedPhoneNumber}
+                    </span>
+                  </div>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexShrink: 0 }}
+                  >
+                    <AiModeBadge aiMode={item.aiMode} />
+                    <span className="dvx-muted" style={{ fontSize: "0.72rem" }}>
+                      {relativeTime(item.lastMessageAt)}
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="dvx-card" style={{ padding: 0 }}>
+          <div className="dvx-panel-header">
+            <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Recent leads</span>
+            <Link href="/dashboard/leads" className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+              View all →
+            </Link>
+          </div>
+          {recentLeads.items.length === 0 ? (
+            <EmptyState
+              icon={<LeadsIcon size={28} />}
+              title="No leads yet"
+              description="Leads captured by the AI chatbot will appear here."
+            />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {recentLeads.items.map((item) => (
+                <Link
+                  key={item.id}
+                  href={`/dashboard/leads/${item.id}`}
+                  className="dvx-conv-row dvx-card--interactive"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    borderBottom: "1px solid var(--border-default)",
+                    borderRadius: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "0.85rem",
+                      fontWeight: 500,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {item.customerName ?? item.maskedPhoneNumber ?? "Unknown lead"}
+                  </span>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexShrink: 0 }}
+                  >
+                    <LeadStageBadge stage={item.stage} />
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
