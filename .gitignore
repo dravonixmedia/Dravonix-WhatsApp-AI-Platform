@@ -6,6 +6,7 @@ build/
 out/
 .turbo/
 .wrangler/
+.open-next/
 coverage/
 *.log
 .DS_Store

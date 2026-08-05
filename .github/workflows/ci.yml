@@ -77,6 +77,18 @@ jobs:
       - name: Build verification — apps/web (Next.js)
         run: pnpm --filter @dravonix/web build
 
+      - name: Preflight — verify apps/web staging/production Cloudflare config
+        run: |
+          bash scripts/verify-web-staging-config.sh staging
+          bash scripts/verify-web-staging-config.sh production
+
+      - name: Build verification — apps/web (OpenNext Cloudflare Worker bundle, staging + production)
+        working-directory: apps/web
+        run: |
+          pnpm exec opennextjs-cloudflare build
+          pnpm exec wrangler deploy --dry-run --env staging --outdir=/tmp/wrangler-dryrun/web-staging
+          pnpm exec wrangler deploy --dry-run --env production --outdir=/tmp/wrangler-dryrun/web-production
+
       - name: Build verification — apps/api (Cloudflare Worker bundle, staging + production)
         working-directory: apps/api
         run: |
