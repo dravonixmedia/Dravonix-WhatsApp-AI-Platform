@@ -71,15 +71,21 @@ export function ChatAgentPanel({
     setLastRequest(request);
     setView({ status: "loading" });
     try {
-      const result = await chatAgentAction({ conversationId, ...request });
-      setView({ status: "success", result });
-    } catch (err) {
+      const response = await chatAgentAction({ conversationId, ...request });
+      if (response.ok) {
+        setView({ status: "success", result: response });
+      } else {
+        setView({ status: "error", message: response.message });
+      }
+    } catch {
+      // chatAgentAction is designed to always return a result rather than
+      // throw; this is a last-resort net in case anything upstream still
+      // throws. The caught error's own message is never rendered -- in a
+      // production build it may be Next.js's generic Server Components
+      // digest text rather than anything safe to show staff.
       setView({
         status: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "The AI assistant is temporarily unavailable. Please try again shortly.",
+        message: "The AI assistant is temporarily unavailable. Please try again shortly.",
       });
     }
   }
@@ -215,7 +221,19 @@ export function ChatAgentPanel({
         {view.status === "loading" ? <div className="dvx-assistant-status">Thinking…</div> : null}
 
         {view.status === "error" ? (
-          <div className="dvx-assistant-status dvx-assistant-status--error">{view.message}</div>
+          <div className="dvx-assistant-status dvx-assistant-status--error">
+            <p style={{ margin: 0 }}>{view.message}</p>
+            {lastRequest ? (
+              <button
+                type="button"
+                className="dvx-button dvx-button--secondary"
+                style={{ marginTop: "0.5rem" }}
+                onClick={regenerate}
+              >
+                Try again
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
         {view.status === "success" ? (

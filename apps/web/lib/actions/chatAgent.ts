@@ -5,6 +5,8 @@ import {
   AnthropicChatAgentProvider,
   ChatAgentOverloadedError,
   ChatAgentProviderError,
+  ChatAgentRateLimitedError,
+  ChatAgentRequestFailedError,
   ChatAgentResponseError,
   ChatAgentValidationError,
   runChatAgentAction as runChatAgent,
@@ -36,12 +38,39 @@ export interface ChatAgentActionInput {
   question?: string;
 }
 
-const UNAVAILABLE_MESSAGE =
-  "The AI assistant is temporarily unavailable. Please try again shortly.";
-const BUSY_MESSAGE = "The AI assistant is temporarily busy. Please try again shortly.";
+/**
+ * Every failure category this action can report to the browser. Deliberately
+ * a fixed, closed set -- never a raw provider/DB error, a Next.js digest, a
+ * stack trace, or a system-prompt fragment.
+ */
+export type ChatAgentErrorCode =
+  | "UNAUTHENTICATED"
+  | "PERMISSION_DENIED"
+  | "CONVERSATION_NOT_FOUND"
+  | "INVALID_REQUEST"
+  | "AI_NOT_CONFIGURED"
+  | "AI_TEMPORARILY_UNAVAILABLE"
+  | "AI_RATE_LIMITED"
+  | "AI_REQUEST_FAILED";
+
+export type ChatAgentActionResponse =
+  ({ ok: true } & ChatAgentResult) | { ok: false; code: ChatAgentErrorCode; message: string };
+
+const UNAUTHENTICATED_MESSAGE = "Please sign in again to use the AI assistant.";
 const PERMISSION_DENIED_MESSAGE =
   "You do not have permission to use the AI assistant for this conversation.";
-const CONVERSATION_UNAVAILABLE_MESSAGE = "This conversation is unavailable.";
+const CONVERSATION_NOT_FOUND_MESSAGE = "This conversation is unavailable.";
+const NOT_CONFIGURED_MESSAGE =
+  "The AI assistant is not available at the moment. Please contact your administrator.";
+const RATE_LIMITED_MESSAGE =
+  "The AI assistant is receiving too many requests. Please try again shortly.";
+const BUSY_MESSAGE = "The AI assistant is temporarily busy. Please try again shortly.";
+const UNAVAILABLE_MESSAGE = "The AI assistant is temporarily unavailable. Please try again.";
+const REQUEST_FAILED_MESSAGE = "The AI assistant could not complete this request.";
+
+function errorResult(code: ChatAgentErrorCode, message: string): ChatAgentActionResponse {
+  return { ok: false, code, message };
+}
 
 /**
  * Server-side security boundary for the Dashboard Chat Agent (an internal
@@ -71,107 +100,138 @@ const CONVERSATION_UNAVAILABLE_MESSAGE = "This conversation is unavailable.";
  * markConversationRead -- this action only ever returns text for a human to
  * review; it cannot send a message, assign/pause/resume/close a
  * conversation, or create/modify a lead.
+ *
+ * This function never throws. Next.js redacts a thrown Server Action error
+ * in production builds to a generic, undebuggable digest message regardless
+ * of how safe the thrown message text is -- so every failure path below
+ * returns a structured, serializable { ok: false, code, message } result
+ * instead, and the whole body is wrapped in an outer safety net that
+ * catches anything unexpected (a DB error, a framework failure, etc.) and
+ * still returns a safe, generic result rather than letting it escape.
  */
-export async function chatAgentAction(input: ChatAgentActionInput): Promise<ChatAgentResult> {
-  const session = await getDashboardSession();
-  if (!session) throw new Error(PERMISSION_DENIED_MESSAGE);
+export async function chatAgentAction(
+  input: ChatAgentActionInput,
+): Promise<ChatAgentActionResponse> {
+  const env = loadEnv(process.env);
+  const baseLog = createLogger({ environment: env.APP_ENV, conversationId: input.conversationId });
 
-  const capabilities = getDashboardCapabilities(session.activeRole);
-  if (!capabilities.canReplyToConversations) {
-    throw new Error(PERMISSION_DENIED_MESSAGE);
-  }
-
-  const supabase = await createServerSupabaseClient();
-  const handoverRepo = new SupabaseHandoverRepository(supabase);
-
-  let conversationState: string;
-  let aiMode: "active" | "paused";
-  let threadMessages;
   try {
-    const { conversation, thread } = await getConversationThreadForDashboard(
-      handoverRepo,
+    const session = await getDashboardSession();
+    if (!session) {
+      return errorResult("UNAUTHENTICATED", UNAUTHENTICATED_MESSAGE);
+    }
+
+    const log = createLogger({
+      environment: env.APP_ENV,
+      companyId: session.activeCompanyId,
+      conversationId: input.conversationId,
+    });
+
+    const capabilities = getDashboardCapabilities(session.activeRole);
+    if (!capabilities.canReplyToConversations) {
+      return errorResult("PERMISSION_DENIED", PERMISSION_DENIED_MESSAGE);
+    }
+
+    const supabase = await createServerSupabaseClient();
+    const handoverRepo = new SupabaseHandoverRepository(supabase);
+
+    let conversationState: string;
+    let aiMode: "active" | "paused";
+    let threadMessages;
+    try {
+      const { conversation, thread } = await getConversationThreadForDashboard(
+        handoverRepo,
+        session.activeCompanyId,
+        input.conversationId,
+      );
+      conversationState = conversation.state;
+      aiMode = conversation.aiMode;
+      threadMessages = thread.messages;
+    } catch {
+      // Never distinguish "doesn't exist" from "belongs to another tenant" --
+      // both look identical to the caller, matching every other
+      // conversation-detail page in this app.
+      return errorResult("CONVERSATION_NOT_FOUND", CONVERSATION_NOT_FOUND_MESSAGE);
+    }
+
+    if (!env.anthropicConfigured) {
+      log.warn("chat_agent_provider_not_configured", { action: input.action });
+      return errorResult("AI_NOT_CONFIGURED", NOT_CONFIGURED_MESSAGE);
+    }
+
+    const context = await loadChatAgentContext(
+      supabase,
       session.activeCompanyId,
       input.conversationId,
+      threadMessages,
     );
-    conversationState = conversation.state;
-    aiMode = conversation.aiMode;
-    threadMessages = thread.messages;
-  } catch {
-    // Never distinguish "doesn't exist" from "belongs to another tenant" --
-    // both look identical to the caller, matching every other
-    // conversation-detail page in this app.
-    throw new Error(CONVERSATION_UNAVAILABLE_MESSAGE);
-  }
 
-  const env = loadEnv(process.env);
-  const log = createLogger({
-    environment: env.APP_ENV,
-    companyId: session.activeCompanyId,
-    conversationId: input.conversationId,
-  });
-
-  if (!env.anthropicConfigured) {
-    log.warn("chat_agent_provider_not_configured", { action: input.action });
-    throw new Error(UNAVAILABLE_MESSAGE);
-  }
-
-  const context = await loadChatAgentContext(
-    supabase,
-    session.activeCompanyId,
-    input.conversationId,
-    threadMessages,
-  );
-
-  const provider = new AnthropicChatAgentProvider({
-    apiKey: env.ANTHROPIC_API_KEY!,
-    model: env.ANTHROPIC_MODEL,
-    maxTokens: env.ANTHROPIC_MAX_TOKENS,
-  });
-
-  try {
-    const result = await runChatAgent(provider, {
-      action: input.action,
-      messages: context.messages,
-      historyTruncated: context.historyTruncated,
-      company: context.company,
-      conversation: { state: conversationState, aiMode },
-      contact: context.contact,
-      lead: context.lead,
-      staffDraft: input.draft,
-      targetLanguage: input.targetLanguage,
-      tone: input.tone,
-      question: input.question,
+    const provider = new AnthropicChatAgentProvider({
+      apiKey: env.ANTHROPIC_API_KEY!,
+      model: env.ANTHROPIC_MODEL,
+      maxTokens: env.ANTHROPIC_MAX_TOKENS,
     });
-    // Sanitized usage metadata only -- never the prompt, the transcript, or
-    // the generated content itself (see the module doc comment on why this
-    // is a structured log, not a durable audit_logs row: no safe INSERT
-    // path exists for apps/web into that table for a new action type
-    // without a migration or widening the locked-down service-role
-    // surface -- see apps/web/test/serviceRoleGuard.test.ts).
-    log.info("chat_agent_action_succeeded", {
-      action: input.action,
-      actorUserId: session.userId,
-      historyTruncated: context.historyTruncated,
-    });
-    return result;
-  } catch (error) {
-    if (error instanceof ChatAgentValidationError) {
-      // Message is already a short, safe, staff-facing string (e.g. "Write
-      // a draft first...") -- rethrown as-is, never wrapped or replaced.
-      throw error;
-    }
-    if (error instanceof ChatAgentOverloadedError) {
-      log.warn("chat_agent_action_overloaded", { action: input.action });
-      throw new Error(BUSY_MESSAGE);
-    }
-    if (error instanceof ChatAgentResponseError || error instanceof ChatAgentProviderError) {
-      log.warn("chat_agent_action_failed", {
+
+    try {
+      const result = await runChatAgent(provider, {
         action: input.action,
-        errorType: error.name,
+        messages: context.messages,
+        historyTruncated: context.historyTruncated,
+        company: context.company,
+        conversation: { state: conversationState, aiMode },
+        contact: context.contact,
+        lead: context.lead,
+        staffDraft: input.draft,
+        targetLanguage: input.targetLanguage,
+        tone: input.tone,
+        question: input.question,
       });
-      throw new Error(UNAVAILABLE_MESSAGE);
+      // Sanitized usage metadata only -- never the prompt, the transcript, or
+      // the generated content itself (see the module doc comment on why this
+      // is a structured log, not a durable audit_logs row: no safe INSERT
+      // path exists for apps/web into that table for a new action type
+      // without a migration or widening the locked-down service-role
+      // surface -- see apps/web/test/serviceRoleGuard.test.ts).
+      log.info("chat_agent_action_succeeded", {
+        action: input.action,
+        actorUserId: session.userId,
+        historyTruncated: context.historyTruncated,
+      });
+      return { ok: true, ...result };
+    } catch (error) {
+      if (error instanceof ChatAgentValidationError) {
+        // Message is already a short, safe, staff-facing string (e.g. "Write
+        // a draft first...") -- returned as-is, never wrapped or replaced.
+        return errorResult("INVALID_REQUEST", error.message);
+      }
+      if (error instanceof ChatAgentRateLimitedError) {
+        log.warn("chat_agent_action_rate_limited", { action: input.action });
+        return errorResult("AI_RATE_LIMITED", RATE_LIMITED_MESSAGE);
+      }
+      if (error instanceof ChatAgentOverloadedError) {
+        log.warn("chat_agent_action_overloaded", { action: input.action });
+        return errorResult("AI_TEMPORARILY_UNAVAILABLE", BUSY_MESSAGE);
+      }
+      if (error instanceof ChatAgentProviderError) {
+        log.warn("chat_agent_action_failed", { action: input.action, errorType: error.name });
+        return errorResult("AI_TEMPORARILY_UNAVAILABLE", UNAVAILABLE_MESSAGE);
+      }
+      if (error instanceof ChatAgentRequestFailedError || error instanceof ChatAgentResponseError) {
+        log.warn("chat_agent_action_failed", { action: input.action, errorType: error.name });
+        return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);
+      }
+      log.error("chat_agent_action_unexpected_error", { action: input.action });
+      return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);
     }
-    log.error("chat_agent_action_unexpected_error", { action: input.action });
-    throw new Error(UNAVAILABLE_MESSAGE);
+  } catch {
+    // Absolute outer safety net: anything unexpected above (session
+    // resolution, permission lookup, conversation loading, context loading)
+    // must still never throw out of this Server Action -- Next.js redacts a
+    // thrown Server Action error to a generic, undebuggable digest message
+    // in production. The raw error is deliberately never read/logged here
+    // (it may carry a DB error message or other internal detail); only that
+    // something failed.
+    baseLog.error("chat_agent_action_unhandled_error", { action: input.action });
+    return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);
   }
 }

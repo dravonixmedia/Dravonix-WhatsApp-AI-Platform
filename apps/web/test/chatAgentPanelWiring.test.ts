@@ -79,6 +79,40 @@ describe("ChatAgentPanel: duplicate-click guard", () => {
   });
 });
 
+describe("ChatAgentPanel: error recovery never shows a raw/thrown error message", () => {
+  it("checks response.ok instead of catching a thrown error for the normal failure path", () => {
+    expect(panelSource).toMatch(/if\s*\(response\.ok\)\s*\{/);
+    expect(panelSource).toMatch(/setView\(\{\s*status: "error", message: response\.message \}\)/);
+  });
+
+  it("never renders a caught exception's own .message -- only a fixed, safe fallback string", () => {
+    const catchBlockMatch = panelSource.match(/\}\s*catch\s*\{([\s\S]*?)\n {2}\}/);
+    expect(catchBlockMatch).not.toBeNull();
+    expect(catchBlockMatch?.[1] ?? "").not.toMatch(/err\.message|error\.message/);
+    expect(catchBlockMatch?.[1] ?? "").toMatch(
+      /The AI assistant is temporarily unavailable\. Please try again shortly\./,
+    );
+  });
+
+  it("clears the loading state on failure (view becomes 'error', never stuck at 'loading')", () => {
+    expect(panelSource).toMatch(/setView\(\{ status: "error"/);
+  });
+
+  it('offers a "Try again" action in the error view that regenerates the same last request', () => {
+    expect(panelSource).toMatch(/view\.status === "error"/);
+    expect(panelSource).toMatch(/Try again/);
+    expect(panelSource).toMatch(/onClick=\{regenerate\}/);
+  });
+
+  it("the panel stays open and every action button remains usable after an error (no early return unmounts it)", () => {
+    // The action buttons are only gated on isPending, never on view.status,
+    // so an error view still leaves every button clickable.
+    const buttonBlocks = panelSource.match(/disabled=\{isPending[^}]*\}/g) ?? [];
+    expect(buttonBlocks.length).toBeGreaterThanOrEqual(6);
+    expect(panelSource).not.toMatch(/disabled=\{[^}]*view\.status === "error"/);
+  });
+});
+
 describe("ChatAgentPanel: no polling, no new Realtime subscription", () => {
   it("never uses setInterval/setTimeout polling or opens a Realtime channel", () => {
     for (const source of [panelSource, composerWrapperSource]) {
