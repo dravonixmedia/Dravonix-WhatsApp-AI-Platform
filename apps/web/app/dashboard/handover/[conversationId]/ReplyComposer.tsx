@@ -13,7 +13,7 @@ import { sendHumanReplyAction } from "../../../../lib/actions/handover.js";
  *
  * `value`/`onChange` are optional: omitted, the textarea is a plain
  * uncontrolled field (the original behavior). Passed (by
- * ConversationComposerWithAssistant, so the Chat Agent's "Use this reply"
+ * ConversationComposerWithAssistant, so the Chat Agent's "Use in reply"
  * can insert text), the textarea becomes controlled -- but the actual send
  * path below is completely unchanged either way: it still reads `body` from
  * the submitted FormData (a controlled input still participates in

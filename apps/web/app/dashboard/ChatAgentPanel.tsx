@@ -15,6 +15,7 @@ import {
   resolveDefaultTargetLanguage,
   resolveTranslateSource,
   resolveTranslateSourceText,
+  TRANSLATE_SOURCE_LABELS,
   type TranslateSource,
 } from "../../lib/chatAgentTranslate.js";
 import { CloseIcon } from "./Icons.js";
@@ -28,6 +29,7 @@ const REWRITE_TONES: Array<{ value: ChatAgentRewriteTone; label: string }> = [
 ];
 
 const ALL_LANGUAGES = Object.keys(CHAT_AGENT_SUPPORTED_LANGUAGES) as ChatAgentSupportedLanguage[];
+const ALL_TRANSLATE_SOURCES: TranslateSource[] = ["composer", "draft", "result"];
 
 type PanelView =
   | { status: "idle" }
@@ -43,17 +45,23 @@ type SelectableAction = "rewrite_draft" | "translate";
  * existing human reply composer. Every action here only ever calls
  * chatAgentAction (a read-only-to-the-outside-world Server Action: it never
  * sends WhatsApp messages, never assigns/pauses/resumes/closes a
- * conversation, and never creates or modifies a lead). "Use this reply"/
- * "Use in reply" only ever calls onUseReply, which the parent
- * (ConversationComposerWithAssistant) wires to the existing composer's
- * draft state -- it never sends anything; the existing manual Send button
- * is still required.
+ * conversation, and never creates or modifies a lead). "Use in reply" only
+ * ever calls onUseReply, which the parent (ConversationComposerWithAssistant)
+ * wires to the existing composer's draft state -- it never sends anything;
+ * the existing manual Send button is still required.
  *
  * Six quick actions are always visible: Summarize, Suggest reply, Rewrite,
  * Translate, Extract lead, Follow-up. Rewrite and Translate need extra
  * input before they can run, so selecting one reveals only that action's
  * own controls (never all controls at once) instead of running
  * immediately.
+ *
+ * Translate can source its text from three places, in priority order: the
+ * reply box, the latest AI-generated draft (Suggest reply/Rewrite/previous
+ * Translate/Follow-up), or the latest non-draft assistant result (Summary/
+ * Extract lead/Ask AI answer). Every result card also carries its own
+ * "Translate" button (see translateThisResult) so a visible summary or lead
+ * extraction is translatable without first copying it into the reply box.
  *
  * Translate's target-language list is deliberately NOT filtered by the
  * company's automatic-bot enabled_languages setting -- this panel is an
@@ -83,6 +91,11 @@ export function ChatAgentPanel({
   const [copied, setCopied] = useState(false);
   const [selectedAction, setSelectedAction] = useState<SelectableAction | null>(null);
   const [latestAiDraft, setLatestAiDraft] = useState<string | null>(null);
+  // The latest successful summarize/extract_lead/ask_question result --
+  // eligible as a Translate source even though it's never customer-ready
+  // draft text (see isDraftAction). Always the already-clean, staff-readable
+  // displayText (formatSummary/formatLeadExtraction output), never raw JSON.
+  const [latestAssistantResult, setLatestAssistantResult] = useState<string | null>(null);
   const [translateSourceOverride, setTranslateSourceOverride] = useState<TranslateSource | null>(
     null,
   );
@@ -92,21 +105,60 @@ export function ChatAgentPanel({
   // below. Starts as a sentinel that can never equal a real source string,
   // so the very first time Translate has a source, the effect always runs.
   const [targetLanguageResolvedFor, setTargetLanguageResolvedFor] = useState<string | null>(null);
+  // Whether the source translated by the currently-displayed translate
+  // result was a draft-type source (reply box/AI draft) or a non-draft
+  // assistant result (summary/lead/ask AI answer) -- decides whether that
+  // result card offers "Use in reply" (see the unified result card below).
+  const [lastTranslateSourceKind, setLastTranslateSourceKind] = useState<TranslateSource | null>(
+    null,
+  );
+
+  // Every piece of Chat-Agent-generated state is scoped to this
+  // conversation -- switching conversations (even without fully unmounting
+  // this panel, e.g. a same-route client-side navigation) must never leak a
+  // draft, assistant result, or translate selection from a different
+  // customer's conversation into this one.
+  useEffect(() => {
+    setView({ status: "idle" });
+    setLastRequest(null);
+    setQuestion("");
+    setTone("professional");
+    setTargetLanguage("en");
+    setCopied(false);
+    setSelectedAction(null);
+    setLatestAiDraft(null);
+    setLatestAssistantResult(null);
+    setTranslateSourceOverride(null);
+    setJustInsertedTranslation(false);
+    setTargetLanguageResolvedFor(null);
+    setLastTranslateSourceKind(null);
+  }, [conversationId]);
 
   const isPending = view.status === "loading";
   const hasDraft = currentDraft.trim().length > 0;
 
   const composerHasText = currentDraft.trim().length > 0;
   const aiDraftHasText = Boolean(latestAiDraft && latestAiDraft.trim().length > 0);
+  const assistantResultHasText = Boolean(
+    latestAssistantResult && latestAssistantResult.trim().length > 0,
+  );
+  const availableTranslateSources = ALL_TRANSLATE_SOURCES.filter(
+    (source) =>
+      (source === "composer" && composerHasText) ||
+      (source === "draft" && aiDraftHasText) ||
+      (source === "result" && assistantResultHasText),
+  );
   const translateSource = resolveTranslateSource(
     currentDraft,
     latestAiDraft,
+    latestAssistantResult,
     translateSourceOverride,
   );
   const translateSourceText = resolveTranslateSourceText(
     translateSource,
     currentDraft,
     latestAiDraft,
+    latestAssistantResult,
   );
   const hasTranslateSource = translateSourceText.trim().length > 0;
   const detectedSourceLanguage = hasTranslateSource
@@ -117,10 +169,10 @@ export function ChatAgentPanel({
 
   // Auto-selects a target language different from the detected source
   // whenever Translate is opened, or whenever the resolved source text
-  // changes (a new draft became available, the source was switched, or the
-  // composer/draft text itself changed) -- but never overwrites a target
-  // the user already manually confirmed for THIS exact source text. Purely
-  // a UI default: never calls chatAgentAction/Anthropic by itself.
+  // changes (a new draft/result became available, the source was switched,
+  // or the composer/draft text itself changed) -- but never overwrites a
+  // target the user already manually confirmed for THIS exact source text.
+  // Purely a UI default: never calls chatAgentAction/Anthropic by itself.
   useEffect(() => {
     if (selectedAction !== "translate") return;
     if (!hasTranslateSource) return;
@@ -135,9 +187,11 @@ export function ChatAgentPanel({
     targetLanguageResolvedFor,
   ]);
 
-  const noSourceGuidance = !hasTranslateSource ? "Write a reply or generate a draft first." : null;
+  const noSourceGuidance = !hasTranslateSource
+    ? "Write a reply or generate an AI result first."
+    : null;
   const sameLanguageGuidance = isSameLanguage
-    ? `This text already appears to be in ${CHAT_AGENT_SUPPORTED_LANGUAGES[detectedSourceLanguage!]}. Select another language.`
+    ? `This content already appears to be in ${CHAT_AGENT_SUPPORTED_LANGUAGES[detectedSourceLanguage!]}. Select another language.`
     : null;
 
   async function run(request: PendingRequest) {
@@ -150,8 +204,12 @@ export function ChatAgentPanel({
       const response = await chatAgentAction({ conversationId, ...request });
       if (response.ok) {
         setView({ status: "success", result: response });
-        if (isDraftAction(request.action) && response.displayText.trim()) {
-          setLatestAiDraft(response.displayText);
+        if (response.displayText.trim()) {
+          if (isDraftAction(request.action)) {
+            setLatestAiDraft(response.displayText);
+          } else {
+            setLatestAssistantResult(response.displayText);
+          }
         }
       } else {
         setView({ status: "error", message: response.message });
@@ -188,9 +246,27 @@ export function ChatAgentPanel({
     setJustInsertedTranslation(true);
   }
 
+  // Wired to the "Translate" button on a non-translate result card (draft
+  // or non-draft). Activates the Translate quick action and points the
+  // source selector at exactly that result -- it never calls the provider
+  // itself, and the original result stays visible below since selecting
+  // Translate doesn't touch view/lastRequest until the user clicks Translate's
+  // own submit button.
+  function translateThisResult() {
+    if (view.status !== "success" || !lastRequest || lastRequest.action === "translate") return;
+    setTranslateSourceOverride(isDraftAction(lastRequest.action) ? "draft" : "result");
+    setSelectedAction("translate");
+  }
+
   if (!open) return null;
 
   const showingTranslateResult = view.status === "success" && lastRequest?.action === "translate";
+  const isDraftResult =
+    view.status === "success" &&
+    Boolean(lastRequest) &&
+    lastRequest?.action !== "translate" &&
+    isDraftAction(lastRequest!.action);
+  const translateResultShowsUseInReply = lastTranslateSourceKind !== "result";
 
   return (
     <div className="dvx-assistant-panel" role="dialog" aria-label="AI Assistant">
@@ -293,7 +369,7 @@ export function ChatAgentPanel({
 
         {selectedAction === "translate" ? (
           <div className="dvx-assistant-translate-panel">
-            {composerHasText && aiDraftHasText ? (
+            {availableTranslateSources.length > 1 ? (
               <div className="dvx-assistant-action-row">
                 <span className="dvx-muted" style={{ fontSize: "0.72rem" }}>
                   Source:
@@ -301,17 +377,20 @@ export function ChatAgentPanel({
                 <select
                   className="dvx-input"
                   aria-label="Translate source"
-                  value={translateSource ?? "composer"}
+                  value={translateSource ?? availableTranslateSources[0]}
                   onChange={(e) => setTranslateSourceOverride(e.target.value as TranslateSource)}
                   disabled={isPending}
                 >
-                  <option value="composer">Reply box</option>
-                  <option value="draft">Latest AI draft</option>
+                  {availableTranslateSources.map((source) => (
+                    <option key={source} value={source}>
+                      {TRANSLATE_SOURCE_LABELS[source]}
+                    </option>
+                  ))}
                 </select>
               </div>
-            ) : hasTranslateSource ? (
+            ) : hasTranslateSource && translateSource ? (
               <p className="dvx-muted" style={{ fontSize: "0.72rem", margin: 0 }}>
-                Source: {translateSource === "composer" ? "Reply box" : "Latest AI draft"}
+                Source: {TRANSLATE_SOURCE_LABELS[translateSource]}
               </p>
             ) : null}
 
@@ -351,9 +430,10 @@ export function ChatAgentPanel({
               type="button"
               className="dvx-button dvx-button--secondary"
               disabled={isPending || !hasTranslateSource || isSameLanguage}
-              onClick={() =>
-                run({ action: "translate", draft: translateSourceText, targetLanguage })
-              }
+              onClick={() => {
+                setLastTranslateSourceKind(translateSource);
+                run({ action: "translate", draft: translateSourceText, targetLanguage });
+              }}
             >
               Translate
             </button>
@@ -399,9 +479,15 @@ export function ChatAgentPanel({
           </div>
         ) : null}
 
-        {view.status === "success" && !showingTranslateResult ? (
+        {view.status === "success" ? (
           view.result.displayText.trim() ? (
             <div className="dvx-assistant-result">
+              {showingTranslateResult ? (
+                <div className="dvx-muted" style={{ fontSize: "0.72rem", fontWeight: 600 }}>
+                  Translated to{" "}
+                  {CHAT_AGENT_SUPPORTED_LANGUAGES[lastRequest?.targetLanguage ?? "en"]}
+                </div>
+              ) : null}
               <pre className="dvx-assistant-result-text">{view.result.displayText}</pre>
               {view.result.historyTruncated ? (
                 <p className="dvx-muted" style={{ fontSize: "0.72rem" }}>
@@ -410,13 +496,19 @@ export function ChatAgentPanel({
                 </p>
               ) : null}
               <div className="dvx-assistant-result-actions">
-                <button
-                  type="button"
-                  className="dvx-button"
-                  onClick={() => onUseReply(view.result.displayText)}
-                >
-                  Use this reply
-                </button>
+                {isDraftResult || (showingTranslateResult && translateResultShowsUseInReply) ? (
+                  <button
+                    type="button"
+                    className="dvx-button"
+                    onClick={
+                      showingTranslateResult
+                        ? useTranslationInReply
+                        : () => onUseReply(view.result.displayText)
+                    }
+                  >
+                    Use in reply
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="dvx-button dvx-button--secondary"
@@ -427,6 +519,15 @@ export function ChatAgentPanel({
                 >
                   {copied ? "Copied" : "Copy"}
                 </button>
+                {!showingTranslateResult ? (
+                  <button
+                    type="button"
+                    className="dvx-button dvx-button--secondary"
+                    onClick={translateThisResult}
+                  >
+                    Translate
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="dvx-button dvx-button--secondary"
@@ -442,57 +543,7 @@ export function ChatAgentPanel({
                   Close
                 </button>
               </div>
-            </div>
-          ) : (
-            <div className="dvx-assistant-status">
-              The assistant had nothing to add for this request.
-            </div>
-          )
-        ) : null}
-
-        {showingTranslateResult && view.status === "success" ? (
-          view.result.displayText.trim() ? (
-            <div className="dvx-assistant-result">
-              <div className="dvx-muted" style={{ fontSize: "0.72rem", fontWeight: 600 }}>
-                Translated to {CHAT_AGENT_SUPPORTED_LANGUAGES[lastRequest?.targetLanguage ?? "en"]}
-              </div>
-              <pre className="dvx-assistant-result-text">{view.result.displayText}</pre>
-              {view.result.historyTruncated ? (
-                <p className="dvx-muted" style={{ fontSize: "0.72rem" }}>
-                  Note: only the most recent portion of this conversation was used -- older messages
-                  were not reviewed.
-                </p>
-              ) : null}
-              <div className="dvx-assistant-result-actions">
-                <button type="button" className="dvx-button" onClick={useTranslationInReply}>
-                  Use in reply
-                </button>
-                <button
-                  type="button"
-                  className="dvx-button dvx-button--secondary"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(view.result.displayText);
-                    setCopied(true);
-                  }}
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
-                <button
-                  type="button"
-                  className="dvx-button dvx-button--secondary"
-                  onClick={regenerate}
-                >
-                  Regenerate
-                </button>
-                <button
-                  type="button"
-                  className="dvx-button dvx-button--secondary"
-                  onClick={onClose}
-                >
-                  Close
-                </button>
-              </div>
-              {justInsertedTranslation ? (
+              {showingTranslateResult && justInsertedTranslation ? (
                 <p className="dvx-muted" style={{ fontSize: "0.72rem" }}>
                   Translation added to the reply box.
                 </p>

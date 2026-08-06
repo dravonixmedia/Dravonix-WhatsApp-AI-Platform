@@ -36,6 +36,10 @@ const chatAgentContextSource = readFileSync(
   join(webRoot, "lib/repositories/chatAgentContext.ts"),
   "utf8",
 );
+const chatAgentProviderSource = readFileSync(
+  join(here, "..", "..", "..", "packages/ai/src/chatAgent/provider.ts"),
+  "utf8",
+);
 
 function withoutComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -59,11 +63,12 @@ describe("ChatAgentPanel: never bypasses the human-review composer", () => {
     }
   });
 
-  it('"Use this reply" only calls onUseReply -- it never submits a form or calls chatAgentAction again', () => {
-    const useReplyBlockMatch = panelSource.match(/Use this reply[\s\S]{0,400}?onClick=\{[^}]*\}/);
-    // Simpler and more robust: find the button whose onClick calls onUseReply.
-    expect(panelSource).toMatch(/onClick=\{\(\) => onUseReply\(view\.result\.displayText\)\}/);
-    void useReplyBlockMatch;
+  it('"Use in reply" only calls onUseReply or useTranslationInReply (which itself only calls onUseReply) -- never a send/submit action', () => {
+    expect(panelSource).toMatch(/: \(\) => onUseReply\(view\.result\.displayText\)/);
+    const fnBody =
+      panelSource.match(/function useTranslationInReply\(\) \{([\s\S]*?)\n {2}\}/)?.[1] ?? "";
+    expect(fnBody).toContain("onUseReply(view.result.displayText)");
+    expect(fnBody).not.toMatch(/send|submit|whatsapp/i);
   });
 
   it("ConversationComposerWithAssistant wires onUseReply directly to the composer's draft setter, never to a send action", () => {
@@ -166,19 +171,12 @@ describe("ChatAgentPanel: action-specific controls only show when that action is
   });
 });
 
-describe("ChatAgentPanel: Translate source selection (the confirmed bug fix)", () => {
+describe("ChatAgentPanel: Translate source resolution uses the shared priority helpers", () => {
   it("imports and uses the shared priority-resolution helpers instead of a composer-only hasDraft check", () => {
     expect(panelSource).toContain("resolveTranslateSource");
     expect(panelSource).toContain("resolveTranslateSourceText");
     expect(panelSource).toMatch(
-      /const translateSource = resolveTranslateSource\(\s*currentDraft,\s*latestAiDraft,\s*translateSourceOverride,?\s*\)/,
-    );
-  });
-
-  it("tracks the latest AI-generated draft via isDraftAction, updated after every successful run()", () => {
-    expect(panelSource).toContain("isDraftAction");
-    expect(panelSource).toMatch(
-      /if \(isDraftAction\(request\.action\) && response\.displayText\.trim\(\)\)\s*\{\s*setLatestAiDraft\(response\.displayText\);/,
+      /const translateSource = resolveTranslateSource\(\s*currentDraft,\s*latestAiDraft,\s*latestAssistantResult,\s*translateSourceOverride,?\s*\)/,
     );
   });
 
@@ -186,24 +184,55 @@ describe("ChatAgentPanel: Translate source selection (the confirmed bug fix)", (
     expect(panelSource).toMatch(
       /run\(\{ action: "translate", draft: translateSourceText, targetLanguage \}\)/,
     );
-    // The old, buggy pattern (always the composer, regardless of an available AI draft) must be gone.
+    // The old, buggy pattern (always the composer, regardless of an available AI draft/result) must be gone.
     expect(panelSource).not.toMatch(/run\(\{ action: "translate", draft: currentDraft/);
   });
 
-  it("shows 'Write a reply or generate a draft first.' when neither source has text, and never calls the provider in that case", () => {
-    expect(panelSource).toContain('"Write a reply or generate a draft first."');
+  it("shows 'Write a reply or generate an AI result first.' when none of the three sources has text, and never calls the provider in that case", () => {
+    expect(panelSource).toContain('"Write a reply or generate an AI result first."');
     expect(panelSource).toMatch(
-      /const noSourceGuidance = !hasTranslateSource \? "Write a reply or generate a draft first\." : null;/,
+      /const noSourceGuidance = !hasTranslateSource\s*\n\s*\? "Write a reply or generate an AI result first\."\s*\n\s*: null;/,
     );
     expect(panelSource).toMatch(
       /disabled=\{isPending \|\| !hasTranslateSource \|\| isSameLanguage\}/,
     );
   });
+});
 
-  it("only shows a source picker when both the composer and an AI draft have usable text", () => {
-    expect(panelSource).toMatch(/\{composerHasText && aiDraftHasText \? \(/);
-    expect(panelSource).toContain(">Reply box<");
-    expect(panelSource).toContain(">Latest AI draft<");
+describe("ChatAgentPanel: Translate has three possible sources (reply box, latest AI draft, latest assistant result)", () => {
+  it("tracks the latest AI-generated draft via isDraftAction, updated after every successful draft-action run()", () => {
+    expect(panelSource).toContain("isDraftAction");
+    expect(panelSource).toMatch(/if \(isDraftAction\(request\.action\)\) \{\s*setLatestAiDraft/);
+  });
+
+  it("tracks the latest non-draft assistant result (summarize/extract_lead/ask_question) separately from the draft bucket", () => {
+    expect(panelSource).toMatch(/\} else \{\s*setLatestAssistantResult\(response\.displayText\);/);
+  });
+
+  it("summarize/extract_lead/ask_question results are never stored as latestAiDraft directly (isDraftAction gates the branch)", () => {
+    const runBody =
+      panelSource.match(
+        /async function run\(request: PendingRequest\) \{([\s\S]*?)\n {2}\}/,
+      )?.[1] ?? "";
+    expect(runBody).toMatch(/if \(isDraftAction\(request\.action\)\) \{/);
+  });
+
+  it("only shows a source selector when more than one of the three sources has usable text", () => {
+    expect(panelSource).toMatch(/\{availableTranslateSources\.length > 1 \? \(/);
+    expect(panelSource).toContain("TRANSLATE_SOURCE_LABELS");
+  });
+
+  it("shows a plain label (no selector) when exactly one source has usable text", () => {
+    expect(panelSource).toMatch(
+      /\) : hasTranslateSource && translateSource \? \(\s*<p[\s\S]{0,150}?Source: \{TRANSLATE_SOURCE_LABELS\[translateSource\]\}/,
+    );
+  });
+
+  it("the source selector's options come from availableTranslateSources, not a hardcoded composer/draft-only pair", () => {
+    expect(panelSource).toMatch(
+      /\{availableTranslateSources\.map\(\(source\) => \(\s*<option key=\{source\} value=\{source\}>\s*\{TRANSLATE_SOURCE_LABELS\[source\]\}/,
+    );
+    expect(panelSource).not.toContain('<option value="composer">Reply box</option>');
   });
 });
 
@@ -214,7 +243,7 @@ describe("ChatAgentPanel: same-language guard", () => {
       /const isSameLanguage =\s*\n\s*detectedSourceLanguage !== null && detectedSourceLanguage === targetLanguage;/,
     );
     expect(panelSource).toMatch(
-      /This text already appears to be in \$\{CHAT_AGENT_SUPPORTED_LANGUAGES\[detectedSourceLanguage!\]\}\. Select another language\./,
+      /This content already appears to be in \$\{CHAT_AGENT_SUPPORTED_LANGUAGES\[detectedSourceLanguage!\]\}\. Select another language\./,
     );
   });
 
@@ -238,6 +267,13 @@ describe("ChatAgentPanel: same-language guard", () => {
   it("disables the Translate submit button and never calls the provider while source and target languages match", () => {
     expect(panelSource).toMatch(
       /disabled=\{isPending \|\| !hasTranslateSource \|\| isSameLanguage\}/,
+    );
+  });
+
+  it("the same-language guidance is a plain derived value recomputed every render, so it clears automatically on any target/source change (no stale state to reset)", () => {
+    expect(panelSource).not.toMatch(/setSameLanguageGuidance/);
+    expect(panelSource).toMatch(
+      /const sameLanguageGuidance = isSameLanguage\s*\n\s*\? `This content already appears to be in/,
     );
   });
 });
@@ -266,12 +302,16 @@ describe("ChatAgentPanel: Translate always offers all four platform languages (n
   });
 });
 
-describe("Automatic WhatsApp bot language behavior is unchanged by the Translate UX fix", () => {
+describe("Automatic WhatsApp bot language behavior is unchanged by the Translate fixes", () => {
   it("chatAgentContext.ts still reads company_settings.enabled_languages and feeds it into the AI context (the automatic-bot pipeline, untouched)", () => {
     expect(chatAgentContextSource).toContain("enabled_languages");
     expect(chatAgentContextSource).toMatch(
       /enabledLanguages: settings\?\.enabled_languages \?\? \["en"\]/,
     );
+  });
+
+  it("the Cloudflare-native fetch binding in the Anthropic provider is untouched by this UI-only change", () => {
+    expect(chatAgentProviderSource).toMatch(/globalThis\.fetch/);
   });
 });
 
@@ -284,7 +324,9 @@ describe("ChatAgentPanel: automatic target-language selection", () => {
   });
 
   it("auto-selection is a plain effect that only sets local state -- it never calls chatAgentAction/run()", () => {
-    const effectMatch = panelSource.match(/useEffect\(\(\) => \{([\s\S]*?)\}, \[/);
+    const effectMatch = panelSource.match(
+      /\/\/ Auto-selects a target language[\s\S]*?useEffect\(\(\) => \{([\s\S]*?)\}, \[/,
+    );
     expect(effectMatch).not.toBeNull();
     const effectBody = effectMatch?.[1] ?? "";
     expect(effectBody).not.toMatch(/run\(|chatAgentAction/);
@@ -306,16 +348,79 @@ describe("ChatAgentPanel: automatic target-language selection", () => {
   });
 });
 
+describe("ChatAgentPanel: result-card 'Translate' action (translate any visible assistant result)", () => {
+  it("every non-translate result card renders a Translate action button wired to translateThisResult", () => {
+    expect(panelSource).toMatch(
+      /\{!showingTranslateResult \? \(\s*<button[\s\S]{0,120}?onClick=\{translateThisResult\}/,
+    );
+  });
+
+  it("a translate-output result card never renders its own Translate button (no re-translating a translation)", () => {
+    const actionsBlockMatch = panelSource.match(
+      /<div className="dvx-assistant-result-actions">([\s\S]*?)<\/div>/,
+    );
+    expect(actionsBlockMatch).not.toBeNull();
+    expect(actionsBlockMatch?.[1] ?? "").toMatch(/\{!showingTranslateResult \? \(/);
+  });
+
+  it("translateThisResult activates the Translate quick action and points the source override at the exact visible result (draft vs non-draft)", () => {
+    const fnMatch = panelSource.match(/function translateThisResult\(\) \{([\s\S]*?)\n {2}\}/);
+    expect(fnMatch).not.toBeNull();
+    const body = fnMatch?.[1] ?? "";
+    expect(body).toMatch(
+      /setTranslateSourceOverride\(isDraftAction\(lastRequest\.action\) \? "draft" : "result"\);/,
+    );
+    expect(body).toContain('setSelectedAction("translate");');
+  });
+
+  it("translateThisResult never calls the provider itself -- it only sets local selection state", () => {
+    const fnMatch = panelSource.match(/function translateThisResult\(\) \{([\s\S]*?)\n {2}\}/);
+    expect(fnMatch?.[1] ?? "").not.toMatch(/run\(|chatAgentAction/);
+  });
+
+  it("translateThisResult guards against a missing/loading view and against re-translating an already-translated result", () => {
+    expect(panelSource).toMatch(
+      /if \(view\.status !== "success" \|\| !lastRequest \|\| lastRequest\.action === "translate"\) return;/,
+    );
+  });
+});
+
+describe("ChatAgentPanel: draft vs non-draft result-card actions", () => {
+  it("a draft-action result (suggest_reply/rewrite_draft/prepare_follow_up) shows 'Use in reply', matching isDraftResult", () => {
+    expect(panelSource).toMatch(
+      /const isDraftResult =\s*\n\s*view\.status === "success" &&\s*\n\s*Boolean\(lastRequest\) &&\s*\n\s*lastRequest\?\.action !== "translate" &&\s*\n\s*isDraftAction\(lastRequest!\.action\);/,
+    );
+    expect(panelSource).toMatch(
+      /\{isDraftResult \|\| \(showingTranslateResult && translateResultShowsUseInReply\) \? \(/,
+    );
+  });
+
+  it("a non-draft result (summarize/extract_lead/ask_question) never shows 'Use in reply' -- isDraftResult is false for those actions", () => {
+    // isDraftAction (imported from chatAgentTranslate.js) already excludes summarize/extract_lead/ask_question --
+    // see chatAgentTranslate.test.ts's own coverage of that rule.
+    expect(panelSource).toContain("isDraftAction(lastRequest!.action)");
+  });
+
+  it("a translated draft source still shows 'Use in reply'; a translated non-draft (summary/lead/ask) result does not", () => {
+    expect(panelSource).toMatch(
+      /const translateResultShowsUseInReply = lastTranslateSourceKind !== "result";/,
+    );
+    expect(panelSource).toMatch(
+      /onClick=\{\(\) => \{\s*setLastTranslateSourceKind\(translateSource\);\s*run\(\{ action: "translate", draft: translateSourceText, targetLanguage \}\);/,
+    );
+  });
+});
+
 describe("ChatAgentPanel: translation output card", () => {
   it('renders a distinct "Translated to <language>" header only for a translate result', () => {
     expect(panelSource).toMatch(
-      /showingTranslateResult = view\.status === "success" && lastRequest\?\.action === "translate"/,
+      /const showingTranslateResult = view\.status === "success" && lastRequest\?\.action === "translate";/,
     );
     expect(panelSource).toContain("Translated to");
   });
 
-  it('labels the insert action "Use in reply" (not the generic "Use this reply") for a translate result', () => {
-    expect(panelSource).toMatch(/onClick=\{useTranslationInReply\}[\s\S]{0,40}?>\s*Use in reply/);
+  it('labels the insert action "Use in reply" for a translate result of a draft source', () => {
+    expect(panelSource).toMatch(/showingTranslateResult\s*\n\s*\? useTranslationInReply/);
   });
 
   it('"Use in reply" inserts into the composer via onUseReply and shows a confirmation, never sending anything', () => {
@@ -330,7 +435,7 @@ describe("ChatAgentPanel: translation output card", () => {
 
   it("the translate result card still offers Copy, Regenerate, and Close like every other result", () => {
     const translateCardMatch = panelSource.match(
-      /showingTranslateResult && view\.status === "success"[\s\S]*?\{justInsertedTranslation/,
+      /\{showingTranslateResult \? \(([\s\S]*?)\{showingTranslateResult && justInsertedTranslation/,
     );
     expect(translateCardMatch).not.toBeNull();
     const card = translateCardMatch?.[0] ?? "";
@@ -341,6 +446,32 @@ describe("ChatAgentPanel: translation output card", () => {
 
   it("resets the 'just inserted' confirmation whenever a new request starts", () => {
     expect(panelSource).toMatch(/setJustInsertedTranslation\(false\);/);
+  });
+});
+
+describe("ChatAgentPanel: conversation-scoped state (no leaking between conversations)", () => {
+  it("resets every Chat-Agent-generated piece of state whenever conversationId changes", () => {
+    const effectMatch = panelSource.match(
+      /\/\/ Every piece of Chat-Agent-generated state is scoped[\s\S]*?useEffect\(\(\) => \{([\s\S]*?)\}, \[conversationId\]\);/,
+    );
+    expect(effectMatch).not.toBeNull();
+    const body = effectMatch?.[1] ?? "";
+    for (const resetCall of [
+      'setView({ status: "idle" });',
+      "setLastRequest(null);",
+      "setLatestAiDraft(null);",
+      "setLatestAssistantResult(null);",
+      "setTranslateSourceOverride(null);",
+      "setSelectedAction(null);",
+      "setTargetLanguageResolvedFor(null);",
+      "setLastTranslateSourceKind(null);",
+    ]) {
+      expect(body).toContain(resetCall);
+    }
+  });
+
+  it("the conversation-scoping effect depends only on conversationId, so it never fires on every keystroke/render", () => {
+    expect(panelSource).toMatch(/\}, \[conversationId\]\);/);
   });
 });
 

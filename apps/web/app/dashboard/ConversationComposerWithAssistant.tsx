@@ -9,10 +9,9 @@ import { SparkleIcon } from "./Icons.js";
  * Shared by Live Conversations and Human Handover (both already reuse the
  * same ReplyComposer -- see conversations/[conversationId]/page.tsx's own
  * comment on this). Owns the composer's draft text so the AI Assistant
- * panel can insert a generated reply into it via "Use this reply"/"Use in
- * reply" -- it only ever calls setDraft, never sendHumanReplyAction;
- * sending still requires the existing manual Send button inside
- * ReplyComposer.
+ * panel can insert a generated reply into it via "Use in reply" -- it only
+ * ever calls setDraft, never sendHumanReplyAction; sending still requires
+ * the existing manual Send button inside ReplyComposer.
  */
 export function ConversationComposerWithAssistant({ conversationId }: { conversationId: string }) {
   const [draft, setDraft] = useState("");

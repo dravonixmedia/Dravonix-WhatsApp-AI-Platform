@@ -139,6 +139,17 @@ describe("buildActionInstruction", () => {
     expect(instruction).toMatch(/preserving its exact original meaning/i);
   });
 
+  it("translate also instructs preserving email addresses and company names", () => {
+    const instruction = buildActionInstruction(
+      baseInput({
+        action: "translate",
+        staffDraft: "Email us at sales@example.com",
+        targetLanguage: "hi",
+      }),
+    );
+    expect(instruction).toMatch(/urls, email addresses, company names/i);
+  });
+
   it("translate forbids adding any promise, price, date, or confirmation not already in the source text", () => {
     const instruction = buildActionInstruction(
       baseInput({
@@ -218,9 +229,16 @@ describe("parseActionResponse", () => {
     });
     const result = parseActionResponse("summarize", raw);
     expect(result.displayText).toContain("Customer request: Wants a website redesign");
+    expect(result.displayText).toContain("Important details:");
     expect(result.displayText).toContain("Budget mentioned: 50k INR");
+    expect(result.displayText).toContain("Current status: Awaiting quote");
+    expect(result.displayText).toContain("Questions still unanswered:");
+    expect(result.displayText).toContain("Launch date?");
     expect(result.displayText).toContain("Recommended next step: Send a quotation");
     expect(result.structured).toBeDefined();
+    // The labeled, staff-readable text passed on to translate as its source
+    // -- never the raw JSON the model returned.
+    expect(result.displayText).not.toMatch(/[{}]/);
   });
 
   it("strips a markdown code fence around a structured JSON response", () => {
@@ -350,5 +368,33 @@ describe("parseActionResponse", () => {
     expect(result.displayText).toContain("Customer name: Not provided");
     expect(result.displayText).toContain("Requested service: Website redesign");
     expect(result.displayText).toContain("Meeting request: Yes");
+  });
+
+  it("carries phone, email, and price/date values into the labeled displayText completely unchanged (never re-formatted or altered)", () => {
+    const raw = JSON.stringify({
+      customerName: "Priya Menon",
+      phone: "+91 98765 43210",
+      email: "priya.menon@example.com",
+      company: "Acme Traders Pvt Ltd",
+      requestedService: "Website redesign",
+      budget: "INR 50,000",
+      timeline: "By 15 March 2026",
+      location: "Kochi",
+      meetingRequested: "Yes",
+      callbackRequested: "No",
+      quotationRequested: "Yes",
+      purchaseIntent: "High",
+      importantNotes: "Prefers WhatsApp over email for updates.",
+    });
+    const result = parseActionResponse("extract_lead", raw);
+    expect(result.displayText).toContain("Phone: +91 98765 43210");
+    expect(result.displayText).toContain("Email: priya.menon@example.com");
+    expect(result.displayText).toContain("Budget: INR 50,000");
+    expect(result.displayText).toContain("Timeline: By 15 March 2026");
+    expect(result.displayText).toContain("Customer name: Priya Menon");
+    expect(result.displayText).toContain("Company: Acme Traders Pvt Ltd");
+    // This is the labeled, staff-readable text passed on to translate as its
+    // source -- never the raw JSON the model returned.
+    expect(result.displayText).not.toMatch(/[{}]/);
   });
 });
