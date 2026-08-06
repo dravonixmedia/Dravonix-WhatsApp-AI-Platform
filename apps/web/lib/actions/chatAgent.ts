@@ -62,35 +62,32 @@ export type ChatAgentErrorCode =
 export type ChatAgentActionResponse =
   ({ ok: true } & ChatAgentResult) | { ok: false; code: ChatAgentErrorCode; message: string };
 
-const UNAUTHENTICATED_MESSAGE = "Please sign in again to use the AI assistant.";
-const PERMISSION_DENIED_MESSAGE =
-  "You do not have permission to use the AI assistant for this conversation.";
+const UNAUTHENTICATED_MESSAGE = "Please sign in again to use DRAIVA.";
+const PERMISSION_DENIED_MESSAGE = "You do not have permission to use DRAIVA for this conversation.";
 const CONVERSATION_NOT_FOUND_MESSAGE = "This conversation is unavailable.";
 const NOT_CONFIGURED_MESSAGE =
-  "The AI assistant is not available at the moment. Please contact your administrator.";
-const RATE_LIMITED_MESSAGE =
-  "The AI assistant is receiving too many requests. Please try again shortly.";
-const BUSY_MESSAGE = "The AI assistant is temporarily busy. Please try again shortly.";
-const UNAVAILABLE_MESSAGE = "The AI assistant is temporarily unavailable. Please try again.";
-const REQUEST_FAILED_MESSAGE = "The AI assistant could not complete this request.";
+  "DRAIVA is not available at the moment. Please contact your administrator.";
+const RATE_LIMITED_MESSAGE = "DRAIVA is receiving too many requests. Please try again shortly.";
+const BUSY_MESSAGE = "DRAIVA is temporarily busy. Please try again shortly.";
+const UNAVAILABLE_MESSAGE = "DRAIVA is temporarily unavailable. Please try again.";
+const REQUEST_FAILED_MESSAGE = "DRAIVA could not complete this request. Please try again.";
 // The following three are all AI_NOT_CONFIGURED -- 401/403/404 are always a
 // configuration problem (bad key, no model access, misspelled/unavailable
 // model), never something the requesting staff member caused or can retry.
 const INVALID_API_KEY_MESSAGE =
-  "The AI assistant is not configured correctly. Please contact your administrator.";
+  "DRAIVA is not configured correctly. Please contact your administrator.";
 const MODEL_ACCESS_DENIED_MESSAGE =
-  "The AI assistant is not available for this account. Please contact your administrator.";
+  "DRAIVA is not available for this account. Please contact your administrator.";
 const MODEL_UNAVAILABLE_MESSAGE =
-  "The AI assistant configuration is unavailable. Please contact your administrator.";
+  "DRAIVA's configuration is unavailable. Please contact your administrator.";
 // The model's response didn't come back as usable structured output
 // (summarize/extract_lead) -- retryable, since a fresh generation often
 // succeeds where the previous one didn't.
-const RESPONSE_INVALID_MESSAGE =
-  "The AI assistant returned an incomplete response. Please try again.";
+const RESPONSE_INVALID_MESSAGE = "DRAIVA returned an incomplete response. Please try again.";
 // A pure transport failure -- no HTTP response was ever received, so the
 // same "temporarily unavailable" wording as a transient 5xx is correct
 // (the caller has no way to distinguish the two, and shouldn't need to).
-const CONNECTION_TIMEOUT_MESSAGE = "The AI assistant took too long to respond. Please try again.";
+const CONNECTION_TIMEOUT_MESSAGE = "DRAIVA took too long to respond. Please try again.";
 
 function errorResult(code: ChatAgentErrorCode, message: string): ChatAgentActionResponse {
   return { ok: false, code, message };

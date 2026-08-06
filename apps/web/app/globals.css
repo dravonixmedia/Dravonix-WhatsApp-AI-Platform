@@ -1000,6 +1000,11 @@ a {
   gap: 0.6rem;
 }
 
+.dvx-assistant-welcome {
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border-default);
+}
+
 .dvx-assistant-quick-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

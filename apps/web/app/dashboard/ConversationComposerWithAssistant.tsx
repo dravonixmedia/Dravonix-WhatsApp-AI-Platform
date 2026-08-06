@@ -31,9 +31,10 @@ export function ConversationComposerWithAssistant({ conversationId }: { conversa
           }}
           onClick={() => setAssistantOpen((v) => !v)}
           aria-expanded={assistantOpen}
+          aria-label="Open DRAIVA conversation assistant"
         >
           <SparkleIcon size={14} />
-          AI Assistant
+          Ask DRAIVA
         </button>
       </div>
 

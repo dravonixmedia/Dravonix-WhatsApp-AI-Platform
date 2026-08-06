@@ -156,16 +156,16 @@ describe("chatAgentAction: never throws -- always returns a structured result", 
 describe("chatAgentAction: error sanitization and safe error codes", () => {
   it("never returns a raw provider error message to the caller -- only fixed, safe strings", () => {
     expect(actionSource).toMatch(
-      /UNAVAILABLE_MESSAGE\s*=\s*"The AI assistant is temporarily unavailable\. Please try again\.";/,
+      /UNAVAILABLE_MESSAGE\s*=\s*"DRAIVA is temporarily unavailable\. Please try again\.";/,
     );
     expect(actionSource).toMatch(
-      /BUSY_MESSAGE\s*=\s*"The AI assistant is temporarily busy\. Please try again shortly\.";/,
+      /BUSY_MESSAGE\s*=\s*"DRAIVA is temporarily busy\. Please try again shortly\.";/,
     );
     expect(actionSource).toMatch(
-      /RATE_LIMITED_MESSAGE\s*=\s*"The AI assistant is receiving too many requests\. Please try again shortly\.";/,
+      /RATE_LIMITED_MESSAGE\s*=\s*"DRAIVA is receiving too many requests\. Please try again shortly\.";/,
     );
     expect(actionSource).toMatch(
-      /REQUEST_FAILED_MESSAGE\s*=\s*"The AI assistant could not complete this request\.";/,
+      /REQUEST_FAILED_MESSAGE\s*=\s*"DRAIVA could not complete this request\. Please try again\.";/,
     );
   });
 
@@ -202,7 +202,7 @@ describe("chatAgentAction: error sanitization and safe error codes", () => {
 describe("chatAgentAction: granular provider status mapping (401/403/404 vs 400/other)", () => {
   it("maps 401 (invalid API key) to AI_NOT_CONFIGURED with a distinct, admin-facing message", () => {
     expect(actionSource).toMatch(
-      /INVALID_API_KEY_MESSAGE\s*=\s*\n?\s*"The AI assistant is not configured correctly\. Please contact your administrator\.";/,
+      /INVALID_API_KEY_MESSAGE\s*=\s*\n?\s*"DRAIVA is not configured correctly\. Please contact your administrator\.";/,
     );
     expect(actionSource).toMatch(
       /error\.status === 401\)\s*\{[\s\S]{0,200}?return errorResult\("AI_NOT_CONFIGURED", INVALID_API_KEY_MESSAGE\);/,
@@ -211,7 +211,7 @@ describe("chatAgentAction: granular provider status mapping (401/403/404 vs 400/
 
   it("maps 403 (model/account access denied) to AI_NOT_CONFIGURED with a distinct, admin-facing message", () => {
     expect(actionSource).toMatch(
-      /MODEL_ACCESS_DENIED_MESSAGE\s*=\s*\n?\s*"The AI assistant is not available for this account\. Please contact your administrator\.";/,
+      /MODEL_ACCESS_DENIED_MESSAGE\s*=\s*\n?\s*"DRAIVA is not available for this account\. Please contact your administrator\.";/,
     );
     expect(actionSource).toMatch(
       /error\.status === 403\)\s*\{[\s\S]{0,200}?return errorResult\("AI_NOT_CONFIGURED", MODEL_ACCESS_DENIED_MESSAGE\);/,
@@ -220,7 +220,7 @@ describe("chatAgentAction: granular provider status mapping (401/403/404 vs 400/
 
   it("maps 404 (model not found) to AI_NOT_CONFIGURED with a distinct, admin-facing message", () => {
     expect(actionSource).toMatch(
-      /MODEL_UNAVAILABLE_MESSAGE\s*=\s*\n?\s*"The AI assistant configuration is unavailable\. Please contact your administrator\.";/,
+      /MODEL_UNAVAILABLE_MESSAGE\s*=\s*\n?\s*"DRAIVA's configuration is unavailable\. Please contact your administrator\.";/,
     );
     expect(actionSource).toMatch(
       /error\.status === 404\)\s*\{[\s\S]{0,200}?return errorResult\("AI_NOT_CONFIGURED", MODEL_UNAVAILABLE_MESSAGE\);/,
@@ -243,7 +243,7 @@ describe("chatAgentAction: granular provider status mapping (401/403/404 vs 400/
 describe("chatAgentAction: structured-response parse/validation failures map to AI_RESPONSE_INVALID", () => {
   it("treats a response-parsing/validation failure (successful call, unusable structured output) as AI_RESPONSE_INVALID, distinct from a provider HTTP error", () => {
     expect(actionSource).toMatch(
-      /RESPONSE_INVALID_MESSAGE\s*=\s*\n?\s*"The AI assistant returned an incomplete response\. Please try again\.";/,
+      /RESPONSE_INVALID_MESSAGE\s*=\s*\n?\s*"DRAIVA returned an incomplete response\. Please try again\.";/,
     );
     expect(actionSource).toMatch(
       /if \(isChatAgentResponseError\(error\)\)\s*\{[\s\S]{0,1400}?return errorResult\("AI_RESPONSE_INVALID", RESPONSE_INVALID_MESSAGE\);/,
@@ -326,7 +326,7 @@ describe("chatAgentAction: connection/timeout transport failures never fall thro
 
   it("maps a connection timeout to AI_CONNECTION_TIMEOUT with the exact required message", () => {
     expect(actionSource).toMatch(
-      /CONNECTION_TIMEOUT_MESSAGE\s*=\s*"The AI assistant took too long to respond\. Please try again\.";/,
+      /CONNECTION_TIMEOUT_MESSAGE\s*=\s*"DRAIVA took too long to respond\. Please try again\.";/,
     );
     expect(actionSource).toMatch(
       /isChatAgentConnectionTimeoutError\(error\)\)\s*\{[\s\S]{0,600}?return errorResult\("AI_CONNECTION_TIMEOUT", CONNECTION_TIMEOUT_MESSAGE\);/,

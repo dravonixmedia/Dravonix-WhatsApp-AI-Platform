@@ -31,6 +31,17 @@ const REWRITE_TONES: Array<{ value: ChatAgentRewriteTone; label: string }> = [
 const ALL_LANGUAGES = Object.keys(CHAT_AGENT_SUPPORTED_LANGUAGES) as ChatAgentSupportedLanguage[];
 const ALL_TRANSLATE_SOURCES: TranslateSource[] = ["composer", "draft", "result"];
 
+/** Contextual "in progress" copy per action, shown while a request is loading -- branding-only, no effect on request handling. */
+const LOADING_MESSAGES: Record<ChatAgentActionType, string> = {
+  summarize: "DRAIVA is reviewing the conversation…",
+  suggest_reply: "DRAIVA is preparing a reply…",
+  rewrite_draft: "DRAIVA is rewriting the message…",
+  translate: "DRAIVA is translating the content…",
+  extract_lead: "DRAIVA is extracting lead details…",
+  prepare_follow_up: "DRAIVA is preparing a follow-up…",
+  ask_question: "DRAIVA is analysing the conversation…",
+};
+
 type PanelView =
   | { status: "idle" }
   | { status: "loading" }
@@ -188,7 +199,7 @@ export function ChatAgentPanel({
   ]);
 
   const noSourceGuidance = !hasTranslateSource
-    ? "Write a reply or generate an AI result first."
+    ? "Write a reply or generate a DRAIVA result first."
     : null;
   const sameLanguageGuidance = isSameLanguage
     ? `This content already appears to be in ${CHAT_AGENT_SUPPORTED_LANGUAGES[detectedSourceLanguage!]}. Select another language.`
@@ -222,7 +233,7 @@ export function ChatAgentPanel({
       // digest text rather than anything safe to show staff.
       setView({
         status: "error",
-        message: "The AI assistant is temporarily unavailable. Please try again shortly.",
+        message: "DRAIVA is temporarily unavailable. Please try again shortly.",
       });
     }
   }
@@ -269,20 +280,37 @@ export function ChatAgentPanel({
   const translateResultShowsUseInReply = lastTranslateSourceKind !== "result";
 
   return (
-    <div className="dvx-assistant-panel" role="dialog" aria-label="AI Assistant">
+    <div className="dvx-assistant-panel" role="dialog" aria-label="DRAIVA conversation assistant">
       <div className="dvx-assistant-header">
-        <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>AI Assistant</span>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: "0.9rem", letterSpacing: "0.03em" }}>DRAIVA</div>
+          <div className="dvx-muted" style={{ fontSize: "0.68rem" }}>
+            AI Conversation Assistant by Dravonix
+          </div>
+        </div>
         <button
           type="button"
           className="dvx-icon-button"
           onClick={onClose}
-          aria-label="Close AI Assistant"
+          aria-label="Close DRAIVA"
         >
           <CloseIcon />
         </button>
       </div>
 
       <div className="dvx-assistant-body">
+        {view.status === "idle" ? (
+          <div className="dvx-assistant-welcome">
+            <p style={{ fontWeight: 600, fontSize: "0.85rem", margin: "0 0 0.25rem" }}>
+              How can DRAIVA help with this conversation?
+            </p>
+            <p className="dvx-muted" style={{ fontSize: "0.75rem", margin: 0 }}>
+              Summarize the conversation, prepare replies, translate messages, extract lead details
+              and plan follow-ups.
+            </p>
+          </div>
+        ) : null}
+
         <div className="dvx-assistant-quick-actions">
           <button
             type="button"
@@ -445,7 +473,8 @@ export function ChatAgentPanel({
             className="dvx-input"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Ask AI about this conversation…"
+            placeholder="Ask DRAIVA a question about this conversation…"
+            aria-label="Ask DRAIVA about this conversation"
             disabled={isPending}
             onKeyDown={(e) => {
               if (e.key === "Enter" && question.trim()) run({ action: "ask_question", question });
@@ -461,7 +490,17 @@ export function ChatAgentPanel({
           </button>
         </div>
 
-        {view.status === "loading" ? <div className="dvx-assistant-status">Thinking…</div> : null}
+        {view.status === "idle" ? (
+          <div className="dvx-assistant-status">
+            Select an action or ask DRAIVA about the current conversation.
+          </div>
+        ) : null}
+
+        {view.status === "loading" ? (
+          <div className="dvx-assistant-status">
+            {lastRequest ? LOADING_MESSAGES[lastRequest.action] : "DRAIVA is thinking…"}
+          </div>
+        ) : null}
 
         {view.status === "error" ? (
           <div className="dvx-assistant-status dvx-assistant-status--error">
@@ -512,6 +551,7 @@ export function ChatAgentPanel({
                 <button
                   type="button"
                   className="dvx-button dvx-button--secondary"
+                  aria-label="Copy DRAIVA result"
                   onClick={() => {
                     void navigator.clipboard.writeText(view.result.displayText);
                     setCopied(true);
@@ -523,6 +563,7 @@ export function ChatAgentPanel({
                   <button
                     type="button"
                     className="dvx-button dvx-button--secondary"
+                    aria-label="Translate this DRAIVA result"
                     onClick={translateThisResult}
                   >
                     Translate
@@ -531,6 +572,7 @@ export function ChatAgentPanel({
                 <button
                   type="button"
                   className="dvx-button dvx-button--secondary"
+                  aria-label="Ask DRAIVA to regenerate this result"
                   onClick={regenerate}
                 >
                   Regenerate
@@ -548,11 +590,18 @@ export function ChatAgentPanel({
                   Translation added to the reply box.
                 </p>
               ) : null}
+              {isDraftResult || (showingTranslateResult && translateResultShowsUseInReply) ? (
+                <p className="dvx-muted" style={{ fontSize: "0.68rem", margin: "0.35rem 0 0" }}>
+                  DRAIVA creates suggestions and drafts. Review the content before sending.
+                </p>
+              ) : (
+                <p className="dvx-muted" style={{ fontSize: "0.68rem", margin: "0.35rem 0 0" }}>
+                  Generated by DRAIVA · Review before sending
+                </p>
+              )}
             </div>
           ) : (
-            <div className="dvx-assistant-status">
-              The assistant had nothing to add for this request.
-            </div>
+            <div className="dvx-assistant-status">DRAIVA had nothing to add for this request.</div>
           )
         ) : null}
       </div>

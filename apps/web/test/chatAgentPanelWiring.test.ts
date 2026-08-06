@@ -99,7 +99,7 @@ describe("ChatAgentPanel: error recovery never shows a raw/thrown error message"
     expect(catchBlockMatch).not.toBeNull();
     expect(catchBlockMatch?.[1] ?? "").not.toMatch(/err\.message|error\.message/);
     expect(catchBlockMatch?.[1] ?? "").toMatch(
-      /The AI assistant is temporarily unavailable\. Please try again shortly\./,
+      /DRAIVA is temporarily unavailable\. Please try again shortly\./,
     );
   });
 
@@ -188,10 +188,10 @@ describe("ChatAgentPanel: Translate source resolution uses the shared priority h
     expect(panelSource).not.toMatch(/run\(\{ action: "translate", draft: currentDraft/);
   });
 
-  it("shows 'Write a reply or generate an AI result first.' when none of the three sources has text, and never calls the provider in that case", () => {
-    expect(panelSource).toContain('"Write a reply or generate an AI result first."');
+  it("shows 'Write a reply or generate a DRAIVA result first.' when none of the three sources has text, and never calls the provider in that case", () => {
+    expect(panelSource).toContain('"Write a reply or generate a DRAIVA result first."');
     expect(panelSource).toMatch(
-      /const noSourceGuidance = !hasTranslateSource\s*\n\s*\? "Write a reply or generate an AI result first\."\s*\n\s*: null;/,
+      /const noSourceGuidance = !hasTranslateSource\s*\n\s*\? "Write a reply or generate a DRAIVA result first\."\s*\n\s*: null;/,
     );
     expect(panelSource).toMatch(
       /disabled=\{isPending \|\| !hasTranslateSource \|\| isSameLanguage\}/,
@@ -351,7 +351,7 @@ describe("ChatAgentPanel: automatic target-language selection", () => {
 describe("ChatAgentPanel: result-card 'Translate' action (translate any visible assistant result)", () => {
   it("every non-translate result card renders a Translate action button wired to translateThisResult", () => {
     expect(panelSource).toMatch(
-      /\{!showingTranslateResult \? \(\s*<button[\s\S]{0,120}?onClick=\{translateThisResult\}/,
+      /\{!showingTranslateResult \? \(\s*<button[\s\S]{0,220}?onClick=\{translateThisResult\}/,
     );
   });
 
@@ -502,6 +502,101 @@ describe("ReplyComposer: controlled-mode change preserves the existing send/idem
   it("value/onChange are optional -- omitting them preserves the original uncontrolled behavior", () => {
     expect(replyComposerSource).toMatch(/value\?:\s*string/);
     expect(replyComposerSource).toMatch(/onChange\?:\s*\(value: string\) => void/);
+  });
+});
+
+describe("DRAIVA branding: header, launcher, and custom-question labels", () => {
+  it('the panel header displays "DRAIVA" as the primary title and the required descriptor beneath it', () => {
+    expect(panelSource).toMatch(/>DRAIVA<\/div>/);
+    expect(panelSource).toContain("AI Conversation Assistant by Dravonix");
+  });
+
+  it('the launcher button displays "Ask DRAIVA"', () => {
+    expect(composerWrapperSource).toMatch(/>\s*Ask DRAIVA\s*</);
+  });
+
+  it('the custom-question input uses "Ask DRAIVA about this conversation" as its label and a DRAIVA-branded placeholder', () => {
+    expect(panelSource).toContain('aria-label="Ask DRAIVA about this conversation"');
+    expect(panelSource).toContain('placeholder="Ask DRAIVA a question about this conversation…"');
+  });
+
+  it('no visible dashboard copy for this feature still reads "Chat Agent", "AI Chat Agent", "AI Assistant", "Dravonix Copilot", or "Copilot"', () => {
+    const panelVisibleOnly = withoutComments(panelSource);
+    const wrapperVisibleOnly = withoutComments(composerWrapperSource);
+    for (const banned of [
+      "Chat Agent",
+      "AI Chat Agent",
+      "AI Assistant",
+      "Dravonix Copilot",
+      "Copilot",
+    ]) {
+      expect(panelVisibleOnly).not.toContain(banned);
+      expect(wrapperVisibleOnly).not.toContain(banned);
+    }
+  });
+
+  it("welcome heading and supporting text are shown only in the idle state, before any action has run", () => {
+    expect(panelSource).toMatch(
+      /\{view\.status === "idle" \? \([\s\S]{0,160}?How can DRAIVA help with this conversation\?/,
+    );
+    expect(panelSource).toContain(
+      "Summarize the conversation, prepare replies, translate messages, extract lead details",
+    );
+  });
+
+  it("shows a DRAIVA-branded empty-state hint while idle", () => {
+    expect(panelSource).toMatch(
+      /\{view\.status === "idle" \? \(\s*<div className="dvx-assistant-status">\s*Select an action or ask DRAIVA about the current conversation\./,
+    );
+  });
+
+  it("loading state uses contextual DRAIVA copy per action, not a generic 'Thinking…' message", () => {
+    expect(panelSource).toContain("DRAIVA is reviewing the conversation…");
+    expect(panelSource).toContain("DRAIVA is preparing a reply…");
+    expect(panelSource).toContain("DRAIVA is rewriting the message…");
+    expect(panelSource).toContain("DRAIVA is translating the content…");
+    expect(panelSource).toContain("DRAIVA is extracting lead details…");
+    expect(panelSource).toContain("DRAIVA is preparing a follow-up…");
+    expect(panelSource).toContain("DRAIVA is analysing the conversation…");
+    expect(panelSource).not.toMatch(/>Thinking…</);
+  });
+
+  it("every successful result card carries a DRAIVA-branded footer -- a draft-safety note for composer-bound results, a generated-by note otherwise", () => {
+    expect(panelSource).toContain(
+      "DRAIVA creates suggestions and drafts. Review the content before sending.",
+    );
+    expect(panelSource).toContain("Generated by DRAIVA · Review before sending");
+  });
+
+  it("accessibility labels are DRAIVA-branded: close button, copy, regenerate, and result-card translate", () => {
+    expect(panelSource).toContain('aria-label="Close DRAIVA"');
+    expect(panelSource).toContain('aria-label="Copy DRAIVA result"');
+    expect(panelSource).toContain('aria-label="Ask DRAIVA to regenerate this result"');
+    expect(panelSource).toContain('aria-label="Translate this DRAIVA result"');
+    expect(composerWrapperSource).toContain('aria-label="Open DRAIVA conversation assistant"');
+  });
+
+  it("internal Chat Agent action identifiers are unchanged by the rebrand", () => {
+    // The action IDs sent to the server are unrelated to the DRAIVA rebrand --
+    // these string literals must remain exactly as the Server Action/provider expect.
+    for (const actionId of [
+      '"summarize"',
+      '"suggest_reply"',
+      '"rewrite_draft"',
+      '"translate"',
+      '"extract_lead"',
+      '"prepare_follow_up"',
+      '"ask_question"',
+    ]) {
+      expect(panelSource).toContain(actionId);
+    }
+    expect(panelSource).toContain("chatAgentAction(");
+    expect(panelSource).toContain("ChatAgentPanel");
+  });
+
+  it("DRAIVA continues to operate on only the conversationId prop it was given -- no additional identifier was introduced by the rebrand", () => {
+    expect(panelSource).toMatch(/conversationId: string;\s*\n\s*open: boolean;/);
+    expect(panelSource).toContain("chatAgentAction({ conversationId, ...request })");
   });
 });
 

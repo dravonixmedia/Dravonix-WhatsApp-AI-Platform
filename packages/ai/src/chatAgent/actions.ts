@@ -22,9 +22,7 @@ export function isStructuredAction(action: ChatAgentInput["action"]): boolean {
 export function validateChatAgentInput(input: ChatAgentInput): void {
   if (input.action === "rewrite_draft") {
     if (!input.staffDraft?.trim()) {
-      throw new ChatAgentValidationError(
-        "Write a draft first, then ask the assistant to rewrite it.",
-      );
+      throw new ChatAgentValidationError("Write a draft first, then ask DRAIVA to rewrite it.");
     }
     if (!input.tone) {
       throw new ChatAgentValidationError("Choose a tone to rewrite the draft into.");
@@ -33,7 +31,7 @@ export function validateChatAgentInput(input: ChatAgentInput): void {
   if (input.action === "translate") {
     if (!input.staffDraft?.trim()) {
       throw new ChatAgentValidationError(
-        "Write or generate a reply first, then ask the assistant to translate it.",
+        "Write or generate a reply first, then ask DRAIVA to translate it.",
       );
     }
     if (!input.targetLanguage || !(input.targetLanguage in CHAT_AGENT_SUPPORTED_LANGUAGES)) {
