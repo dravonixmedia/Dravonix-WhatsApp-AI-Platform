@@ -2,7 +2,10 @@
 
 import { loadEnv } from "@dravonix/config";
 import {
+  ANTHROPIC_SDK_VERSION,
   AnthropicChatAgentProvider,
+  isChatAgentConnectionError,
+  isChatAgentConnectionTimeoutError,
   isChatAgentOverloadedError,
   isChatAgentProviderError,
   isChatAgentRateLimitedError,
@@ -52,7 +55,9 @@ export type ChatAgentErrorCode =
   | "AI_TEMPORARILY_UNAVAILABLE"
   | "AI_RATE_LIMITED"
   | "AI_REQUEST_FAILED"
-  | "AI_RESPONSE_INVALID";
+  | "AI_RESPONSE_INVALID"
+  | "AI_CONNECTION_FAILED"
+  | "AI_CONNECTION_TIMEOUT";
 
 export type ChatAgentActionResponse =
   ({ ok: true } & ChatAgentResult) | { ok: false; code: ChatAgentErrorCode; message: string };
@@ -82,6 +87,10 @@ const MODEL_UNAVAILABLE_MESSAGE =
 // succeeds where the previous one didn't.
 const RESPONSE_INVALID_MESSAGE =
   "The AI assistant returned an incomplete response. Please try again.";
+// A pure transport failure -- no HTTP response was ever received, so the
+// same "temporarily unavailable" wording as a transient 5xx is correct
+// (the caller has no way to distinguish the two, and shouldn't need to).
+const CONNECTION_TIMEOUT_MESSAGE = "The AI assistant took too long to respond. Please try again.";
 
 function errorResult(code: ChatAgentErrorCode, message: string): ChatAgentActionResponse {
   return { ok: false, code, message };
@@ -245,11 +254,12 @@ export async function chatAgentAction(
         // Never reaches Anthropic -- rejected before the provider call.
         return errorResult("INVALID_REQUEST", error.message);
       }
-      // Every branch below reached Anthropic and is logged with the same
-      // sanitized, safe-to-read metadata: which action, which model, the
-      // caller (for correlating repeated failures to one company/user), and
-      // the provider's own HTTP status/categorical error type -- never the
-      // raw error message/body, which can echo request content.
+      // Every branch below reached Anthropic (an actual request attempt was
+      // made -- see reachedProvider) and is logged with the same sanitized,
+      // safe-to-read metadata: which action, which model, the caller (for
+      // correlating repeated failures to one company/user), and the
+      // provider's own HTTP status/categorical error type -- never the raw
+      // error message/body, which can echo request content.
       const providerLogFields = (error: {
         status: number | null;
         providerErrorType: string | null;
@@ -259,8 +269,47 @@ export async function chatAgentAction(
         model: env.ANTHROPIC_MODEL,
         reachedProvider: true,
         httpStatus: error.status,
+        hasHttpStatus: error.status !== null,
         providerErrorType: error.providerErrorType,
+        sdkVersion: ANTHROPIC_SDK_VERSION,
+        transportStage: "http_response",
       });
+      // Connection/timeout failures are checked FIRST: no HTTP response was
+      // ever received (httpStatus stays null), so they must never fall
+      // through to the generic AI_REQUEST_FAILED bucket the way a genuine
+      // permanent 4xx does -- that ambiguity (httpStatus: null,
+      // providerErrorType: null, internalCategory: AI_REQUEST_FAILED) is
+      // exactly what the confirmed staging log showed.
+      if (isChatAgentConnectionTimeoutError(error)) {
+        log.warn("chat_agent_connection_timeout", {
+          action: input.action,
+          actorUserId: session.userId,
+          model: env.ANTHROPIC_MODEL,
+          reachedProvider: true,
+          hasHttpStatus: false,
+          transportStage: "timeout",
+          sdkVersion: error.sdkVersion,
+          errorConstructorName: error.errorConstructorName,
+          causeConstructorName: error.causeConstructorName,
+          internalCategory: "AI_CONNECTION_TIMEOUT",
+        });
+        return errorResult("AI_CONNECTION_TIMEOUT", CONNECTION_TIMEOUT_MESSAGE);
+      }
+      if (isChatAgentConnectionError(error)) {
+        log.warn("chat_agent_connection_failed", {
+          action: input.action,
+          actorUserId: session.userId,
+          model: env.ANTHROPIC_MODEL,
+          reachedProvider: true,
+          hasHttpStatus: false,
+          transportStage: "connection",
+          sdkVersion: error.sdkVersion,
+          errorConstructorName: error.errorConstructorName,
+          causeConstructorName: error.causeConstructorName,
+          internalCategory: "AI_CONNECTION_FAILED",
+        });
+        return errorResult("AI_CONNECTION_FAILED", UNAVAILABLE_MESSAGE);
+      }
       if (isChatAgentRateLimitedError(error)) {
         log.warn("chat_agent_provider_error", {
           ...providerLogFields(error),

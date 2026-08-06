@@ -27,7 +27,12 @@ describe("dashboard UI redesign: tenant scoping preserved", () => {
     expect(source).toMatch(
       /getConversationThreadForDashboard\(\s*repo,\s*session\.activeCompanyId,\s*conversationId,?\s*\)/,
     );
-    expect(source).toContain("markConversationRead(repo, conversationId)");
+    // markConversationRead now runs from a client effect keyed by
+    // conversationId (MarkConversationReadOnMount), not unconditionally on
+    // every server render -- see realtimeRefreshLoop.test.ts for why
+    // (the old unconditional call created a self-sustaining refresh loop).
+    expect(source).toContain("<MarkConversationReadOnMount conversationId={conversationId} />");
+    expect(source).not.toContain("markConversationRead(repo, conversationId)");
   });
 
   it("handover/[conversationId]/page.tsx still resolves the conversation via getConversationThreadForDashboard scoped to session.activeCompanyId", () => {
@@ -36,7 +41,12 @@ describe("dashboard UI redesign: tenant scoping preserved", () => {
     expect(source).toMatch(
       /getConversationThreadForDashboard\(\s*repo,\s*session\.activeCompanyId,\s*conversationId,?\s*\)/,
     );
-    expect(source).toContain("markConversationRead(repo, conversationId)");
+    // markConversationRead now runs from a client effect keyed by
+    // conversationId (MarkConversationReadOnMount), not unconditionally on
+    // every server render -- see realtimeRefreshLoop.test.ts for why
+    // (the old unconditional call created a self-sustaining refresh loop).
+    expect(source).toContain("<MarkConversationReadOnMount conversationId={conversationId} />");
+    expect(source).not.toContain("markConversationRead(repo, conversationId)");
   });
 
   it("the new contact-summary loader is scoped to a single conversationId and never accepts a client-supplied companyId", () => {

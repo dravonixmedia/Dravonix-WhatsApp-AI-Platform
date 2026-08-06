@@ -295,10 +295,12 @@ describe("chatAgentAction: context-loading and provider-initialization failures 
 describe("chatAgentAction: error classification does not rely solely on instanceof", () => {
   it("uses the isChatAgentXError type guards (which fall back to a stable category string) instead of bare instanceof checks on custom error classes", () => {
     expect(codeOnly).not.toMatch(
-      /error instanceof (ChatAgentValidationError|ChatAgentRateLimitedError|ChatAgentOverloadedError|ChatAgentProviderError|ChatAgentRequestFailedError|ChatAgentResponseError)/,
+      /error instanceof (ChatAgentValidationError|ChatAgentConnectionError|ChatAgentConnectionTimeoutError|ChatAgentRateLimitedError|ChatAgentOverloadedError|ChatAgentProviderError|ChatAgentRequestFailedError|ChatAgentResponseError)/,
     );
     for (const guard of [
       "isChatAgentValidationError",
+      "isChatAgentConnectionError",
+      "isChatAgentConnectionTimeoutError",
       "isChatAgentRateLimitedError",
       "isChatAgentOverloadedError",
       "isChatAgentProviderError",
@@ -307,6 +309,49 @@ describe("chatAgentAction: error classification does not rely solely on instance
     ]) {
       expect(actionSource).toContain(guard);
     }
+  });
+});
+
+describe("chatAgentAction: connection/timeout transport failures never fall through to a generic request-failed bucket", () => {
+  it("checks connection/timeout classification before the HTTP-status-based branches, so a transport failure is never misread as a permanent 4xx", () => {
+    const timeoutIndex = actionSource.indexOf("isChatAgentConnectionTimeoutError(error)");
+    const connectionIndex = actionSource.indexOf("isChatAgentConnectionError(error)");
+    const rateLimitedIndex = actionSource.indexOf("isChatAgentRateLimitedError(error)");
+    const requestFailedIndex = actionSource.indexOf("isChatAgentRequestFailedError(error)");
+    expect(timeoutIndex).toBeGreaterThan(-1);
+    expect(connectionIndex).toBeGreaterThan(timeoutIndex);
+    expect(connectionIndex).toBeLessThan(rateLimitedIndex);
+    expect(rateLimitedIndex).toBeLessThan(requestFailedIndex);
+  });
+
+  it("maps a connection timeout to AI_CONNECTION_TIMEOUT with the exact required message", () => {
+    expect(actionSource).toMatch(
+      /CONNECTION_TIMEOUT_MESSAGE\s*=\s*"The AI assistant took too long to respond\. Please try again\.";/,
+    );
+    expect(actionSource).toMatch(
+      /isChatAgentConnectionTimeoutError\(error\)\)\s*\{[\s\S]{0,600}?return errorResult\("AI_CONNECTION_TIMEOUT", CONNECTION_TIMEOUT_MESSAGE\);/,
+    );
+  });
+
+  it("maps a connection failure to AI_CONNECTION_FAILED, reusing the existing 'temporarily unavailable' message", () => {
+    expect(actionSource).toMatch(
+      /isChatAgentConnectionError\(error\)\)\s*\{[\s\S]{0,600}?return errorResult\("AI_CONNECTION_FAILED", UNAVAILABLE_MESSAGE\);/,
+    );
+  });
+
+  it("logs sanitized transport diagnostics for connection/timeout failures -- constructor names and SDK version, never the raw cause message", () => {
+    expect(actionSource).toContain("errorConstructorName: error.errorConstructorName");
+    expect(actionSource).toContain("causeConstructorName: error.causeConstructorName");
+    expect(actionSource).toContain("sdkVersion: error.sdkVersion");
+    expect(actionSource).toContain('transportStage: "connection"');
+    expect(actionSource).toContain('transportStage: "timeout"');
+    expect(actionSource).toContain("hasHttpStatus: false");
+    expect(codeOnly).not.toMatch(/causeConstructorName:\s*error\.cause\.message/);
+  });
+
+  it("never hardcodes the model identifier -- both AI_CONNECTION_TIMEOUT and AI_NOT_CONFIGURED still come from env.ANTHROPIC_MODEL, never a new literal string", () => {
+    expect(actionSource).not.toMatch(/model:\s*"claude-sonnet-5"/);
+    expect(actionSource).not.toContain("ANTHROPIC_MODEL:");
   });
 });
 

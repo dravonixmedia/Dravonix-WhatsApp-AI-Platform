@@ -3,7 +3,6 @@ import { AppError } from "@dravonix/core";
 import {
   deriveAiLikelyProcessing,
   getConversationThreadForDashboard,
-  markConversationRead,
   SupabaseHandoverRepository,
 } from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
@@ -24,6 +23,7 @@ import { Avatar } from "../../Avatar.js";
 import { AiModeBadge, ConversationStateBadge } from "../../badges.js";
 import { WhatsAppIcon } from "../../Icons.js";
 import { loadContactSummary } from "../../loadContactSummary.js";
+import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
 // Reused directly from the Human Handover module: these components are
 // conversation-generic (pagination, composer, reconciliation), not
 // handover-specific, so Live Conversations shares them rather than
@@ -91,7 +91,6 @@ export default async function ConversationDetailPage({
     notFound();
   }
 
-  await markConversationRead(repo, conversationId);
   const contact = await loadContactSummary(supabase, conversationId);
 
   const latestInbound = [...thread.messages].reverse().find((m) => m.direction === "inbound");
@@ -122,6 +121,7 @@ export default async function ConversationDetailPage({
         accessToken={session.accessToken}
         watches={CONVERSATION_DETAIL_WATCHES}
       />
+      <MarkConversationReadOnMount conversationId={conversationId} />
       <div className="dvx-workspace">
         <ConversationListPanel data={listData} activeConversationId={conversationId} />
 

@@ -1,6 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
 import {
+  ANTHROPIC_SDK_VERSION,
+  ChatAgentConnectionError,
+  ChatAgentConnectionTimeoutError,
   ChatAgentOverloadedError,
   ChatAgentProviderError,
   ChatAgentRateLimitedError,
@@ -8,6 +11,8 @@ import {
   ChatAgentResponseError,
   ChatAgentValidationError,
   classifyAnthropicError,
+  isChatAgentConnectionError,
+  isChatAgentConnectionTimeoutError,
   isChatAgentOverloadedError,
   isChatAgentProviderError,
   isChatAgentRateLimitedError,
@@ -81,6 +86,90 @@ describe("classifyAnthropicError", () => {
     const classified = classifyAnthropicError(apiError(529, "super secret internal detail"));
     expect(classified.message).not.toContain("super secret internal detail");
     expect(JSON.stringify(classified)).not.toContain("super secret internal detail");
+  });
+});
+
+describe("classifyAnthropicError: connection/timeout failures (no HTTP response ever received)", () => {
+  it("classifies Anthropic.APIConnectionTimeoutError as ChatAgentConnectionTimeoutError, not a generic request failure", () => {
+    const timeoutError = new Anthropic.APIConnectionTimeoutError();
+    const classified = classifyAnthropicError(timeoutError);
+    expect(classified).toBeInstanceOf(ChatAgentConnectionTimeoutError);
+    expect(classified).not.toBeInstanceOf(ChatAgentRequestFailedError);
+    expect(classified.status).toBeNull();
+  });
+
+  it("classifies Anthropic.APIConnectionError as ChatAgentConnectionError, not a generic request failure", () => {
+    const connectionError = new Anthropic.APIConnectionError({
+      message: "Connection error.",
+      cause: new TypeError("fetch failed"),
+    });
+    const classified = classifyAnthropicError(connectionError);
+    expect(classified).toBeInstanceOf(ChatAgentConnectionError);
+    expect(classified).not.toBeInstanceOf(ChatAgentRequestFailedError);
+    expect(classified.status).toBeNull();
+  });
+
+  it("distinguishes a connection failure from a genuine permanent 4xx -- both have status null vs. a real number, never confused", () => {
+    // This is the exact ambiguity observed in production before this fix:
+    // APIConnectionError/APIConnectionTimeoutError are themselves
+    // subclasses of Anthropic.APIError with status undefined, so a naive
+    // classifier that only checks `instanceof Anthropic.APIError` and then
+    // switches on `.status` would silently fall through to
+    // ChatAgentRequestFailedError with a null status -- indistinguishable
+    // from "no HTTP response was ever received" using only the fields that
+    // classifier produced.
+    const connectionError = classifyAnthropicError(
+      new Anthropic.APIConnectionError({ message: "Connection error." }),
+    );
+    const permanentHttpError = classifyAnthropicError(
+      apiError(401, undefined, "authentication_error"),
+    );
+    expect(connectionError.category).not.toBe(permanentHttpError.category);
+    expect(connectionError.status).toBeNull();
+    expect(permanentHttpError.status).toBe(401);
+  });
+
+  it("captures errorConstructorName and causeConstructorName for connection failures -- plain class-name strings, never the raw message", () => {
+    const connectionError = new Anthropic.APIConnectionError({
+      message: "Connection error.",
+      cause: new TypeError("fetch failed: node-fetch cannot open a raw socket in this runtime"),
+    });
+    const classified = classifyAnthropicError(connectionError);
+    expect(classified).toBeInstanceOf(ChatAgentConnectionError);
+    if (classified instanceof ChatAgentConnectionError) {
+      expect(classified.errorConstructorName).toBe("APIConnectionError");
+      expect(classified.causeConstructorName).toBe("TypeError");
+      expect(classified.sdkVersion).toBe(ANTHROPIC_SDK_VERSION);
+      expect(JSON.stringify(classified)).not.toContain("cannot open a raw socket");
+    }
+  });
+
+  it("a connection error with no cause set still classifies correctly, with a null causeConstructorName", () => {
+    const classified = classifyAnthropicError(
+      new Anthropic.APIConnectionTimeoutError({ message: "Request timed out." }),
+    );
+    expect(classified).toBeInstanceOf(ChatAgentConnectionTimeoutError);
+    if (classified instanceof ChatAgentConnectionTimeoutError) {
+      expect(classified.causeConstructorName).toBeNull();
+    }
+  });
+
+  it("isChatAgentConnectionError/isChatAgentConnectionTimeoutError type guards work via instanceof and via a duck-typed category fallback", () => {
+    const realConnectionError = classifyAnthropicError(
+      new Anthropic.APIConnectionError({ message: "Connection error." }),
+    );
+    expect(isChatAgentConnectionError(realConnectionError)).toBe(true);
+    expect(isChatAgentConnectionTimeoutError(realConnectionError)).toBe(false);
+
+    const realTimeoutError = classifyAnthropicError(new Anthropic.APIConnectionTimeoutError());
+    expect(isChatAgentConnectionTimeoutError(realTimeoutError)).toBe(true);
+
+    const duckTypedConnection = { category: "connection_failed" };
+    expect(duckTypedConnection).not.toBeInstanceOf(ChatAgentConnectionError);
+    expect(isChatAgentConnectionError(duckTypedConnection)).toBe(true);
+
+    const duckTypedTimeout = { category: "connection_timeout" };
+    expect(isChatAgentConnectionTimeoutError(duckTypedTimeout)).toBe(true);
   });
 });
 
