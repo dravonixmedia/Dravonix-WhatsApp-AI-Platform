@@ -29,7 +29,7 @@ import { loadContactSummary } from "../../loadContactSummary.js";
 // handover-specific, so Live Conversations shares them rather than
 // duplicating pagination/composer/idempotency logic.
 import { ConversationThread } from "../../handover/[conversationId]/ConversationThread.js";
-import { ReplyComposer } from "../../handover/[conversationId]/ReplyComposer.js";
+import { ConversationComposerWithAssistant } from "../../ConversationComposerWithAssistant.js";
 import { ConversationListPanel } from "../ConversationListPanel.js";
 import {
   loadConversationsListData,
@@ -253,7 +253,7 @@ export default async function ConversationDetailPage({
               }}
             >
               {conversation.state === "human_active" && capabilities.canReplyToConversations ? (
-                <ReplyComposer conversationId={conversationId} />
+                <ConversationComposerWithAssistant conversationId={conversationId} />
               ) : conversation.state === "human_active" ? (
                 <p className="dvx-muted" style={{ fontSize: "0.85rem", margin: 0 }}>
                   Your role does not have permission to send replies.
