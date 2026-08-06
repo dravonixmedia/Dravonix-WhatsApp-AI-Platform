@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { maskPhoneNumber } from "@dravonix/handover";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
@@ -27,21 +28,32 @@ function SettingsRow({ label, value }: { label: string; value: string | null }) 
         style={{ fontSize: "0.85rem", textAlign: "right" }}
         className={value ? undefined : "dvx-muted"}
       >
-        {value ?? "Not configured"}
+        {value ?? "Not provided"}
       </span>
     </div>
   );
 }
 
-function PermissionDenied() {
+function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="dvx-card" style={{ maxWidth: 480 }}>
-      <h1 style={{ fontSize: "1.1rem", margin: "0 0 0.5rem" }}>Settings</h1>
-      <p className="dvx-muted" style={{ margin: 0 }}>
-        Your role does not have permission to view company settings.
-      </p>
+    <div className="dvx-card">
+      <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>{title}</div>
+      {children}
     </div>
   );
+}
+
+/**
+ * Masks a company_members.user_id down to its last 4 characters -- the only
+ * per-member identifier this dashboard can safely show for a teammate other
+ * than the signed-in caller. There is no public-schema profiles/email table
+ * mirroring auth.users in this codebase (confirmed by grep), so a real name
+ * or email for anyone but the caller genuinely isn't resolvable without a
+ * new, unapproved data path -- this shows real derived data instead of
+ * fabricating a name.
+ */
+function maskMemberId(userId: string): string {
+  return `Member ••${userId.slice(-4)}`;
 }
 
 export default async function SettingsPage() {
@@ -49,54 +61,67 @@ export default async function SettingsPage() {
   if (!session) return null;
 
   const capabilities = getDashboardCapabilities(session.activeRole);
-  if (!capabilities.canManageSettings) return <PermissionDenied />;
+  const canViewAnySection =
+    capabilities.canManageSettings || capabilities.canManageTeam || capabilities.canManageBilling;
+
+  if (!canViewAnySection) {
+    return (
+      <div className="dvx-card" style={{ maxWidth: 480 }}>
+        <h1 style={{ fontSize: "1.1rem", margin: "0 0 0.5rem" }}>Settings</h1>
+        <p className="dvx-muted" style={{ margin: 0 }}>
+          Your role does not have permission to view account settings.
+        </p>
+      </div>
+    );
+  }
 
   const supabase = await createServerSupabaseClient();
-  const roleLabel = ROLE_LABELS[session.activeRole] ?? session.activeRole;
 
-  const [companyResult, membersResult, aiSettingsResult, voiceSettingsResult] = await Promise.all([
-    supabase
-      .from("companies")
-      .select("name, slug, status, timezone, default_currency, created_at")
-      .eq("id", session.activeCompanyId)
-      .single(),
-    supabase
-      .from("company_members")
-      .select("role")
-      .eq("company_id", session.activeCompanyId)
-      .eq("is_active", true),
-    capabilities.canViewAiSettings
+  const [companyResult, membersResult, whatsappAccountResult] = await Promise.all([
+    capabilities.canManageSettings
       ? supabase
-          .from("company_settings")
-          .select(
-            "bot_name, tone, default_reply_mode, confidence_threshold, ai_active, enabled_languages",
-          )
-          .eq("company_id", session.activeCompanyId)
+          .from("companies")
+          .select("name, status, timezone, default_currency, created_at")
+          .eq("id", session.activeCompanyId)
           .single()
       : Promise.resolve({ data: null }),
-    capabilities.canViewAiSettings
+    capabilities.canManageTeam
       ? supabase
-          .from("voice_settings")
-          .select("is_enabled, provider, reply_mode, retention_days, fallback_behavior")
+          .from("company_members")
+          .select("id, user_id, role, is_active, created_at")
           .eq("company_id", session.activeCompanyId)
-          .single()
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: null }),
+    capabilities.canManageWhatsapp
+      ? supabase
+          .from("whatsapp_accounts")
+          .select("status, whatsapp_phone_numbers (display_phone_number)")
+          .eq("company_id", session.activeCompanyId)
+          .maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
 
   const company = companyResult.data;
-  const members = membersResult.data ?? [];
-  const roleCounts = members.reduce<Record<string, number>>((acc, m) => {
-    const role = m.role as string;
-    acc[role] = (acc[role] ?? 0) + 1;
-    return acc;
-  }, {});
-  const aiSettings = aiSettingsResult.data;
-  const voiceSettings = voiceSettingsResult.data;
+  const members = capabilities.canManageTeam ? (membersResult.data ?? []) : [];
+  const activeMembers = members.filter((m) => m.is_active);
+  const whatsappAccount = whatsappAccountResult.data as {
+    status: string;
+    whatsapp_phone_numbers: { display_phone_number: string | null }[] | null;
+  } | null;
+  const whatsappPhone = whatsappAccount?.whatsapp_phone_numbers?.[0]?.display_phone_number ?? null;
+
+  // The only real, non-fabricated "admin email" this session can safely
+  // resolve without a new profiles/email lookup: the caller's own email,
+  // and only when their own role genuinely is an account-admin role.
+  const adminEmail =
+    company && (session.activeRole === "company_owner" || session.activeRole === "company_admin")
+      ? session.email
+      : null;
 
   return (
     <div>
       <h1 style={{ fontSize: "1.4rem" }}>Settings</h1>
-      <p className="dvx-muted">Company profile, team, and configuration for this account.</p>
+      <p className="dvx-muted">Company account details for this account.</p>
 
       <div
         style={{
@@ -106,91 +131,103 @@ export default async function SettingsPage() {
           marginTop: "1.5rem",
         }}
       >
-        <div className="dvx-card">
-          <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>
-            Company profile
-          </div>
-          <SettingsRow label="Name" value={company?.name ?? null} />
-          <SettingsRow label="Status" value={company?.status ?? null} />
-          <SettingsRow label="Timezone" value={company?.timezone ?? null} />
-          <SettingsRow label="Currency" value={company?.default_currency ?? null} />
-          <SettingsRow
-            label="Created"
-            value={company?.created_at ? new Date(company.created_at).toLocaleDateString() : null}
-          />
-        </div>
-
-        <div className="dvx-card">
-          <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>
-            Signed-in user
-          </div>
-          <SettingsRow label="Email" value={session.email} />
-          <SettingsRow label="Role" value={roleLabel} />
-          {session.memberships.length > 1 ? (
-            <SettingsRow label="Company memberships" value={String(session.memberships.length)} />
-          ) : null}
-        </div>
-
-        <div className="dvx-card">
-          <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>Team</div>
-          <SettingsRow label="Active members" value={String(members.length)} />
-          {Object.entries(roleCounts).map(([role, count]) => (
-            <SettingsRow key={role} label={ROLE_LABELS[role] ?? role} value={String(count)} />
-          ))}
-        </div>
-
-        {capabilities.canViewAiSettings && aiSettings ? (
-          <div className="dvx-card">
-            <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>
-              AI behaviour
-            </div>
-            <SettingsRow label="Assistant name" value={aiSettings.bot_name} />
-            <SettingsRow label="Tone" value={aiSettings.tone} />
-            <SettingsRow label="Reply mode" value={aiSettings.default_reply_mode} />
-            <SettingsRow label="AI automation" value={aiSettings.ai_active ? "Active" : "Paused"} />
+        {capabilities.canManageSettings ? (
+          <SectionCard title="Company details">
+            <SettingsRow label="Company name" value={company?.name ?? null} />
             <SettingsRow
-              label="Enabled languages"
-              value={
-                aiSettings.enabled_languages?.length
-                  ? (aiSettings.enabled_languages as string[]).join(", ")
-                  : null
-              }
+              label="Account status"
+              value={company?.status ? company.status.replace(/_/g, " ") : null}
             />
-          </div>
+            <SettingsRow label="Admin email" value={adminEmail} />
+            <SettingsRow label="Time zone" value={company?.timezone ?? null} />
+            <SettingsRow label="Currency" value={company?.default_currency ?? null} />
+            <SettingsRow
+              label="Created"
+              value={company?.created_at ? new Date(company.created_at).toLocaleDateString() : null}
+            />
+          </SectionCard>
         ) : null}
 
-        {capabilities.canViewAiSettings && voiceSettings ? (
-          <div className="dvx-card">
-            <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>
-              Voice configuration
+        {capabilities.canManageTeam ? (
+          <SectionCard title="Team members">
+            {members.length === 0 ? (
+              <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+                No team members found.
+              </p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {members.map((member) => (
+                  <div
+                    key={member.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: "0.75rem",
+                      padding: "0.4rem 0",
+                      borderBottom: "1px solid var(--border-default)",
+                    }}
+                  >
+                    <span style={{ fontSize: "0.85rem" }}>
+                      {member.id === session.activeMemberId
+                        ? (session.email ?? "You")
+                        : maskMemberId(member.user_id)}
+                      {member.id === session.activeMemberId ? (
+                        <span className="dvx-muted"> (You)</span>
+                      ) : null}
+                    </span>
+                    <span style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
+                      <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
+                        {ROLE_LABELS[member.role] ?? member.role}
+                      </span>
+                      <span
+                        className={`dvx-badge ${member.is_active ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                        style={{ fontSize: "0.7rem" }}
+                      >
+                        {member.is_active ? "Active" : "Disabled"}
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop: "0.75rem" }}>
+              <SettingsRow label="Active members" value={String(activeMembers.length)} />
+              <SettingsRow label="Plan staff limit" value="Not configured" />
             </div>
-            <SettingsRow
-              label="Voice replies"
-              value={voiceSettings.is_enabled ? "Enabled" : "Disabled"}
-            />
-            <SettingsRow label="Provider" value={voiceSettings.provider} />
-            <SettingsRow label="Reply mode" value={voiceSettings.reply_mode} />
-            <SettingsRow label="Retention" value={`${voiceSettings.retention_days} days`} />
-            <SettingsRow label="Fallback behaviour" value={voiceSettings.fallback_behavior} />
-          </div>
+          </SectionCard>
+        ) : null}
+
+        {capabilities.canManageBilling ? (
+          <SectionCard title="Subscription status">
+            <SettingsRow label="Current plan" value="Not configured" />
+            <SettingsRow label="Subscription status" value="Not active" />
+            <p className="dvx-muted" style={{ fontSize: "0.8rem", marginTop: "0.5rem" }}>
+              Subscription management will be available soon.
+            </p>
+          </SectionCard>
         ) : null}
 
         {capabilities.canManageWhatsapp ? (
-          <div className="dvx-card">
-            <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>
-              WhatsApp connection
+          <SectionCard title="WhatsApp connection">
+            <SettingsRow
+              label="Connection status"
+              value={whatsappAccount?.status ? whatsappAccount.status.replace(/_/g, " ") : null}
+            />
+            <SettingsRow
+              label="Connected number"
+              value={whatsappPhone ? maskPhoneNumber(whatsappPhone) : null}
+            />
+            <div style={{ marginTop: "0.75rem" }}>
+              <Link
+                href="/dashboard/settings/whatsapp"
+                className="dvx-button dvx-button--secondary"
+                style={{ fontSize: "0.8rem", textDecoration: "none" }}
+              >
+                View WhatsApp connection
+              </Link>
             </div>
-            <p className="dvx-muted" style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
-              View the connected number, verified business name, and connection status.
-            </p>
-            <Link
-              href="/dashboard/settings/whatsapp"
-              className="dvx-button dvx-button--secondary"
-              style={{ fontSize: "0.8rem", textDecoration: "none" }}
-            >
-              View WhatsApp connection
-            </Link>
-          </div>
+          </SectionCard>
         ) : null}
       </div>
     </div>

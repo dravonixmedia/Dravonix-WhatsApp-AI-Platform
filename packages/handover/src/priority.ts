@@ -1,4 +1,4 @@
-import type { ConversationState, HandoverPriority } from "./types.js";
+import type { ConversationState, HandoverInboxItem, HandoverPriority } from "./types.js";
 
 const HIGH_PRIORITY_MINUTES = 30;
 const MEDIUM_PRIORITY_MINUTES = 10;
@@ -35,6 +35,29 @@ export function deriveUnreadCount(
   if (lastReadAt === null) return inboundMessageTimestamps.length;
   const lastRead = new Date(lastReadAt).getTime();
   return inboundMessageTimestamps.filter((ts) => new Date(ts).getTime() > lastRead).length;
+}
+
+/**
+ * Single, shared definition of "this handover-inbox item needs attention"
+ * -- true when it's still pending (handover_requested/queued_for_agent,
+ * regardless of assignment), or it's human_active but somehow unassigned
+ * (shouldn't normally happen given the lifecycle contract, but not
+ * excluded defensively), or it has unread inbound customer messages.
+ *
+ * This is the exact predicate behind both the Human Handover nav badge
+ * (SupabaseHandoverRepository.countHandoverBadge) and the notification
+ * bell's handover-attention panel (apps/web/app/dashboard/layout.tsx) --
+ * kept as one function so the two can never silently diverge. Before this
+ * existed, the nav/bell badge only checked `state in (handover_requested,
+ * queued_for_agent)`, which structurally excluded an assigned human_active
+ * conversation with new unread messages -- the root cause of a 2026-08-05
+ * staging incident where a human_active conversation with 3 unread
+ * messages showed a badge of 0 everywhere.
+ */
+export function handoverItemNeedsAttention(
+  item: Pick<HandoverInboxItem, "state" | "assignedMemberId" | "unreadCount">,
+): boolean {
+  return item.state !== "human_active" || item.assignedMemberId === null || item.unreadCount > 0;
 }
 
 /**

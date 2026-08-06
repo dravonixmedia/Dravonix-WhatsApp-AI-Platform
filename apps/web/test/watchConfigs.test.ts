@@ -4,6 +4,7 @@ import {
   ALL_WATCH_LISTS,
   CONVERSATIONS_LIST_WATCHES,
   CONVERSATION_DETAIL_WATCHES,
+  DASHBOARD_SHELL_WATCHES,
   HANDOVER_INBOX_WATCHES,
   LEADS_LIST_WATCHES,
   LEAD_DETAIL_WATCHES,
@@ -95,6 +96,20 @@ describe("specific watch lists match their documented, minimal scope", () => {
     expect(LEADS_LIST_WATCHES).toEqual([
       { table: "leads", filterColumn: "company_id", event: "INSERT" },
       { table: "leads", filterColumn: "company_id", event: "UPDATE" },
+    ]);
+  });
+
+  it("DASHBOARD_SHELL_WATCHES covers every table the bell badge and nav badge depend on (conversations, messages, conversation_assignments, handover_events)", () => {
+    const tables = new Set(DASHBOARD_SHELL_WATCHES.map((w) => w.table));
+    expect(tables).toEqual(
+      new Set(["conversations", "messages", "conversation_assignments", "handover_events"]),
+    );
+  });
+
+  it("DASHBOARD_SHELL_WATCHES watches messages for INSERT only, same as CONVERSATIONS_LIST_WATCHES", () => {
+    const messagesWatches = DASHBOARD_SHELL_WATCHES.filter((w) => w.table === "messages");
+    expect(messagesWatches).toEqual([
+      { table: "messages", filterColumn: "company_id", event: "INSERT" },
     ]);
   });
 });

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { HandoverRepository } from "../repository.js";
-import { deriveUnreadCount, derivePriority } from "../priority.js";
+import { deriveUnreadCount, derivePriority, handoverItemNeedsAttention } from "../priority.js";
 import { maskPhoneNumber } from "../maskPhoneNumber.js";
 import type {
   ConversationForThread,
@@ -275,14 +275,20 @@ export class SupabaseHandoverRepository implements HandoverRepository {
     });
   }
 
+  /**
+   * See handoverItemNeedsAttention's doc comment for the exact "requires
+   * attention" definition and why it replaced the narrower `state in
+   * (handover_requested, queued_for_agent)` check. Reuses
+   * listHandoverInbox's own "all_active" filter and unreadCount derivation
+   * rather than a second, divergent query.
+   */
   async countHandoverBadge(companyId: string): Promise<number> {
-    const { count, error } = await this.client
-      .from("conversations")
-      .select("id", { count: "exact", head: true })
-      .eq("company_id", companyId)
-      .in("state", ["handover_requested", "queued_for_agent"]);
-    if (error) throw new Error(error.message);
-    return count ?? 0;
+    const items = await this.listHandoverInbox({
+      companyId,
+      filter: "all_active",
+      sort: "newest_first",
+    });
+    return items.filter(handoverItemNeedsAttention).length;
   }
 
   async getConversationThread(

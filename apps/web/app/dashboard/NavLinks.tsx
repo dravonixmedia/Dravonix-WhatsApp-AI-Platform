@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { formatBadgeCount } from "../../lib/notificationBadge.js";
 
 export interface NavLinkItem {
   href: string;
@@ -52,7 +53,7 @@ export function NavLinks({
         {handover.icon}
         <span>{handover.label}</span>
         {handoverBadgeCount > 0 ? (
-          <span className="dvx-nav-badge">{handoverBadgeCount}</span>
+          <span className="dvx-nav-badge">{formatBadgeCount(handoverBadgeCount)}</span>
         ) : null}
       </Link>
     </nav>

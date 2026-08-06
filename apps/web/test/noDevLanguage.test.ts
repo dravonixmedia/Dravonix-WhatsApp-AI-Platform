@@ -29,11 +29,18 @@ function readSourceWithoutComments(relativePath: string): string {
 
 const BANNED_STRINGS = [
   "packages/knowledge",
+  "packages/config",
   "supabase/seed/002_demo_tenant.sql",
   "packages/config/src/branding.ts",
   "ADR-0008",
   "Connect a database to list knowledge sources here",
   "Master Prompt section",
+  "friendly_professional",
+  "text_only_with_notice",
+  "META_ACCESS_TOKEN",
+  "META_APP_SECRET",
+  "META_VERIFY_TOKEN",
+  "SUPABASE_SERVICE_ROLE_KEY",
 ];
 
 const CLIENT_FACING_PAGES = [

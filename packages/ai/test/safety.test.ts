@@ -58,18 +58,29 @@ describe("applySafetyRules", () => {
     expect(result.handoverReason).toBe("customer_request");
   });
 
-  it("strips an unauthorized human-follow-up promise when requiresHuman is false", () => {
+  it("escalates to requiresHuman when an unauthorized human-follow-up promise is detected", () => {
     const response = baseResponse({
       answer: "Sure, we can help with that. Our team will also follow up with you shortly.",
       requiresHuman: false,
     });
     const result = applySafetyRules(response);
-    expect(result.answer).not.toMatch(/follow up/i);
-    expect(result.answer).toBe("Sure, we can help with that.");
-    expect(result.requiresHuman).toBe(false);
+    expect(result.answer).toBe(response.answer);
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe("AI reply promised human/team follow-up");
   });
 
-  it("leaves a genuine human-follow-up promise untouched when requiresHuman is true", () => {
+  it("preserves an existing handoverReason when escalating a follow-up promise", () => {
+    const response = baseResponse({
+      answer: "Sure, we can help with that. Our team will also follow up with you shortly.",
+      requiresHuman: false,
+      handoverReason: "customer_request",
+    });
+    const result = applySafetyRules(response);
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe("customer_request");
+  });
+
+  it("leaves a genuine human-follow-up promise untouched when requiresHuman is already true", () => {
     const response = baseResponse({
       answer: "I've passed this to our team -- a team member will follow up with you shortly.",
       requiresHuman: true,
@@ -77,6 +88,38 @@ describe("applySafetyRules", () => {
     });
     const result = applySafetyRules(response);
     expect(result.answer).toContain("follow up");
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe("customer_request");
+  });
+
+  it("escalates a Malayalam-English mixed reply promising the team will contact the customer", () => {
+    const response = baseResponse({
+      answer: "ok, oru second, ഞങ്ങളുടെ team നിങ്ങളെ contact ചെയ്യും, ok ആണോ?",
+      requiresHuman: false,
+    });
+    const result = applySafetyRules(response);
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe("AI reply promised human/team follow-up");
+    expect(result.answer).toBe(response.answer);
+  });
+
+  it("escalates a Malayalam-English mixed reply promising to arrange a meeting", () => {
+    const response = baseResponse({
+      answer: "sure, oru meeting arrange cheyyam, time njan fix cheyyam",
+      requiresHuman: false,
+    });
+    const result = applySafetyRules(response);
+    expect(result.requiresHuman).toBe(true);
+    expect(result.handoverReason).toBe("AI reply promised human/team follow-up");
+  });
+
+  it("does not escalate an answer that merely mentions 'team' or 'call' without a follow-up promise", () => {
+    const response = baseResponse({
+      answer: "Our team built this product using the latest tools -- happy to answer questions!",
+      requiresHuman: false,
+    });
+    const result = applySafetyRules(response);
+    expect(result.requiresHuman).toBe(false);
   });
 
   it("leaves an answer with no follow-up promise unchanged", () => {

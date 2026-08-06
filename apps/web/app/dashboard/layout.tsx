@@ -1,16 +1,16 @@
-import { countHandoverBadge, SupabaseHandoverRepository } from "@dravonix/handover";
-import Link from "next/link";
+import { handoverItemNeedsAttention, SupabaseHandoverRepository } from "@dravonix/handover";
+import { getDashboardCapabilities } from "../../lib/permissions.js";
 import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
-import { getDashboardCapabilities } from "../../lib/permissions.js";
+import { RealtimeRefreshBoundary } from "../../lib/realtime/RealtimeRefreshBoundary.js";
+import { DASHBOARD_SHELL_WATCHES } from "../../lib/realtime/watchConfigs.js";
+import { loadNotificationSummary } from "../../lib/repositories/notificationsRepository.js";
 import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
 import { GlobalSearch } from "./GlobalSearch.js";
 import {
-  BellIcon,
-  BillingIcon,
   ChevronDownIcon,
   ConversationsIcon,
   HandoverIcon,
@@ -20,6 +20,7 @@ import {
   WhatsAppIcon,
 } from "./Icons.js";
 import { NavLinks, type NavLinkItem } from "./NavLinks.js";
+import { NotificationBell } from "./NotificationBell.js";
 
 // Every /dashboard/* route depends on the request's session cookie (real
 // Supabase Auth, Human Handover Inbox final plan section 15) -- never
@@ -39,10 +40,15 @@ const HANDOVER_NAV_ITEM: NavLinkItem = {
  * Nav is built per-request from the caller's real, permission-derived
  * capabilities -- never a hardcoded email or role string. Knowledge Base is
  * omitted entirely (no client-ready management module exists yet -- see
- * app/dashboard/knowledge/page.tsx); Settings and WhatsApp Connection are
- * included only for roles holding the matching permission, so an agent or
- * viewer never sees a link to a page RLS or the page itself would then have
- * to reject them from.
+ * app/dashboard/knowledge/page.tsx). Billing is also omitted: it has no
+ * client-ready subscription system yet either (its route now redirects to
+ * Settings, which shows an honest "not configured" subscription-status
+ * card instead -- see app/dashboard/billing/page.tsx). Settings is shown to
+ * any role holding at least one of the permissions a Settings section is
+ * gated on (company details, team, or billing), and WhatsApp Connection
+ * only to roles holding its own permission, so an agent or viewer never
+ * sees a link to a page RLS or the page itself would then have to reject
+ * them from.
  */
 export function buildNavItems(
   capabilities: ReturnType<typeof getDashboardCapabilities>,
@@ -51,9 +57,12 @@ export function buildNavItems(
     { href: "/dashboard", label: "Overview", icon: <OverviewIcon /> },
     { href: "/dashboard/conversations", label: "Live Conversations", icon: <ConversationsIcon /> },
     { href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> },
-    { href: "/dashboard/billing", label: "Billing", icon: <BillingIcon /> },
   ];
-  if (capabilities.canManageSettings) {
+  if (
+    capabilities.canManageSettings ||
+    capabilities.canManageTeam ||
+    capabilities.canManageBilling
+  ) {
     items.push({ href: "/dashboard/settings", label: "Settings", icon: <SettingsIcon /> });
   }
   if (capabilities.canManageWhatsapp) {
@@ -115,10 +124,33 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   const supabase = await createServerSupabaseClient();
-  const handoverBadgeCount = await countHandoverBadge(
-    new SupabaseHandoverRepository(supabase),
-    session.activeCompanyId,
-  );
+  const handoverRepo = new SupabaseHandoverRepository(supabase);
+  const [notificationSummary, handoverInboxItems] = await Promise.all([
+    loadNotificationSummary(supabase, session.activeCompanyId),
+    handoverRepo.listHandoverInbox({
+      companyId: session.activeCompanyId,
+      filter: "all_active",
+      sort: "newest_first",
+    }),
+  ]);
+  // Both the Human Handover nav badge and the bell's handover-attention
+  // sections are derived from this one query, via the same shared
+  // handoverItemNeedsAttention predicate SupabaseHandoverRepository's own
+  // countHandoverBadge uses -- so calling that function again here would
+  // just re-run an identical query; deriving locally avoids that.
+  const handoverBadgeCount = handoverInboxItems.filter(handoverItemNeedsAttention).length;
+  const pendingHandoverRequests = handoverInboxItems
+    .filter((item) => item.state !== "human_active")
+    .map((item) => ({
+      conversationId: item.conversationId,
+      maskedPhoneNumber: item.maskedPhoneNumber,
+    }));
+  const unassignedHandovers = handoverInboxItems
+    .filter((item) => item.assignedMemberId === null)
+    .map((item) => ({
+      conversationId: item.conversationId,
+      maskedPhoneNumber: item.maskedPhoneNumber,
+    }));
   const capabilities = getDashboardCapabilities(session.activeRole);
   const navItems = buildNavItems(capabilities);
 
@@ -130,6 +162,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <div style={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
+      <RealtimeRefreshBoundary
+        namespace="dashboard-shell"
+        scopeId={session.activeCompanyId}
+        accessToken={session.accessToken}
+        watches={DASHBOARD_SHELL_WATCHES}
+      />
       <input
         type="checkbox"
         id="dvx-nav-toggle"
@@ -271,16 +309,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
               </form>
             ) : null}
 
-            <Link
-              href="/dashboard/handover"
-              className="dvx-icon-button"
-              aria-label={`Human Handover notifications: ${handoverBadgeCount} unread`}
-            >
-              <BellIcon />
-              {handoverBadgeCount > 0 ? (
-                <span className="dvx-icon-button-badge">{handoverBadgeCount}</span>
-              ) : null}
-            </Link>
+            <NotificationBell
+              totalUnreadCustomerMessages={notificationSummary.totalUnreadCustomerMessages}
+              unreadConversations={notificationSummary.unreadConversations}
+              pendingHandoverRequests={pendingHandoverRequests}
+              unassignedHandovers={unassignedHandovers}
+            />
 
             <details className="dvx-user-menu">
               <summary>

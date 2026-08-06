@@ -1,3 +1,4 @@
+import { handoverItemNeedsAttention } from "../src/priority.js";
 import type { HandoverRepository } from "../src/repository.js";
 import type {
   ConversationAiMode,
@@ -345,12 +346,33 @@ export class FakeHandoverRepository implements HandoverRepository {
       }));
   }
 
+  /**
+   * Mirrors SupabaseHandoverRepository.countHandoverBadge: filter to the
+   * "all_active" state superset first (this fake's listHandoverInbox
+   * ignores the filter param and returns every conversation, so that
+   * narrowing has to happen here instead), then apply the same shared
+   * handoverItemNeedsAttention predicate. This fake never tracks unread
+   * inbound-message state (unreadCount is always 0), so only the
+   * state/assignment half of that predicate is exercised here -- the
+   * unread-driven escalation path is covered against the real Supabase
+   * implementation instead.
+   */
   async countHandoverBadge(companyId: string): Promise<number> {
-    return [...this.conversations.values()].filter(
-      (c) =>
-        c.companyId === companyId &&
-        (c.state === "handover_requested" || c.state === "queued_for_agent"),
-    ).length;
+    return [...this.conversations.values()]
+      .filter(
+        (c) =>
+          c.companyId === companyId &&
+          (c.state === "handover_requested" ||
+            c.state === "queued_for_agent" ||
+            c.state === "human_active"),
+      )
+      .filter((c) =>
+        handoverItemNeedsAttention({
+          state: c.state,
+          assignedMemberId: c.assignedMemberId,
+          unreadCount: 0,
+        }),
+      ).length;
   }
 
   async getConversationThread(

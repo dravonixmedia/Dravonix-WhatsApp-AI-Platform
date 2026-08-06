@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { deriveAiLikelyProcessing, deriveUnreadCount, derivePriority } from "../src/priority.js";
+import {
+  deriveAiLikelyProcessing,
+  deriveUnreadCount,
+  derivePriority,
+  handoverItemNeedsAttention,
+} from "../src/priority.js";
 
 const NOW = new Date("2026-08-02T12:00:00Z");
 
@@ -44,6 +49,58 @@ describe("deriveUnreadCount", () => {
   it("is zero when every inbound message predates the last read timestamp", () => {
     const lastRead = minutesAgo(1);
     expect(deriveUnreadCount([minutesAgo(10), minutesAgo(5)], lastRead)).toBe(0);
+  });
+});
+
+describe("handoverItemNeedsAttention", () => {
+  it("is true for a pending, unassigned handover request", () => {
+    expect(
+      handoverItemNeedsAttention({
+        state: "handover_requested",
+        assignedMemberId: null,
+        unreadCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("is true for a pending handover request even when already assigned", () => {
+    expect(
+      handoverItemNeedsAttention({
+        state: "queued_for_agent",
+        assignedMemberId: "member-1",
+        unreadCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("is false for an assigned human_active conversation with no unread messages", () => {
+    expect(
+      handoverItemNeedsAttention({
+        state: "human_active",
+        assignedMemberId: "member-1",
+        unreadCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true for an assigned human_active conversation with unread customer messages (the 2026-08-05 staging bug)", () => {
+    expect(
+      handoverItemNeedsAttention({
+        state: "human_active",
+        assignedMemberId: "member-1",
+        unreadCount: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it("is true for a human_active conversation with no assignee, regardless of unread count", () => {
+    expect(
+      handoverItemNeedsAttention({
+        state: "human_active",
+        assignedMemberId: null,
+        unreadCount: 0,
+      }),
+    ).toBe(true);
   });
 });
 
