@@ -120,7 +120,7 @@ describe("buildActionInstruction", () => {
     expect(instruction).toMatch(/do not add or remove any promise, price, date/i);
   });
 
-  it("translate embeds the draft text and instructs preserving names/prices/dates/links", () => {
+  it("translate embeds the draft text and instructs preserving names/prices/currencies/dates/times/phone numbers/links", () => {
     const instruction = buildActionInstruction(
       baseInput({
         action: "translate",
@@ -130,7 +130,51 @@ describe("buildActionInstruction", () => {
     );
     expect(instruction).toContain("Call us at +911234567890");
     expect(instruction).toMatch(/Hindi/);
-    expect(instruction).toMatch(/preserve names, prices, dates, phone numbers, urls/i);
+    expect(instruction).toMatch(
+      /preserve names, prices, currencies, dates, times, phone numbers, urls/i,
+    );
+    expect(instruction).toMatch(/product names, and brand names/i);
+    expect(instruction).toMatch(/preserve emojis where they appear/i);
+    expect(instruction).toMatch(/original paragraph structure/i);
+    expect(instruction).toMatch(/preserving its exact original meaning/i);
+  });
+
+  it("translate forbids adding any promise, price, date, or confirmation not already in the source text", () => {
+    const instruction = buildActionInstruction(
+      baseInput({
+        action: "translate",
+        staffDraft: "We will check and get back to you",
+        targetLanguage: "en",
+      }),
+    );
+    expect(instruction).toMatch(
+      /do not add any promise, price, date, meeting confirmation, callback confirmation/i,
+    );
+  });
+
+  it("translate into Malayalam adds fluency/naturalness guidance not present for other target languages", () => {
+    const malayalamInstruction = buildActionInstruction(
+      baseInput({
+        action: "translate",
+        staffDraft: "Thanks for your interest",
+        targetLanguage: "ml",
+      }),
+    );
+    expect(malayalamInstruction).toMatch(/natural, fluent Malayalam/i);
+    expect(malayalamInstruction).toMatch(/never a stiff, word-for-word translation/i);
+    expect(malayalamInstruction).toMatch(
+      /without transliterating them unnecessarily|instead of transliterating/i,
+    );
+    expect(malayalamInstruction).toMatch(/preserve that mixed style/i);
+
+    const englishInstruction = buildActionInstruction(
+      baseInput({
+        action: "translate",
+        staffDraft: "Thanks for your interest",
+        targetLanguage: "en",
+      }),
+    );
+    expect(englishInstruction).not.toMatch(/Malayalam/i);
   });
 
   it("ask_question embeds the staff question and forbids general knowledge/internet search", () => {

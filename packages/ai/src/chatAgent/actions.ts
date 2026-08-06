@@ -122,10 +122,20 @@ export function buildActionInstruction(input: ChatAgentInput): string {
 
     case "translate": {
       const languageName = CHAT_AGENT_SUPPORTED_LANGUAGES[input.targetLanguage!];
+      const malayalamGuidance =
+        input.targetLanguage === "ml"
+          ? " Produce natural, fluent Malayalam -- never a stiff, word-for-word translation. Keep common " +
+            "business/product/service terms in English where that is how they are normally used in everyday " +
+            "Malayalam business conversation, instead of transliterating them unnecessarily. If the source text " +
+            "already mixes Malayalam and English, you may preserve that mixed style."
+          : "";
       return (
-        `Translate the text below into ${languageName}. Preserve names, prices, dates, phone numbers, URLs, ` +
-        "product names, and brand names exactly as written -- do not localize or alter them. Respond with " +
-        "ONLY the translated text -- no preamble, no labels, no quotation marks, no JSON.\n\n" +
+        `Translate the text below into ${languageName}, preserving its exact original meaning.${malayalamGuidance} ` +
+        "Preserve names, prices, currencies, dates, times, phone numbers, URLs, product names, and brand names " +
+        "exactly as written -- do not localize or alter them. Preserve emojis where they appear, and keep the " +
+        "original paragraph structure. Do not add any promise, price, date, meeting confirmation, callback " +
+        "confirmation, or any other detail that is not already present in the source text. Respond with ONLY " +
+        "the translated text -- no preamble, no labels, no quotation marks, no JSON.\n\n" +
         `Text to translate:\n${input.staffDraft}`
       );
     }

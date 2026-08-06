@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { ChatAgentSupportedLanguage } from "@dravonix/ai";
 import { ReplyComposer } from "./handover/[conversationId]/ReplyComposer.js";
 import { ChatAgentPanel } from "./ChatAgentPanel.js";
 import { SparkleIcon } from "./Icons.js";
@@ -9,11 +10,18 @@ import { SparkleIcon } from "./Icons.js";
  * Shared by Live Conversations and Human Handover (both already reuse the
  * same ReplyComposer -- see conversations/[conversationId]/page.tsx's own
  * comment on this). Owns the composer's draft text so the AI Assistant
- * panel can insert a generated reply into it via "Use this reply" -- it
- * only ever calls setDraft, never sendHumanReplyAction; sending still
- * requires the existing manual Send button inside ReplyComposer.
+ * panel can insert a generated reply into it via "Use this reply"/"Use in
+ * reply" -- it only ever calls setDraft, never sendHumanReplyAction;
+ * sending still requires the existing manual Send button inside
+ * ReplyComposer.
  */
-export function ConversationComposerWithAssistant({ conversationId }: { conversationId: string }) {
+export function ConversationComposerWithAssistant({
+  conversationId,
+  enabledLanguages,
+}: {
+  conversationId: string;
+  enabledLanguages?: ChatAgentSupportedLanguage[];
+}) {
   const [draft, setDraft] = useState("");
   const [assistantOpen, setAssistantOpen] = useState(false);
 
@@ -52,6 +60,7 @@ export function ConversationComposerWithAssistant({ conversationId }: { conversa
             onClose={() => setAssistantOpen(false)}
             currentDraft={draft}
             onUseReply={setDraft}
+            enabledLanguages={enabledLanguages}
           />
         </>
       ) : null}

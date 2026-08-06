@@ -1,5 +1,6 @@
 export * from "./types.js";
 export * from "./historySelection.js";
+export * from "./languageDetection.js";
 export * from "./errors.js";
 export * from "./provider.js";
 export * from "./mockProvider.js";

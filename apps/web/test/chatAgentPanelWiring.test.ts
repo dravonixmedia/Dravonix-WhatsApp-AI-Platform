@@ -120,6 +120,176 @@ describe("ChatAgentPanel: treats every error code uniformly, including AI_RESPON
   });
 });
 
+describe("ChatAgentPanel: all six Quick Actions are present", () => {
+  it("renders exactly the six required quick actions, each wired to its own action", () => {
+    expect(panelSource).toMatch(/onClick=\{\(\) => runSimpleAction\("summarize"\)\}/);
+    expect(panelSource).toMatch(/>\s*Summarize\s*</);
+    expect(panelSource).toMatch(/onClick=\{\(\) => runSimpleAction\("suggest_reply"\)\}/);
+    expect(panelSource).toMatch(/>\s*Suggest reply\s*</);
+    expect(panelSource).toMatch(/onClick=\{\(\) => toggleSelectedAction\("rewrite_draft"\)\}/);
+    expect(panelSource).toMatch(/>\s*Rewrite\s*</);
+    expect(panelSource).toMatch(/onClick=\{\(\) => toggleSelectedAction\("translate"\)\}/);
+    expect(panelSource).toMatch(/>\s*Translate\s*</);
+    expect(panelSource).toMatch(/onClick=\{\(\) => runSimpleAction\("extract_lead"\)\}/);
+    expect(panelSource).toMatch(/>\s*Extract lead\s*</);
+    expect(panelSource).toMatch(/onClick=\{\(\) => runSimpleAction\("prepare_follow_up"\)\}/);
+    expect(panelSource).toMatch(/>\s*Follow-up\s*</);
+  });
+
+  it("lays out the six quick actions in a compact grid, not a full-width vertical list", () => {
+    expect(panelSource).toContain('className="dvx-assistant-quick-actions"');
+  });
+});
+
+describe("ChatAgentPanel: action-specific controls only show when that action is selected", () => {
+  it('gates the rewrite tone selector behind selectedAction === "rewrite_draft"', () => {
+    expect(panelSource).toMatch(
+      /\{selectedAction === "rewrite_draft" \? \([\s\S]{0,320}?aria-label="Rewrite tone"/,
+    );
+  });
+
+  it('gates the translate source/language controls behind selectedAction === "translate"', () => {
+    expect(panelSource).toMatch(
+      /\{selectedAction === "translate" \? \([\s\S]{0,900}?aria-label="Translate into"/,
+    );
+  });
+
+  it("selecting a different quick action does not run both panels simultaneously -- rewrite and translate are mutually exclusive, single selectedAction state", () => {
+    expect(panelSource).toContain("useState<SelectableAction | null>(null)");
+    expect(panelSource).not.toMatch(
+      /selectedAction === "rewrite_draft" && selectedAction === "translate"/,
+    );
+  });
+});
+
+describe("ChatAgentPanel: Translate source selection (the confirmed bug fix)", () => {
+  it("imports and uses the shared priority-resolution helpers instead of a composer-only hasDraft check", () => {
+    expect(panelSource).toContain("resolveTranslateSource");
+    expect(panelSource).toContain("resolveTranslateSourceText");
+    expect(panelSource).toMatch(
+      /const translateSource = resolveTranslateSource\(\s*currentDraft,\s*latestAiDraft,\s*translateSourceOverride,?\s*\)/,
+    );
+  });
+
+  it("tracks the latest AI-generated draft via isDraftAction, updated after every successful run()", () => {
+    expect(panelSource).toContain("isDraftAction");
+    expect(panelSource).toMatch(
+      /if \(isDraftAction\(request\.action\) && response\.displayText\.trim\(\)\)\s*\{\s*setLatestAiDraft\(response\.displayText\);/,
+    );
+  });
+
+  it("the Translate submit button sends resolved source text, not always currentDraft", () => {
+    expect(panelSource).toMatch(
+      /run\(\{ action: "translate", draft: translateSourceText, targetLanguage \}\)/,
+    );
+    // The old, buggy pattern (always the composer, regardless of an available AI draft) must be gone.
+    expect(panelSource).not.toMatch(/run\(\{ action: "translate", draft: currentDraft/);
+  });
+
+  it("shows 'Write a reply or generate a draft first.' when neither source has text, and never calls the provider in that case", () => {
+    expect(panelSource).toContain('"Write a reply or generate a draft first."');
+    expect(panelSource).toMatch(
+      /const translateGuidance = !hasTranslateSource\s*\n\s*\? "Write a reply or generate a draft first\."/,
+    );
+    expect(panelSource).toMatch(
+      /disabled=\{isPending \|\| !hasTranslateSource \|\| isSameLanguage\}/,
+    );
+  });
+
+  it("only shows a source picker when both the composer and an AI draft have usable text", () => {
+    expect(panelSource).toMatch(/\{composerHasText && aiDraftHasText \? \(/);
+    expect(panelSource).toContain(">Reply box<");
+    expect(panelSource).toContain(">Latest AI draft<");
+  });
+});
+
+describe("ChatAgentPanel: same-language guard", () => {
+  it("detects the source text's likely language and blocks translating into the same language", () => {
+    expect(panelSource).toContain("detectLikelySourceLanguage");
+    expect(panelSource).toMatch(
+      /const isSameLanguage =\s*\n\s*detectedSourceLanguage !== null && detectedSourceLanguage === targetLanguage;/,
+    );
+    expect(panelSource).toMatch(
+      /This text is already in \$\{CHAT_AGENT_SUPPORTED_LANGUAGES\[detectedSourceLanguage!\]\}\. Select another language\./,
+    );
+  });
+
+  it("the same-language message is a client-side guard, never a server round trip", () => {
+    // The guidance text must be computed before any run()/chatAgentAction call -- it's a plain
+    // derived value, not something read out of a server response.
+    const guardIndex = panelSource.indexOf("const translateGuidance");
+    const runCallIndex = panelSource.indexOf('run({ action: "translate"');
+    expect(guardIndex).toBeGreaterThan(-1);
+    expect(guardIndex).toBeLessThan(runCallIndex);
+  });
+});
+
+describe("ChatAgentPanel: enabled-language filtering", () => {
+  it("accepts an enabledLanguages prop and falls back to all four supported languages when absent", () => {
+    expect(panelSource).toMatch(/enabledLanguages\?:\s*ChatAgentSupportedLanguage\[\]/);
+    expect(panelSource).toMatch(
+      /const availableLanguages =\s*\n\s*enabledLanguages && enabledLanguages\.length > 0 \? enabledLanguages : ALL_LANGUAGES;/,
+    );
+  });
+
+  it("renders the target-language options from availableLanguages, not a hardcoded list", () => {
+    expect(panelSource).toMatch(/\{availableLanguages\.map\(\(lang\) => \(/);
+  });
+
+  it("ConversationComposerWithAssistant forwards enabledLanguages through to ChatAgentPanel", () => {
+    expect(composerWrapperSource).toMatch(/enabledLanguages\?:\s*ChatAgentSupportedLanguage\[\]/);
+    expect(composerWrapperSource).toContain("enabledLanguages={enabledLanguages}");
+  });
+
+  it("both conversation-detail pages load the company's enabled languages and pass them down", () => {
+    for (const source of [conversationsPageSource, handoverPageSource]) {
+      expect(source).toContain("loadCompanyEnabledLanguages");
+      expect(source).toMatch(
+        /const enabledLanguages = await loadCompanyEnabledLanguages\(supabase, session\.activeCompanyId\);/,
+      );
+      expect(source).toContain("enabledLanguages={enabledLanguages}");
+    }
+  });
+});
+
+describe("ChatAgentPanel: translation output card", () => {
+  it('renders a distinct "Translated to <language>" header only for a translate result', () => {
+    expect(panelSource).toMatch(
+      /showingTranslateResult = view\.status === "success" && lastRequest\?\.action === "translate"/,
+    );
+    expect(panelSource).toContain("Translated to");
+  });
+
+  it('labels the insert action "Use in reply" (not the generic "Use this reply") for a translate result', () => {
+    expect(panelSource).toMatch(/onClick=\{useTranslationInReply\}[\s\S]{0,40}?>\s*Use in reply/);
+  });
+
+  it('"Use in reply" inserts into the composer via onUseReply and shows a confirmation, never sending anything', () => {
+    expect(panelSource).toMatch(
+      /function useTranslationInReply\(\) \{[\s\S]*?onUseReply\(view\.result\.displayText\);[\s\S]*?setJustInsertedTranslation\(true\);/,
+    );
+    expect(panelSource).toContain("Translation added to the reply box.");
+    const fnBody =
+      panelSource.match(/function useTranslationInReply\(\) \{([\s\S]*?)\n {2}\}/)?.[1] ?? "";
+    expect(fnBody).not.toMatch(/send|submit|whatsapp/i);
+  });
+
+  it("the translate result card still offers Copy, Regenerate, and Close like every other result", () => {
+    const translateCardMatch = panelSource.match(
+      /showingTranslateResult && view\.status === "success"[\s\S]*?\{justInsertedTranslation/,
+    );
+    expect(translateCardMatch).not.toBeNull();
+    const card = translateCardMatch?.[0] ?? "";
+    expect(card).toMatch(/Copy/);
+    expect(card).toMatch(/Regenerate/);
+    expect(card).toMatch(/Close/);
+  });
+
+  it("resets the 'just inserted' confirmation whenever a new request starts", () => {
+    expect(panelSource).toMatch(/setJustInsertedTranslation\(false\);/);
+  });
+});
+
 describe("ChatAgentPanel: no polling, no new Realtime subscription", () => {
   it("never uses setInterval/setTimeout polling or opens a Realtime channel", () => {
     for (const source of [panelSource, composerWrapperSource]) {

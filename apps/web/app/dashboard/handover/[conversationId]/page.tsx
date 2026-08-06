@@ -18,6 +18,7 @@ import {
 } from "../../../../lib/actions/handover.js";
 import { RealtimeRefreshBoundary } from "../../../../lib/realtime/RealtimeRefreshBoundary.js";
 import { CONVERSATION_DETAIL_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
+import { loadCompanyEnabledLanguages } from "../../../../lib/repositories/companyLanguages.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { Avatar } from "../../Avatar.js";
@@ -97,6 +98,7 @@ export default async function ConversationDetailPage({
   }
 
   const contact = await loadContactSummary(supabase, conversationId);
+  const enabledLanguages = await loadCompanyEnabledLanguages(supabase, session.activeCompanyId);
 
   const latestInbound = [...thread.messages].reverse().find((m) => m.direction === "inbound");
   const latestAiOutbound = [...thread.messages]
@@ -216,7 +218,10 @@ export default async function ConversationDetailPage({
               }}
             >
               {conversation.state === "human_active" ? (
-                <ConversationComposerWithAssistant conversationId={conversationId} />
+                <ConversationComposerWithAssistant
+                  conversationId={conversationId}
+                  enabledLanguages={enabledLanguages}
+                />
               ) : (
                 <p className="dvx-muted" style={{ fontSize: "0.85rem", margin: 0 }}>
                   A human reply requires the conversation to be in human_active (start human

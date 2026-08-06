@@ -1000,16 +1000,24 @@ a {
   gap: 0.6rem;
 }
 
-.dvx-assistant-actions {
-  display: flex;
-  flex-direction: column;
+.dvx-assistant-quick-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
 }
 
-.dvx-assistant-actions .dvx-button {
+.dvx-assistant-quick-actions .dvx-button {
   width: 100%;
-  justify-content: flex-start;
-  text-align: left;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.8rem;
+  padding: 0.55rem 0.5rem;
+}
+
+.dvx-assistant-translate-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
 .dvx-assistant-action-row {
