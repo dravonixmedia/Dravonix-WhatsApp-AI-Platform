@@ -113,6 +113,13 @@ describe("ChatAgentPanel: error recovery never shows a raw/thrown error message"
   });
 });
 
+describe("ChatAgentPanel: treats every error code uniformly, including AI_RESPONSE_INVALID", () => {
+  it("never branches on response.code -- every failure (including a parse/validation failure) takes the same safe error path", () => {
+    expect(panelSource).not.toMatch(/response\.code/);
+    expect(panelSource).not.toContain("AI_RESPONSE_INVALID");
+  });
+});
+
 describe("ChatAgentPanel: no polling, no new Realtime subscription", () => {
   it("never uses setInterval/setTimeout polling or opens a Realtime channel", () => {
     for (const source of [panelSource, composerWrapperSource]) {

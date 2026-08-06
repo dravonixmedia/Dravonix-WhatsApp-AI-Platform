@@ -231,18 +231,82 @@ describe("chatAgentAction: granular provider status mapping (401/403/404 vs 400/
     // The ChatAgentRequestFailedError branch must end with a fallback
     // return that is reached whenever status is none of 401/403/404.
     const branchMatch = actionSource.match(
-      /if \(error instanceof ChatAgentRequestFailedError\) \{([\s\S]*?)\n\s{6}\}\n\s{6}if \(error instanceof ChatAgentResponseError\)/,
+      /if \(isChatAgentRequestFailedError\(error\)\) \{([\s\S]*?)\n\s{6}\}\n\s{6}if \(isChatAgentResponseError\(error\)\)/,
     );
     expect(branchMatch).not.toBeNull();
     expect(branchMatch?.[1] ?? "").toMatch(
       /return errorResult\("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE\);/,
     );
   });
+});
 
-  it("treats a response-parsing failure (successful call, invalid JSON) as AI_REQUEST_FAILED, distinct from a provider HTTP error", () => {
+describe("chatAgentAction: structured-response parse/validation failures map to AI_RESPONSE_INVALID", () => {
+  it("treats a response-parsing/validation failure (successful call, unusable structured output) as AI_RESPONSE_INVALID, distinct from a provider HTTP error", () => {
     expect(actionSource).toMatch(
-      /if \(error instanceof ChatAgentResponseError\)\s*\{[\s\S]{0,600}?return errorResult\("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE\);/,
+      /RESPONSE_INVALID_MESSAGE\s*=\s*\n?\s*"The AI assistant returned an incomplete response\. Please try again\.";/,
     );
+    expect(actionSource).toMatch(
+      /if \(isChatAgentResponseError\(error\)\)\s*\{[\s\S]{0,1400}?return errorResult\("AI_RESPONSE_INVALID", RESPONSE_INVALID_MESSAGE\);/,
+    );
+  });
+
+  it("logs a distinct, greppable event name per parse/validation stage", () => {
+    for (const eventName of [
+      "chat_agent_empty_response",
+      "chat_agent_json_extraction_failed",
+      "chat_agent_json_parse_failed",
+      "chat_agent_schema_validation_failed",
+      "chat_agent_result_serialization_failed",
+    ]) {
+      expect(actionSource).toContain(eventName);
+    }
+  });
+
+  it("logs only safe counts for a parse/validation failure -- never the response text or extracted field values", () => {
+    expect(actionSource).toContain("parseStage: error.stage");
+    expect(actionSource).toContain("responseCharacterCount: error.responseCharacterCount");
+    expect(actionSource).toContain("validationIssueCount: error.validationIssueCount");
+    expect(codeOnly).not.toMatch(/rawText|responseText|error\.candidate/);
+  });
+});
+
+describe("chatAgentAction: context-loading and provider-initialization failures never escape unclassified", () => {
+  it("wraps loadChatAgentContext in its own try/catch and logs chat_agent_context_load_failed on failure", () => {
+    const contextCallIndex = actionSource.indexOf("await loadChatAgentContext(");
+    const contextCatchIndex = actionSource.indexOf("chat_agent_context_load_failed");
+    expect(contextCallIndex).toBeGreaterThan(-1);
+    expect(contextCatchIndex).toBeGreaterThan(contextCallIndex);
+    expect(actionSource).toMatch(
+      /chat_agent_context_load_failed[\s\S]{0,120}?return errorResult\("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE\);/,
+    );
+  });
+
+  it("wraps AnthropicChatAgentProvider construction in its own try/catch and logs chat_agent_provider_initialization_failed on failure", () => {
+    const constructionIndex = actionSource.indexOf("new AnthropicChatAgentProvider(");
+    const catchLogIndex = actionSource.indexOf("chat_agent_provider_initialization_failed");
+    expect(constructionIndex).toBeGreaterThan(-1);
+    expect(catchLogIndex).toBeGreaterThan(constructionIndex);
+    expect(actionSource).toMatch(
+      /chat_agent_provider_initialization_failed[\s\S]{0,150}?return errorResult\("AI_NOT_CONFIGURED", NOT_CONFIGURED_MESSAGE\);/,
+    );
+  });
+});
+
+describe("chatAgentAction: error classification does not rely solely on instanceof", () => {
+  it("uses the isChatAgentXError type guards (which fall back to a stable category string) instead of bare instanceof checks on custom error classes", () => {
+    expect(codeOnly).not.toMatch(
+      /error instanceof (ChatAgentValidationError|ChatAgentRateLimitedError|ChatAgentOverloadedError|ChatAgentProviderError|ChatAgentRequestFailedError|ChatAgentResponseError)/,
+    );
+    for (const guard of [
+      "isChatAgentValidationError",
+      "isChatAgentRateLimitedError",
+      "isChatAgentOverloadedError",
+      "isChatAgentProviderError",
+      "isChatAgentRequestFailedError",
+      "isChatAgentResponseError",
+    ]) {
+      expect(actionSource).toContain(guard);
+    }
   });
 });
 

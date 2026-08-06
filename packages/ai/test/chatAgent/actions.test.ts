@@ -206,6 +206,86 @@ describe("parseActionResponse", () => {
     ).toThrow(ChatAgentResponseError);
   });
 
+  it("classifies an empty response as the empty_response stage, carrying only a character count", () => {
+    try {
+      parseActionResponse("extract_lead", "   ");
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ChatAgentResponseError);
+      const responseError = error as ChatAgentResponseError;
+      expect(responseError.stage).toBe("empty_response");
+      expect(typeof responseError.responseCharacterCount).toBe("number");
+      expect(responseError.validationIssueCount).toBeNull();
+    }
+  });
+
+  it("classifies text with no locatable JSON region as the json_extraction stage", () => {
+    try {
+      parseActionResponse("extract_lead", "Sure, here is some prose with no braces at all.");
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ChatAgentResponseError).stage).toBe("json_extraction");
+    }
+  });
+
+  it("classifies a located-but-malformed JSON region as the json_parse stage, distinct from json_extraction", () => {
+    try {
+      parseActionResponse("extract_lead", '```json\n{"customerName": ,}\n```');
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ChatAgentResponseError).stage).toBe("json_parse");
+    }
+  });
+
+  it("classifies valid JSON that fails schema validation as schema_validation, carrying an issue count", () => {
+    try {
+      parseActionResponse("summarize", JSON.stringify({ customerRequest: "x" }));
+      expect.unreachable();
+    } catch (error) {
+      const responseError = error as ChatAgentResponseError;
+      expect(responseError.stage).toBe("schema_validation");
+      expect(responseError.validationIssueCount).toBeGreaterThan(0);
+    }
+  });
+
+  it("parses fenced structured JSON for extract_lead the same way as summarize", () => {
+    const raw =
+      "```json\n" +
+      JSON.stringify({
+        customerName: "Not provided",
+        phone: "Not provided",
+        email: "Not provided",
+        company: "Not provided",
+        requestedService: "Website redesign",
+        budget: "Not provided",
+        timeline: "Not provided",
+        location: "Not provided",
+        meetingRequested: "Yes",
+        callbackRequested: "No",
+        quotationRequested: "Unclear",
+        purchaseIntent: "Unclear",
+        importantNotes: "Not provided",
+      }) +
+      "\n```";
+    const result = parseActionResponse("extract_lead", raw);
+    expect(result.displayText).toContain("Requested service: Website redesign");
+  });
+
+  it("parses structured JSON with leading/trailing explanatory text around it", () => {
+    const raw =
+      "Here is the summary you asked for:\n" +
+      JSON.stringify({
+        customerRequest: "Wants pricing",
+        importantDetails: [],
+        currentStatus: "Open",
+        unansweredQuestions: [],
+        recommendedNextStep: "Follow up",
+      }) +
+      "\nLet me know if you need anything else.";
+    const result = parseActionResponse("summarize", raw);
+    expect(result.displayText).toContain("Customer request: Wants pricing");
+  });
+
   it("parses a valid extract_lead JSON response into labeled text, using Not provided for absent fields", () => {
     const raw = JSON.stringify({
       customerName: "Not provided",

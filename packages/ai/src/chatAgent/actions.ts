@@ -157,24 +157,33 @@ export function buildActionInstruction(input: ChatAgentInput): string {
   }
 }
 
+interface JsonCandidateResult {
+  candidate: string;
+  /** False when neither a markdown-fenced block nor a `{...}` region could be located at all -- distinct from finding one that then fails to parse. */
+  foundJsonRegion: boolean;
+}
+
 /**
  * Claude frequently wraps JSON in a markdown fence even when told not to;
  * strips that and falls back to the first {...} substring, mirroring
  * orchestrate.ts's extractJsonCandidate for the customer-reply pipeline
  * (kept as a small separate copy here since that helper isn't exported --
  * both are the same few lines of defensive parsing, not worth a shared
- * cross-cutting export for).
+ * cross-cutting export for). Bounded and deterministic: one outer fence
+ * strip, one direct-braces scan -- never an open-ended search.
  */
-function extractJsonCandidate(rawText: string): string {
+function extractJsonCandidate(rawText: string): JsonCandidateResult {
   const trimmed = rawText.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (fenced?.[1] !== undefined) return fenced[1].trim();
+  if (fenced?.[1] !== undefined) {
+    return { candidate: fenced[1].trim(), foundJsonRegion: true };
+  }
   const firstBrace = trimmed.indexOf("{");
   const lastBrace = trimmed.lastIndexOf("}");
   if (firstBrace !== -1 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1);
+    return { candidate: trimmed.slice(firstBrace, lastBrace + 1), foundJsonRegion: true };
   }
-  return trimmed;
+  return { candidate: trimmed, foundJsonRegion: false };
 }
 
 function formatSummary(summary: ChatAgentSummary): string {
@@ -225,34 +234,66 @@ export interface ParsedActionResult {
 /**
  * Parses the raw Claude response for the given action. Structured actions
  * (summarize/extract_lead) must be valid JSON matching their schema, or this
- * throws ChatAgentResponseError (mapped by the caller to a safe "AI
- * assistant unavailable" message -- the raw invalid text is never returned
- * to the client). Free-text actions are trimmed and used as-is.
+ * throws ChatAgentResponseError with a specific stage (empty_response,
+ * json_extraction, json_parse, schema_validation, result_serialization) --
+ * mapped by the caller to a safe, retryable "incomplete response" message.
+ * The raw response text and any extracted field values are never included
+ * on the error -- only a character count and, for schema failures, an issue
+ * count. Free-text actions are trimmed and used as-is.
  */
 export function parseActionResponse(
   action: ChatAgentInput["action"],
   rawText: string,
 ): ParsedActionResult {
+  const responseCharacterCount = rawText.length;
+
   if (!isStructuredAction(action)) {
     const trimmed = rawText.trim();
-    if (!trimmed) throw new ChatAgentResponseError();
+    if (!trimmed) throw new ChatAgentResponseError("empty_response", { responseCharacterCount });
     return { displayText: trimmed };
+  }
+
+  if (!rawText.trim()) {
+    throw new ChatAgentResponseError("empty_response", { responseCharacterCount });
+  }
+
+  const { candidate, foundJsonRegion } = extractJsonCandidate(rawText);
+  if (!foundJsonRegion) {
+    throw new ChatAgentResponseError("json_extraction", { responseCharacterCount });
   }
 
   let json: unknown;
   try {
-    json = JSON.parse(extractJsonCandidate(rawText));
+    json = JSON.parse(candidate);
   } catch {
-    throw new ChatAgentResponseError();
+    throw new ChatAgentResponseError("json_parse", { responseCharacterCount });
   }
 
   if (action === "summarize") {
     const result = summarySchema.safeParse(json);
-    if (!result.success) throw new ChatAgentResponseError();
-    return { displayText: formatSummary(result.data), structured: result.data };
+    if (!result.success) {
+      throw new ChatAgentResponseError("schema_validation", {
+        responseCharacterCount,
+        validationIssueCount: result.error.issues.length,
+      });
+    }
+    try {
+      return { displayText: formatSummary(result.data), structured: result.data };
+    } catch {
+      throw new ChatAgentResponseError("result_serialization", { responseCharacterCount });
+    }
   }
 
   const result = leadExtractionSchema.safeParse(json);
-  if (!result.success) throw new ChatAgentResponseError();
-  return { displayText: formatLeadExtraction(result.data), structured: result.data };
+  if (!result.success) {
+    throw new ChatAgentResponseError("schema_validation", {
+      responseCharacterCount,
+      validationIssueCount: result.error.issues.length,
+    });
+  }
+  try {
+    return { displayText: formatLeadExtraction(result.data), structured: result.data };
+  } catch {
+    throw new ChatAgentResponseError("result_serialization", { responseCharacterCount });
+  }
 }

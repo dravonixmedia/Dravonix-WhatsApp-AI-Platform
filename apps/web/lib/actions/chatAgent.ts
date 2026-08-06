@@ -3,12 +3,12 @@
 import { loadEnv } from "@dravonix/config";
 import {
   AnthropicChatAgentProvider,
-  ChatAgentOverloadedError,
-  ChatAgentProviderError,
-  ChatAgentRateLimitedError,
-  ChatAgentRequestFailedError,
-  ChatAgentResponseError,
-  ChatAgentValidationError,
+  isChatAgentOverloadedError,
+  isChatAgentProviderError,
+  isChatAgentRateLimitedError,
+  isChatAgentRequestFailedError,
+  isChatAgentResponseError,
+  isChatAgentValidationError,
   runChatAgentAction as runChatAgent,
   type ChatAgentActionType,
   type ChatAgentResult,
@@ -51,7 +51,8 @@ export type ChatAgentErrorCode =
   | "AI_NOT_CONFIGURED"
   | "AI_TEMPORARILY_UNAVAILABLE"
   | "AI_RATE_LIMITED"
-  | "AI_REQUEST_FAILED";
+  | "AI_REQUEST_FAILED"
+  | "AI_RESPONSE_INVALID";
 
 export type ChatAgentActionResponse =
   ({ ok: true } & ChatAgentResult) | { ok: false; code: ChatAgentErrorCode; message: string };
@@ -76,6 +77,11 @@ const MODEL_ACCESS_DENIED_MESSAGE =
   "The AI assistant is not available for this account. Please contact your administrator.";
 const MODEL_UNAVAILABLE_MESSAGE =
   "The AI assistant configuration is unavailable. Please contact your administrator.";
+// The model's response didn't come back as usable structured output
+// (summarize/extract_lead) -- retryable, since a fresh generation often
+// succeeds where the previous one didn't.
+const RESPONSE_INVALID_MESSAGE =
+  "The AI assistant returned an incomplete response. Please try again.";
 
 function errorResult(code: ChatAgentErrorCode, message: string): ChatAgentActionResponse {
   return { ok: false, code, message };
@@ -168,18 +174,36 @@ export async function chatAgentAction(
       return errorResult("AI_NOT_CONFIGURED", NOT_CONFIGURED_MESSAGE);
     }
 
-    const context = await loadChatAgentContext(
-      supabase,
-      session.activeCompanyId,
-      input.conversationId,
-      threadMessages,
-    );
+    let context;
+    try {
+      context = await loadChatAgentContext(
+        supabase,
+        session.activeCompanyId,
+        input.conversationId,
+        threadMessages,
+      );
+    } catch {
+      // A DB failure loading contact/lead/company-settings rows -- the
+      // conversation itself was already found above. Never logs the raw
+      // error (may carry DB error text).
+      log.warn("chat_agent_context_load_failed", { action: input.action });
+      return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);
+    }
 
-    const provider = new AnthropicChatAgentProvider({
-      apiKey: env.ANTHROPIC_API_KEY!,
-      model: env.ANTHROPIC_MODEL,
-      maxTokens: env.ANTHROPIC_MAX_TOKENS,
-    });
+    let provider: AnthropicChatAgentProvider;
+    try {
+      provider = new AnthropicChatAgentProvider({
+        apiKey: env.ANTHROPIC_API_KEY!,
+        model: env.ANTHROPIC_MODEL,
+        maxTokens: env.ANTHROPIC_MAX_TOKENS,
+      });
+    } catch {
+      log.warn("chat_agent_provider_initialization_failed", {
+        action: input.action,
+        model: env.ANTHROPIC_MODEL,
+      });
+      return errorResult("AI_NOT_CONFIGURED", NOT_CONFIGURED_MESSAGE);
+    }
 
     try {
       const result = await runChatAgent(provider, {
@@ -208,7 +232,14 @@ export async function chatAgentAction(
       });
       return { ok: true, ...result };
     } catch (error) {
-      if (error instanceof ChatAgentValidationError) {
+      // Classification below uses the isChatAgentXError guards, not a bare
+      // instanceof: each guard checks instanceof first (the common, correct
+      // case within one bundle) and falls back to the error's own stable
+      // `category` string property, so classification survives even if
+      // Cloudflare/OpenNext bundling ever produces two separate module
+      // instances of packages/ai (which would make a plain `instanceof`
+      // check fail despite the error being the "same" class conceptually).
+      if (isChatAgentValidationError(error)) {
         // Message is already a short, safe, staff-facing string (e.g. "Write
         // a draft first...") -- returned as-is, never wrapped or replaced.
         // Never reaches Anthropic -- rejected before the provider call.
@@ -230,71 +261,83 @@ export async function chatAgentAction(
         httpStatus: error.status,
         providerErrorType: error.providerErrorType,
       });
-      if (error instanceof ChatAgentRateLimitedError) {
-        log.warn("chat_agent_action_provider_error", {
+      if (isChatAgentRateLimitedError(error)) {
+        log.warn("chat_agent_provider_error", {
           ...providerLogFields(error),
           internalCategory: "AI_RATE_LIMITED",
         });
         return errorResult("AI_RATE_LIMITED", RATE_LIMITED_MESSAGE);
       }
-      if (error instanceof ChatAgentOverloadedError) {
-        log.warn("chat_agent_action_provider_error", {
+      if (isChatAgentOverloadedError(error)) {
+        log.warn("chat_agent_provider_error", {
           ...providerLogFields(error),
           internalCategory: "AI_TEMPORARILY_UNAVAILABLE",
         });
         return errorResult("AI_TEMPORARILY_UNAVAILABLE", BUSY_MESSAGE);
       }
-      if (error instanceof ChatAgentProviderError) {
-        log.warn("chat_agent_action_provider_error", {
+      if (isChatAgentProviderError(error)) {
+        log.warn("chat_agent_provider_error", {
           ...providerLogFields(error),
           internalCategory: "AI_TEMPORARILY_UNAVAILABLE",
         });
         return errorResult("AI_TEMPORARILY_UNAVAILABLE", UNAVAILABLE_MESSAGE);
       }
-      if (error instanceof ChatAgentRequestFailedError) {
+      if (isChatAgentRequestFailedError(error)) {
         // 401/403/404 are always a configuration problem (bad key, no model
         // access, misspelled/unavailable model) -- distinct, specific,
         // admin-actionable messages. 400 and anything else permanent falls
         // back to the generic AI_REQUEST_FAILED message.
         if (error.status === 401) {
-          log.warn("chat_agent_action_provider_error", {
+          log.warn("chat_agent_provider_error", {
             ...providerLogFields(error),
             internalCategory: "AI_NOT_CONFIGURED",
           });
           return errorResult("AI_NOT_CONFIGURED", INVALID_API_KEY_MESSAGE);
         }
         if (error.status === 403) {
-          log.warn("chat_agent_action_provider_error", {
+          log.warn("chat_agent_provider_error", {
             ...providerLogFields(error),
             internalCategory: "AI_NOT_CONFIGURED",
           });
           return errorResult("AI_NOT_CONFIGURED", MODEL_ACCESS_DENIED_MESSAGE);
         }
         if (error.status === 404) {
-          log.warn("chat_agent_action_provider_error", {
+          log.warn("chat_agent_provider_error", {
             ...providerLogFields(error),
             internalCategory: "AI_NOT_CONFIGURED",
           });
           return errorResult("AI_NOT_CONFIGURED", MODEL_UNAVAILABLE_MESSAGE);
         }
-        log.warn("chat_agent_action_provider_error", {
+        log.warn("chat_agent_provider_error", {
           ...providerLogFields(error),
           internalCategory: "AI_REQUEST_FAILED",
         });
         return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);
       }
-      if (error instanceof ChatAgentResponseError) {
+      if (isChatAgentResponseError(error)) {
         // The provider call itself succeeded (HTTP 200) -- the model's
-        // response just didn't parse/validate as the required structured
-        // JSON for this action (summarize/extract_lead).
-        log.warn("chat_agent_action_response_parse_failed", {
+        // response just didn't turn into usable structured output for this
+        // action (summarize/extract_lead). `stage` pinpoints exactly where;
+        // the event name matches the stage so failures are directly
+        // greppable without reading a field value. Never logs the response
+        // text, only its length, and never the parsed field values.
+        const stageEventNames: Record<string, string> = {
+          empty_response: "chat_agent_empty_response",
+          json_extraction: "chat_agent_json_extraction_failed",
+          json_parse: "chat_agent_json_parse_failed",
+          schema_validation: "chat_agent_schema_validation_failed",
+          result_serialization: "chat_agent_result_serialization_failed",
+        };
+        log.warn(stageEventNames[error.stage] ?? "chat_agent_response_invalid", {
           action: input.action,
           actorUserId: session.userId,
           model: env.ANTHROPIC_MODEL,
           reachedProvider: true,
-          internalCategory: "AI_REQUEST_FAILED",
+          parseStage: error.stage,
+          responseCharacterCount: error.responseCharacterCount,
+          validationIssueCount: error.validationIssueCount,
         });
-        return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);
+        return errorResult("AI_RESPONSE_INVALID", RESPONSE_INVALID_MESSAGE);
       }
       log.error("chat_agent_action_unexpected_error", { action: input.action });
       return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);

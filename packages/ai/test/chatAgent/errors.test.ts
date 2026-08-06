@@ -5,7 +5,15 @@ import {
   ChatAgentProviderError,
   ChatAgentRateLimitedError,
   ChatAgentRequestFailedError,
+  ChatAgentResponseError,
+  ChatAgentValidationError,
   classifyAnthropicError,
+  isChatAgentOverloadedError,
+  isChatAgentProviderError,
+  isChatAgentRateLimitedError,
+  isChatAgentRequestFailedError,
+  isChatAgentResponseError,
+  isChatAgentValidationError,
 } from "../../src/chatAgent/errors.js";
 
 function apiError(
@@ -73,5 +81,70 @@ describe("classifyAnthropicError", () => {
     const classified = classifyAnthropicError(apiError(529, "super secret internal detail"));
     expect(classified.message).not.toContain("super secret internal detail");
     expect(JSON.stringify(classified)).not.toContain("super secret internal detail");
+  });
+});
+
+describe("error category discriminant (survives module-identity mismatches)", () => {
+  it("every classified error carries a stable, JSON-serializable category string", () => {
+    expect(new ChatAgentValidationError("x").category).toBe("validation");
+    expect(classifyAnthropicError(apiError(429)).category).toBe("rate_limited");
+    expect(classifyAnthropicError(apiError(529)).category).toBe("overloaded");
+    expect(classifyAnthropicError(apiError(500)).category).toBe("provider_error");
+    expect(classifyAnthropicError(apiError(401)).category).toBe("request_failed");
+    expect(new ChatAgentResponseError("empty_response").category).toBe("response_error");
+  });
+
+  it("isChatAgentXError guards recognize the real class via instanceof (the common case)", () => {
+    expect(isChatAgentValidationError(new ChatAgentValidationError("x"))).toBe(true);
+    expect(isChatAgentRateLimitedError(classifyAnthropicError(apiError(429)))).toBe(true);
+    expect(isChatAgentOverloadedError(classifyAnthropicError(apiError(529)))).toBe(true);
+    expect(isChatAgentProviderError(classifyAnthropicError(apiError(500)))).toBe(true);
+    expect(isChatAgentRequestFailedError(classifyAnthropicError(apiError(401)))).toBe(true);
+    expect(isChatAgentResponseError(new ChatAgentResponseError("json_parse"))).toBe(true);
+  });
+
+  it("isChatAgentXError guards still classify a duck-typed object with a matching category even when instanceof fails", () => {
+    // Simulates Cloudflare/OpenNext bundling producing two separate module
+    // instances of this package -- a thrown error from one copy would fail
+    // `instanceof` against the class imported from the other copy, even
+    // though it is conceptually "the same" error. A plain object with the
+    // right category string is the worst case of that: it has no prototype
+    // link to the real class at all, yet the guard must still work.
+    const duckTypedRateLimited = { name: "ChatAgentRateLimitedError", category: "rate_limited" };
+    expect(duckTypedRateLimited).not.toBeInstanceOf(ChatAgentRateLimitedError);
+    expect(isChatAgentRateLimitedError(duckTypedRateLimited)).toBe(true);
+
+    const duckTypedResponseError = { name: "ChatAgentResponseError", category: "response_error" };
+    expect(isChatAgentResponseError(duckTypedResponseError)).toBe(true);
+
+    const duckTypedValidation = { category: "validation" };
+    expect(isChatAgentValidationError(duckTypedValidation)).toBe(true);
+  });
+
+  it("isChatAgentXError guards reject an unrelated error/value regardless of shape", () => {
+    expect(isChatAgentRateLimitedError(new Error("plain error"))).toBe(false);
+    expect(isChatAgentRateLimitedError({ category: "overloaded" })).toBe(false);
+    expect(isChatAgentRateLimitedError(null)).toBe(false);
+    expect(isChatAgentRateLimitedError(undefined)).toBe(false);
+    expect(isChatAgentRateLimitedError("a string")).toBe(false);
+  });
+});
+
+describe("ChatAgentResponseError: stage and safe counts", () => {
+  it("carries the failure stage and a character count, never response text", () => {
+    const error = new ChatAgentResponseError("json_parse", { responseCharacterCount: 42 });
+    expect(error.stage).toBe("json_parse");
+    expect(error.responseCharacterCount).toBe(42);
+    expect(error.validationIssueCount).toBeNull();
+    expect(JSON.stringify(error)).not.toMatch(/rawText|responseText/);
+  });
+
+  it("carries a validation issue count for schema_validation, never the invalid field values", () => {
+    const error = new ChatAgentResponseError("schema_validation", {
+      responseCharacterCount: 120,
+      validationIssueCount: 3,
+    });
+    expect(error.stage).toBe("schema_validation");
+    expect(error.validationIssueCount).toBe(3);
   });
 });

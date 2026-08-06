@@ -1,11 +1,44 @@
 import Anthropic from "@anthropic-ai/sdk";
 
+/**
+ * Stable, serializable discriminant carried on every classified Chat Agent
+ * error, in addition to its class/instanceof identity. Cloudflare/OpenNext
+ * bundling can in principle produce two separate module instances of this
+ * package (so a thrown error and the `instanceof` check at the catch site
+ * come from different copies of the same class) -- the `category` string
+ * survives that boundary since it's a plain data property, not identity.
+ * Every `isChatAgentXError` guard below checks `instanceof` first (the
+ * common, correct case) and falls back to this property, so classification
+ * is never *solely* dependent on `instanceof`.
+ */
+export type ChatAgentErrorCategory =
+  | "validation"
+  | "rate_limited"
+  | "overloaded"
+  | "provider_error"
+  | "request_failed"
+  | "response_error";
+
+function hasCategory(error: unknown, category: ChatAgentErrorCategory): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "category" in error &&
+    (error as { category?: unknown }).category === category
+  );
+}
+
 /** A required field for the requested action was missing (e.g. no draft text for rewrite_draft). Safe to show verbatim to staff. */
 export class ChatAgentValidationError extends Error {
+  readonly category = "validation" as const;
   constructor(message: string) {
     super(message);
     this.name = "ChatAgentValidationError";
   }
+}
+
+export function isChatAgentValidationError(error: unknown): error is ChatAgentValidationError {
+  return error instanceof ChatAgentValidationError || hasCategory(error, "validation");
 }
 
 /**
@@ -38,6 +71,7 @@ function extractProviderErrorInfo(error: unknown): ChatAgentProviderErrorInfo {
 
 /** Anthropic returned HTTP 429 (rate limited). The caller shows a "too many requests" message -- no retry/backoff is implemented here (reserved for claude/anthropic-overload-retry). */
 export class ChatAgentRateLimitedError extends Error {
+  readonly category = "rate_limited" as const;
   readonly status: number | null;
   readonly providerErrorType: string | null;
   constructor(info: ChatAgentProviderErrorInfo) {
@@ -48,8 +82,13 @@ export class ChatAgentRateLimitedError extends Error {
   }
 }
 
+export function isChatAgentRateLimitedError(error: unknown): error is ChatAgentRateLimitedError {
+  return error instanceof ChatAgentRateLimitedError || hasCategory(error, "rate_limited");
+}
+
 /** Anthropic returned HTTP 529 (overloaded). The caller shows a "temporarily busy" message -- no retry/backoff is implemented here (reserved for claude/anthropic-overload-retry). */
 export class ChatAgentOverloadedError extends Error {
+  readonly category = "overloaded" as const;
   readonly status: number | null;
   readonly providerErrorType: string | null;
   constructor(info: ChatAgentProviderErrorInfo) {
@@ -60,8 +99,13 @@ export class ChatAgentOverloadedError extends Error {
   }
 }
 
+export function isChatAgentOverloadedError(error: unknown): error is ChatAgentOverloadedError {
+  return error instanceof ChatAgentOverloadedError || hasCategory(error, "overloaded");
+}
+
 /** A network failure or a transient (non-529) 5xx from Anthropic. The caller shows a "temporarily unavailable" message. Never carries the raw provider message -- see classifyAnthropicError. */
 export class ChatAgentProviderError extends Error {
+  readonly category = "provider_error" as const;
   readonly status: number | null;
   readonly providerErrorType: string | null;
   constructor(info: ChatAgentProviderErrorInfo) {
@@ -70,6 +114,10 @@ export class ChatAgentProviderError extends Error {
     this.status = info.status;
     this.providerErrorType = info.providerErrorType;
   }
+}
+
+export function isChatAgentProviderError(error: unknown): error is ChatAgentProviderError {
+  return error instanceof ChatAgentProviderError || hasCategory(error, "provider_error");
 }
 
 /**
@@ -82,6 +130,7 @@ export class ChatAgentProviderError extends Error {
  * configuration problems rather than something the requesting user caused.
  */
 export class ChatAgentRequestFailedError extends Error {
+  readonly category = "request_failed" as const;
   readonly status: number | null;
   readonly providerErrorType: string | null;
   constructor(info: ChatAgentProviderErrorInfo) {
@@ -92,12 +141,47 @@ export class ChatAgentRequestFailedError extends Error {
   }
 }
 
-/** The model's response could not be parsed/validated for a structured action (summarize/extract_lead). The provider call itself succeeded (HTTP 200) -- this is a response-shape failure, not a request failure. Treated the same as a permanent request failure for the caller's safe message. */
+export function isChatAgentRequestFailedError(
+  error: unknown,
+): error is ChatAgentRequestFailedError {
+  return error instanceof ChatAgentRequestFailedError || hasCategory(error, "request_failed");
+}
+
+/** Which stage of structured-response handling failed -- see packages/ai/src/chatAgent/actions.ts's parseActionResponse. */
+export type ChatAgentResponseFailureStage =
+  | "empty_response"
+  | "json_extraction"
+  | "json_parse"
+  | "schema_validation"
+  | "result_serialization";
+
+/**
+ * The model's response could not be turned into the action's required
+ * output. The provider call itself succeeded (HTTP 200) -- this is a
+ * response-shape failure, not a request failure. `stage` pinpoints exactly
+ * where it happened (never which text caused it); `responseCharacterCount`
+ * and `validationIssueCount` are plain counts, safe to log -- never the
+ * response text or the parsed field values themselves.
+ */
 export class ChatAgentResponseError extends Error {
-  constructor() {
+  readonly category = "response_error" as const;
+  readonly stage: ChatAgentResponseFailureStage;
+  readonly responseCharacterCount: number | null;
+  readonly validationIssueCount: number | null;
+  constructor(
+    stage: ChatAgentResponseFailureStage,
+    options: { responseCharacterCount?: number; validationIssueCount?: number } = {},
+  ) {
     super("chat_agent_response_invalid");
     this.name = "ChatAgentResponseError";
+    this.stage = stage;
+    this.responseCharacterCount = options.responseCharacterCount ?? null;
+    this.validationIssueCount = options.validationIssueCount ?? null;
   }
+}
+
+export function isChatAgentResponseError(error: unknown): error is ChatAgentResponseError {
+  return error instanceof ChatAgentResponseError || hasCategory(error, "response_error");
 }
 
 /**
