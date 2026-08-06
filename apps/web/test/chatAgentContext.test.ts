@@ -45,7 +45,9 @@ function fakeSupabaseClient(chainsByTable: Record<string, FakeChain>): SupabaseC
 const COMPANY_ID = "company-1";
 const CONVERSATION_ID = "conv-1";
 
-function threadMessage(overrides: Partial<ConversationThreadMessage> = {}): ConversationThreadMessage {
+function threadMessage(
+  overrides: Partial<ConversationThreadMessage> = {},
+): ConversationThreadMessage {
   return {
     id: "msg-1",
     direction: "inbound",
@@ -100,7 +102,10 @@ describe("loadChatAgentContext: tenant scoping", () => {
 
     await loadChatAgentContext(client, COMPANY_ID, CONVERSATION_ID, []);
 
-    expect(chains.conversations.calls).toContainEqual({ method: "eq", args: ["id", CONVERSATION_ID] });
+    expect(chains.conversations.calls).toContainEqual({
+      method: "eq",
+      args: ["id", CONVERSATION_ID],
+    });
     expect(chains.leads.calls).toContainEqual({
       method: "eq",
       args: ["conversation_id", CONVERSATION_ID],
@@ -110,7 +115,12 @@ describe("loadChatAgentContext: tenant scoping", () => {
   it("only ever reads (select) -- never inserts, updates, or deletes anything", async () => {
     const chains = defaultChains();
     const client = fakeSupabaseClient(chains) as unknown as { from: ReturnType<typeof vi.fn> };
-    await loadChatAgentContext(client as unknown as SupabaseClient, COMPANY_ID, CONVERSATION_ID, []);
+    await loadChatAgentContext(
+      client as unknown as SupabaseClient,
+      COMPANY_ID,
+      CONVERSATION_ID,
+      [],
+    );
 
     for (const chain of Object.values(chains)) {
       const methods = chain.calls.map((c) => c.method);

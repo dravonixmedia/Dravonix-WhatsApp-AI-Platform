@@ -37,7 +37,9 @@ describe("chatAgentAction: authentication and tenant resolution", () => {
     expect(sessionCallIndex).toBeGreaterThan(-1);
     expect(firstDbCallIndex).toBeGreaterThan(-1);
     expect(sessionCallIndex).toBeLessThan(firstDbCallIndex);
-    expect(actionSource).toMatch(/if\s*\(!session\)\s*throw new Error\(PERMISSION_DENIED_MESSAGE\);/);
+    expect(actionSource).toMatch(
+      /if\s*\(!session\)\s*throw new Error\(PERMISSION_DENIED_MESSAGE\);/,
+    );
   });
 
   it("never accepts a companyId/tenantId parameter on the action's own input type", () => {
@@ -136,7 +138,9 @@ describe("chatAgentAction: error sanitization", () => {
     expect(actionSource).toMatch(
       /BUSY_MESSAGE\s*=\s*"The AI assistant is temporarily busy\. Please try again shortly\.";/,
     );
-    expect(actionSource).toMatch(/ChatAgentOverloadedError[\s\S]{0,160}?throw new Error\(BUSY_MESSAGE\)/);
+    expect(actionSource).toMatch(
+      /ChatAgentOverloadedError[\s\S]{0,160}?throw new Error\(BUSY_MESSAGE\)/,
+    );
   });
 
   it("never logs SUPABASE_SERVICE_ROLE_KEY, an Anthropic key, or a full system prompt/transcript", () => {

@@ -56,9 +56,7 @@ describe("ChatAgentPanel: never bypasses the human-review composer", () => {
   });
 
   it('"Use this reply" only calls onUseReply -- it never submits a form or calls chatAgentAction again', () => {
-    const useReplyBlockMatch = panelSource.match(
-      /Use this reply[\s\S]{0,400}?onClick=\{[^}]*\}/,
-    );
+    const useReplyBlockMatch = panelSource.match(/Use this reply[\s\S]{0,400}?onClick=\{[^}]*\}/);
     // Simpler and more robust: find the button whose onClick calls onUseReply.
     expect(panelSource).toMatch(/onClick=\{\(\) => onUseReply\(view\.result\.displayText\)\}/);
     void useReplyBlockMatch;
@@ -85,7 +83,9 @@ describe("ChatAgentPanel: no polling, no new Realtime subscription", () => {
   it("never uses setInterval/setTimeout polling or opens a Realtime channel", () => {
     for (const source of [panelSource, composerWrapperSource]) {
       expect(source).not.toMatch(/setInterval/);
-      expect(source).not.toMatch(/useTenantRealtimeChannel|RealtimeRefreshBoundary|supabase\.channel/);
+      expect(source).not.toMatch(
+        /useTenantRealtimeChannel|RealtimeRefreshBoundary|supabase\.channel/,
+      );
     }
   });
 });
