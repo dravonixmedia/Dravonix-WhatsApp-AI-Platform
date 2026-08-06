@@ -1,4 +1,4 @@
-import type { ChatAgentActionType } from "@dravonix/ai";
+import type { ChatAgentActionType, ChatAgentSupportedLanguage } from "@dravonix/ai";
 
 /**
  * Actions whose successful output is a customer-ready draft -- eligible as
@@ -54,4 +54,25 @@ export function resolveTranslateSourceText(
   if (source === "composer") return composerText;
   if (source === "draft") return aiDraftText ?? "";
   return "";
+}
+
+/**
+ * Picks a sensible default target language, always different from the
+ * detected source, so opening Translate never lands on a same-language
+ * combination the staff member would just have to fix themselves:
+ *
+ *  - English source            -> Malayalam
+ *  - Malayalam/Hindi/Arabic    -> English
+ *  - unknown/no signal (null)  -> English
+ *
+ * This is only ever used to pre-select the target dropdown -- the user can
+ * always change it manually afterward, and doing so is never overridden
+ * again unless the resolved source text itself changes (see
+ * ChatAgentPanel's own tracking of "which source text this default was
+ * computed for"). Never calls the provider by itself.
+ */
+export function resolveDefaultTargetLanguage(
+  detectedSourceLanguage: ChatAgentSupportedLanguage | null,
+): ChatAgentSupportedLanguage {
+  return detectedSourceLanguage === "en" ? "ml" : "en";
 }

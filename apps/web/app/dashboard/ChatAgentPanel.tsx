@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CHAT_AGENT_SUPPORTED_LANGUAGES,
   detectLikelySourceLanguage,
@@ -12,6 +12,7 @@ import {
 import { chatAgentAction, type ChatAgentActionInput } from "../../lib/actions/chatAgent.js";
 import {
   isDraftAction,
+  resolveDefaultTargetLanguage,
   resolveTranslateSource,
   resolveTranslateSourceText,
   type TranslateSource,
@@ -53,6 +54,13 @@ type SelectableAction = "rewrite_draft" | "translate";
  * input before they can run, so selecting one reveals only that action's
  * own controls (never all controls at once) instead of running
  * immediately.
+ *
+ * Translate's target-language list is deliberately NOT filtered by the
+ * company's automatic-bot enabled_languages setting -- this panel is an
+ * internal staff tool, not the customer-facing WhatsApp bot, so it always
+ * offers all four platform-supported languages. Per-company/subscription
+ * language limits for this internal tool are a separate, not-yet-built
+ * concern (see claude/subscriptions-team-management).
  */
 export function ChatAgentPanel({
   conversationId,
@@ -60,14 +68,12 @@ export function ChatAgentPanel({
   onClose,
   currentDraft,
   onUseReply,
-  enabledLanguages,
 }: {
   conversationId: string;
   open: boolean;
   onClose: () => void;
   currentDraft: string;
   onUseReply: (text: string) => void;
-  enabledLanguages?: ChatAgentSupportedLanguage[];
 }) {
   const [view, setView] = useState<PanelView>({ status: "idle" });
   const [lastRequest, setLastRequest] = useState<PendingRequest | null>(null);
@@ -81,12 +87,14 @@ export function ChatAgentPanel({
     null,
   );
   const [justInsertedTranslation, setJustInsertedTranslation] = useState(false);
+  // Tracks which resolved source-text snapshot the current targetLanguage
+  // was last auto-selected (or manually confirmed) for -- see the effect
+  // below. Starts as a sentinel that can never equal a real source string,
+  // so the very first time Translate has a source, the effect always runs.
+  const [targetLanguageResolvedFor, setTargetLanguageResolvedFor] = useState<string | null>(null);
 
   const isPending = view.status === "loading";
   const hasDraft = currentDraft.trim().length > 0;
-
-  const availableLanguages =
-    enabledLanguages && enabledLanguages.length > 0 ? enabledLanguages : ALL_LANGUAGES;
 
   const composerHasText = currentDraft.trim().length > 0;
   const aiDraftHasText = Boolean(latestAiDraft && latestAiDraft.trim().length > 0);
@@ -107,11 +115,30 @@ export function ChatAgentPanel({
   const isSameLanguage =
     detectedSourceLanguage !== null && detectedSourceLanguage === targetLanguage;
 
-  const translateGuidance = !hasTranslateSource
-    ? "Write a reply or generate a draft first."
-    : isSameLanguage
-      ? `This text is already in ${CHAT_AGENT_SUPPORTED_LANGUAGES[detectedSourceLanguage!]}. Select another language.`
-      : null;
+  // Auto-selects a target language different from the detected source
+  // whenever Translate is opened, or whenever the resolved source text
+  // changes (a new draft became available, the source was switched, or the
+  // composer/draft text itself changed) -- but never overwrites a target
+  // the user already manually confirmed for THIS exact source text. Purely
+  // a UI default: never calls chatAgentAction/Anthropic by itself.
+  useEffect(() => {
+    if (selectedAction !== "translate") return;
+    if (!hasTranslateSource) return;
+    if (targetLanguageResolvedFor === translateSourceText) return;
+    setTargetLanguage(resolveDefaultTargetLanguage(detectedSourceLanguage));
+    setTargetLanguageResolvedFor(translateSourceText);
+  }, [
+    selectedAction,
+    hasTranslateSource,
+    translateSourceText,
+    detectedSourceLanguage,
+    targetLanguageResolvedFor,
+  ]);
+
+  const noSourceGuidance = !hasTranslateSource ? "Write a reply or generate a draft first." : null;
+  const sameLanguageGuidance = isSameLanguage
+    ? `This text already appears to be in ${CHAT_AGENT_SUPPORTED_LANGUAGES[detectedSourceLanguage!]}. Select another language.`
+    : null;
 
   async function run(request: PendingRequest) {
     if (isPending) return; // duplicate-click guard: never issue a second call while one is in flight
@@ -267,16 +294,21 @@ export function ChatAgentPanel({
         {selectedAction === "translate" ? (
           <div className="dvx-assistant-translate-panel">
             {composerHasText && aiDraftHasText ? (
-              <select
-                className="dvx-input"
-                aria-label="Translate source"
-                value={translateSource ?? "composer"}
-                onChange={(e) => setTranslateSourceOverride(e.target.value as TranslateSource)}
-                disabled={isPending}
-              >
-                <option value="composer">Reply box</option>
-                <option value="draft">Latest AI draft</option>
-              </select>
+              <div className="dvx-assistant-action-row">
+                <span className="dvx-muted" style={{ fontSize: "0.72rem" }}>
+                  Source:
+                </span>
+                <select
+                  className="dvx-input"
+                  aria-label="Translate source"
+                  value={translateSource ?? "composer"}
+                  onChange={(e) => setTranslateSourceOverride(e.target.value as TranslateSource)}
+                  disabled={isPending}
+                >
+                  <option value="composer">Reply box</option>
+                  <option value="draft">Latest AI draft</option>
+                </select>
+              </div>
             ) : hasTranslateSource ? (
               <p className="dvx-muted" style={{ fontSize: "0.72rem", margin: 0 }}>
                 Source: {translateSource === "composer" ? "Reply box" : "Latest AI draft"}
@@ -287,19 +319,31 @@ export function ChatAgentPanel({
               className="dvx-input"
               aria-label="Translate into"
               value={targetLanguage}
-              onChange={(e) => setTargetLanguage(e.target.value as ChatAgentSupportedLanguage)}
+              onChange={(e) => {
+                const nextLanguage = e.target.value as ChatAgentSupportedLanguage;
+                setTargetLanguage(nextLanguage);
+                // A manual pick counts as "resolved" for this source text --
+                // the auto-select effect must not immediately overwrite it.
+                setTargetLanguageResolvedFor(translateSourceText);
+              }}
               disabled={isPending}
             >
-              {availableLanguages.map((lang) => (
+              {ALL_LANGUAGES.map((lang) => (
                 <option key={lang} value={lang}>
                   {CHAT_AGENT_SUPPORTED_LANGUAGES[lang]}
                 </option>
               ))}
             </select>
 
-            {translateGuidance ? (
-              <p className="dvx-muted" style={{ fontSize: "0.72rem", margin: 0, color: "#dc2626" }}>
-                {translateGuidance}
+            {noSourceGuidance ? (
+              <p className="dvx-muted" style={{ fontSize: "0.72rem", margin: 0 }}>
+                {noSourceGuidance}
+              </p>
+            ) : null}
+
+            {sameLanguageGuidance ? (
+              <p className="dvx-muted" style={{ fontSize: "0.72rem", margin: 0 }}>
+                {sameLanguageGuidance}
               </p>
             ) : null}
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isDraftAction,
+  resolveDefaultTargetLanguage,
   resolveTranslateSource,
   resolveTranslateSourceText,
 } from "../lib/chatAgentTranslate.js";
@@ -53,6 +54,28 @@ describe("resolveTranslateSourceText", () => {
 
   it("returns an empty string when source is draft but there is no draft text", () => {
     expect(resolveTranslateSourceText("draft", "Hello there", null)).toBe("");
+  });
+});
+
+describe("resolveDefaultTargetLanguage: always picks a target different from the detected source", () => {
+  it("defaults an English source to Malayalam", () => {
+    expect(resolveDefaultTargetLanguage("en")).toBe("ml");
+  });
+
+  it("defaults a Malayalam source to English", () => {
+    expect(resolveDefaultTargetLanguage("ml")).toBe("en");
+  });
+
+  it("defaults a Hindi source to English", () => {
+    expect(resolveDefaultTargetLanguage("hi")).toBe("en");
+  });
+
+  it("defaults an Arabic source to English", () => {
+    expect(resolveDefaultTargetLanguage("ar")).toBe("en");
+  });
+
+  it("defaults an unknown/undetectable (mixed-language) source to English", () => {
+    expect(resolveDefaultTargetLanguage(null)).toBe("en");
   });
 });
 

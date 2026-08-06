@@ -32,6 +32,10 @@ const handoverPageSource = readFileSync(
   join(webRoot, "app/dashboard/handover/[conversationId]/page.tsx"),
   "utf8",
 );
+const chatAgentContextSource = readFileSync(
+  join(webRoot, "lib/repositories/chatAgentContext.ts"),
+  "utf8",
+);
 
 function withoutComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -150,7 +154,7 @@ describe("ChatAgentPanel: action-specific controls only show when that action is
 
   it('gates the translate source/language controls behind selectedAction === "translate"', () => {
     expect(panelSource).toMatch(
-      /\{selectedAction === "translate" \? \([\s\S]{0,900}?aria-label="Translate into"/,
+      /\{selectedAction === "translate" \? \([\s\S]{0,1500}?aria-label="Translate into"/,
     );
   });
 
@@ -189,7 +193,7 @@ describe("ChatAgentPanel: Translate source selection (the confirmed bug fix)", (
   it("shows 'Write a reply or generate a draft first.' when neither source has text, and never calls the provider in that case", () => {
     expect(panelSource).toContain('"Write a reply or generate a draft first."');
     expect(panelSource).toMatch(
-      /const translateGuidance = !hasTranslateSource\s*\n\s*\? "Write a reply or generate a draft first\."/,
+      /const noSourceGuidance = !hasTranslateSource \? "Write a reply or generate a draft first\." : null;/,
     );
     expect(panelSource).toMatch(
       /disabled=\{isPending \|\| !hasTranslateSource \|\| isSameLanguage\}/,
@@ -210,45 +214,95 @@ describe("ChatAgentPanel: same-language guard", () => {
       /const isSameLanguage =\s*\n\s*detectedSourceLanguage !== null && detectedSourceLanguage === targetLanguage;/,
     );
     expect(panelSource).toMatch(
-      /This text is already in \$\{CHAT_AGENT_SUPPORTED_LANGUAGES\[detectedSourceLanguage!\]\}\. Select another language\./,
+      /This text already appears to be in \$\{CHAT_AGENT_SUPPORTED_LANGUAGES\[detectedSourceLanguage!\]\}\. Select another language\./,
     );
   });
 
   it("the same-language message is a client-side guard, never a server round trip", () => {
     // The guidance text must be computed before any run()/chatAgentAction call -- it's a plain
     // derived value, not something read out of a server response.
-    const guardIndex = panelSource.indexOf("const translateGuidance");
+    const guardIndex = panelSource.indexOf("const sameLanguageGuidance");
     const runCallIndex = panelSource.indexOf('run({ action: "translate"');
     expect(guardIndex).toBeGreaterThan(-1);
     expect(guardIndex).toBeLessThan(runCallIndex);
   });
+
+  it("never uses the bright-red error styling for the same-language hint -- it's guidance, not a genuine failure", () => {
+    const sameLanguageBlockMatch = panelSource.match(
+      /\{sameLanguageGuidance \? \(([\s\S]*?)\) : null\}/,
+    );
+    expect(sameLanguageBlockMatch).not.toBeNull();
+    expect(sameLanguageBlockMatch?.[1] ?? "").not.toMatch(/#dc2626|dvx-assistant-status--error/);
+  });
+
+  it("disables the Translate submit button and never calls the provider while source and target languages match", () => {
+    expect(panelSource).toMatch(
+      /disabled=\{isPending \|\| !hasTranslateSource \|\| isSameLanguage\}/,
+    );
+  });
 });
 
-describe("ChatAgentPanel: enabled-language filtering", () => {
-  it("accepts an enabledLanguages prop and falls back to all four supported languages when absent", () => {
-    expect(panelSource).toMatch(/enabledLanguages\?:\s*ChatAgentSupportedLanguage\[\]/);
+describe("ChatAgentPanel: Translate always offers all four platform languages (never restricted to company enabled_languages)", () => {
+  it("does not accept or read any enabledLanguages prop -- Translate is an internal staff tool, not the customer bot", () => {
+    expect(panelSource).not.toContain("enabledLanguages");
+  });
+
+  it("renders the target-language options from the full ALL_LANGUAGES catalogue", () => {
+    expect(panelSource).toMatch(/\{ALL_LANGUAGES\.map\(\(lang\) => \(/);
     expect(panelSource).toMatch(
-      /const availableLanguages =\s*\n\s*enabledLanguages && enabledLanguages\.length > 0 \? enabledLanguages : ALL_LANGUAGES;/,
+      /const ALL_LANGUAGES = Object\.keys\(CHAT_AGENT_SUPPORTED_LANGUAGES\) as ChatAgentSupportedLanguage\[\];/,
     );
   });
 
-  it("renders the target-language options from availableLanguages, not a hardcoded list", () => {
-    expect(panelSource).toMatch(/\{availableLanguages\.map\(\(lang\) => \(/);
+  it("ConversationComposerWithAssistant no longer forwards an enabledLanguages prop", () => {
+    expect(composerWrapperSource).not.toContain("enabledLanguages");
   });
 
-  it("ConversationComposerWithAssistant forwards enabledLanguages through to ChatAgentPanel", () => {
-    expect(composerWrapperSource).toMatch(/enabledLanguages\?:\s*ChatAgentSupportedLanguage\[\]/);
-    expect(composerWrapperSource).toContain("enabledLanguages={enabledLanguages}");
-  });
-
-  it("both conversation-detail pages load the company's enabled languages and pass them down", () => {
+  it("neither conversation-detail page loads or passes company enabled_languages into the Chat Agent UI", () => {
     for (const source of [conversationsPageSource, handoverPageSource]) {
-      expect(source).toContain("loadCompanyEnabledLanguages");
-      expect(source).toMatch(
-        /const enabledLanguages = await loadCompanyEnabledLanguages\(supabase, session\.activeCompanyId\);/,
-      );
-      expect(source).toContain("enabledLanguages={enabledLanguages}");
+      expect(source).not.toContain("loadCompanyEnabledLanguages");
+      expect(source).not.toContain("enabledLanguages");
     }
+  });
+});
+
+describe("Automatic WhatsApp bot language behavior is unchanged by the Translate UX fix", () => {
+  it("chatAgentContext.ts still reads company_settings.enabled_languages and feeds it into the AI context (the automatic-bot pipeline, untouched)", () => {
+    expect(chatAgentContextSource).toContain("enabled_languages");
+    expect(chatAgentContextSource).toMatch(
+      /enabledLanguages: settings\?\.enabled_languages \?\? \["en"\]/,
+    );
+  });
+});
+
+describe("ChatAgentPanel: automatic target-language selection", () => {
+  it("uses the shared resolveDefaultTargetLanguage helper, not an inline/duplicated rule", () => {
+    expect(panelSource).toContain("resolveDefaultTargetLanguage");
+    expect(panelSource).toMatch(
+      /setTargetLanguage\(resolveDefaultTargetLanguage\(detectedSourceLanguage\)\);/,
+    );
+  });
+
+  it("auto-selection is a plain effect that only sets local state -- it never calls chatAgentAction/run()", () => {
+    const effectMatch = panelSource.match(/useEffect\(\(\) => \{([\s\S]*?)\}, \[/);
+    expect(effectMatch).not.toBeNull();
+    const effectBody = effectMatch?.[1] ?? "";
+    expect(effectBody).not.toMatch(/run\(|chatAgentAction/);
+  });
+
+  it("does not re-run (and so does not overwrite a manual choice) once a target has been resolved for the current source text", () => {
+    expect(panelSource).toMatch(/if \(targetLanguageResolvedFor === translateSourceText\) return;/);
+  });
+
+  it("marks a manual target-language change as resolved for the current source text, so the effect does not immediately override it", () => {
+    expect(panelSource).toMatch(
+      /setTargetLanguage\(nextLanguage\);[\s\S]{0,200}?setTargetLanguageResolvedFor\(translateSourceText\);/,
+    );
+  });
+
+  it("only auto-selects while Translate is the selected action, and only once a source actually has text", () => {
+    expect(panelSource).toMatch(/if \(selectedAction !== "translate"\) return;/);
+    expect(panelSource).toMatch(/if \(!hasTranslateSource\) return;/);
   });
 });
 

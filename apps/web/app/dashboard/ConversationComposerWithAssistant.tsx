@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import type { ChatAgentSupportedLanguage } from "@dravonix/ai";
 import { ReplyComposer } from "./handover/[conversationId]/ReplyComposer.js";
 import { ChatAgentPanel } from "./ChatAgentPanel.js";
 import { SparkleIcon } from "./Icons.js";
@@ -15,13 +14,7 @@ import { SparkleIcon } from "./Icons.js";
  * sending still requires the existing manual Send button inside
  * ReplyComposer.
  */
-export function ConversationComposerWithAssistant({
-  conversationId,
-  enabledLanguages,
-}: {
-  conversationId: string;
-  enabledLanguages?: ChatAgentSupportedLanguage[];
-}) {
+export function ConversationComposerWithAssistant({ conversationId }: { conversationId: string }) {
   const [draft, setDraft] = useState("");
   const [assistantOpen, setAssistantOpen] = useState(false);
 
@@ -60,7 +53,6 @@ export function ConversationComposerWithAssistant({
             onClose={() => setAssistantOpen(false)}
             currentDraft={draft}
             onUseReply={setDraft}
-            enabledLanguages={enabledLanguages}
           />
         </>
       ) : null}
