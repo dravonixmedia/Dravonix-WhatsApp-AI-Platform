@@ -171,10 +171,10 @@ describe("chatAgentAction: error sanitization and safe error codes", () => {
 
   it("maps 429 (rate limited) and 529 (overloaded) to distinct error codes", () => {
     expect(actionSource).toMatch(
-      /ChatAgentRateLimitedError[\s\S]{0,160}?return errorResult\("AI_RATE_LIMITED", RATE_LIMITED_MESSAGE\)/,
+      /ChatAgentRateLimitedError[\s\S]{0,400}?return errorResult\("AI_RATE_LIMITED", RATE_LIMITED_MESSAGE\)/,
     );
     expect(actionSource).toMatch(
-      /ChatAgentOverloadedError[\s\S]{0,160}?return errorResult\("AI_TEMPORARILY_UNAVAILABLE", BUSY_MESSAGE\)/,
+      /ChatAgentOverloadedError[\s\S]{0,400}?return errorResult\("AI_TEMPORARILY_UNAVAILABLE", BUSY_MESSAGE\)/,
     );
   });
 
@@ -196,6 +196,67 @@ describe("chatAgentAction: error sanitization and safe error codes", () => {
 
   it("never reads the raw error object when logging an unexpected failure (no error.message/stack forwarded)", () => {
     expect(codeOnly).not.toMatch(/log\.\w+\([^)]*error\.(message|stack)/);
+  });
+});
+
+describe("chatAgentAction: granular provider status mapping (401/403/404 vs 400/other)", () => {
+  it("maps 401 (invalid API key) to AI_NOT_CONFIGURED with a distinct, admin-facing message", () => {
+    expect(actionSource).toMatch(
+      /INVALID_API_KEY_MESSAGE\s*=\s*\n?\s*"The AI assistant is not configured correctly\. Please contact your administrator\.";/,
+    );
+    expect(actionSource).toMatch(
+      /error\.status === 401\)\s*\{[\s\S]{0,200}?return errorResult\("AI_NOT_CONFIGURED", INVALID_API_KEY_MESSAGE\);/,
+    );
+  });
+
+  it("maps 403 (model/account access denied) to AI_NOT_CONFIGURED with a distinct, admin-facing message", () => {
+    expect(actionSource).toMatch(
+      /MODEL_ACCESS_DENIED_MESSAGE\s*=\s*\n?\s*"The AI assistant is not available for this account\. Please contact your administrator\.";/,
+    );
+    expect(actionSource).toMatch(
+      /error\.status === 403\)\s*\{[\s\S]{0,200}?return errorResult\("AI_NOT_CONFIGURED", MODEL_ACCESS_DENIED_MESSAGE\);/,
+    );
+  });
+
+  it("maps 404 (model not found) to AI_NOT_CONFIGURED with a distinct, admin-facing message", () => {
+    expect(actionSource).toMatch(
+      /MODEL_UNAVAILABLE_MESSAGE\s*=\s*\n?\s*"The AI assistant configuration is unavailable\. Please contact your administrator\.";/,
+    );
+    expect(actionSource).toMatch(
+      /error\.status === 404\)\s*\{[\s\S]{0,200}?return errorResult\("AI_NOT_CONFIGURED", MODEL_UNAVAILABLE_MESSAGE\);/,
+    );
+  });
+
+  it("falls back to the generic AI_REQUEST_FAILED message for 400 and any other permanent status", () => {
+    // The ChatAgentRequestFailedError branch must end with a fallback
+    // return that is reached whenever status is none of 401/403/404.
+    const branchMatch = actionSource.match(
+      /if \(error instanceof ChatAgentRequestFailedError\) \{([\s\S]*?)\n\s{6}\}\n\s{6}if \(error instanceof ChatAgentResponseError\)/,
+    );
+    expect(branchMatch).not.toBeNull();
+    expect(branchMatch?.[1] ?? "").toMatch(
+      /return errorResult\("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE\);/,
+    );
+  });
+
+  it("treats a response-parsing failure (successful call, invalid JSON) as AI_REQUEST_FAILED, distinct from a provider HTTP error", () => {
+    expect(actionSource).toMatch(
+      /if \(error instanceof ChatAgentResponseError\)\s*\{[\s\S]{0,600}?return errorResult\("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE\);/,
+    );
+  });
+});
+
+describe("chatAgentAction: sanitized diagnostic logging", () => {
+  it("logs the model identifier, HTTP status, and provider error type for every provider failure -- never the raw message", () => {
+    expect(actionSource).toContain("model: env.ANTHROPIC_MODEL");
+    expect(actionSource).toContain("httpStatus: error.status");
+    expect(actionSource).toContain("providerErrorType: error.providerErrorType");
+    expect(actionSource).toContain("reachedProvider: true");
+    expect(codeOnly).not.toMatch(/providerErrorType:\s*error\.message/);
+  });
+
+  it("logs actorUserId on every provider failure for correlating repeated failures to one caller", () => {
+    expect(actionSource).toContain("actorUserId: session.userId");
   });
 });
 

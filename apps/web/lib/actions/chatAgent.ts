@@ -67,6 +67,15 @@ const RATE_LIMITED_MESSAGE =
 const BUSY_MESSAGE = "The AI assistant is temporarily busy. Please try again shortly.";
 const UNAVAILABLE_MESSAGE = "The AI assistant is temporarily unavailable. Please try again.";
 const REQUEST_FAILED_MESSAGE = "The AI assistant could not complete this request.";
+// The following three are all AI_NOT_CONFIGURED -- 401/403/404 are always a
+// configuration problem (bad key, no model access, misspelled/unavailable
+// model), never something the requesting staff member caused or can retry.
+const INVALID_API_KEY_MESSAGE =
+  "The AI assistant is not configured correctly. Please contact your administrator.";
+const MODEL_ACCESS_DENIED_MESSAGE =
+  "The AI assistant is not available for this account. Please contact your administrator.";
+const MODEL_UNAVAILABLE_MESSAGE =
+  "The AI assistant configuration is unavailable. Please contact your administrator.";
 
 function errorResult(code: ChatAgentErrorCode, message: string): ChatAgentActionResponse {
   return { ok: false, code, message };
@@ -202,22 +211,89 @@ export async function chatAgentAction(
       if (error instanceof ChatAgentValidationError) {
         // Message is already a short, safe, staff-facing string (e.g. "Write
         // a draft first...") -- returned as-is, never wrapped or replaced.
+        // Never reaches Anthropic -- rejected before the provider call.
         return errorResult("INVALID_REQUEST", error.message);
       }
+      // Every branch below reached Anthropic and is logged with the same
+      // sanitized, safe-to-read metadata: which action, which model, the
+      // caller (for correlating repeated failures to one company/user), and
+      // the provider's own HTTP status/categorical error type -- never the
+      // raw error message/body, which can echo request content.
+      const providerLogFields = (error: {
+        status: number | null;
+        providerErrorType: string | null;
+      }) => ({
+        action: input.action,
+        actorUserId: session.userId,
+        model: env.ANTHROPIC_MODEL,
+        reachedProvider: true,
+        httpStatus: error.status,
+        providerErrorType: error.providerErrorType,
+      });
       if (error instanceof ChatAgentRateLimitedError) {
-        log.warn("chat_agent_action_rate_limited", { action: input.action });
+        log.warn("chat_agent_action_provider_error", {
+          ...providerLogFields(error),
+          internalCategory: "AI_RATE_LIMITED",
+        });
         return errorResult("AI_RATE_LIMITED", RATE_LIMITED_MESSAGE);
       }
       if (error instanceof ChatAgentOverloadedError) {
-        log.warn("chat_agent_action_overloaded", { action: input.action });
+        log.warn("chat_agent_action_provider_error", {
+          ...providerLogFields(error),
+          internalCategory: "AI_TEMPORARILY_UNAVAILABLE",
+        });
         return errorResult("AI_TEMPORARILY_UNAVAILABLE", BUSY_MESSAGE);
       }
       if (error instanceof ChatAgentProviderError) {
-        log.warn("chat_agent_action_failed", { action: input.action, errorType: error.name });
+        log.warn("chat_agent_action_provider_error", {
+          ...providerLogFields(error),
+          internalCategory: "AI_TEMPORARILY_UNAVAILABLE",
+        });
         return errorResult("AI_TEMPORARILY_UNAVAILABLE", UNAVAILABLE_MESSAGE);
       }
-      if (error instanceof ChatAgentRequestFailedError || error instanceof ChatAgentResponseError) {
-        log.warn("chat_agent_action_failed", { action: input.action, errorType: error.name });
+      if (error instanceof ChatAgentRequestFailedError) {
+        // 401/403/404 are always a configuration problem (bad key, no model
+        // access, misspelled/unavailable model) -- distinct, specific,
+        // admin-actionable messages. 400 and anything else permanent falls
+        // back to the generic AI_REQUEST_FAILED message.
+        if (error.status === 401) {
+          log.warn("chat_agent_action_provider_error", {
+            ...providerLogFields(error),
+            internalCategory: "AI_NOT_CONFIGURED",
+          });
+          return errorResult("AI_NOT_CONFIGURED", INVALID_API_KEY_MESSAGE);
+        }
+        if (error.status === 403) {
+          log.warn("chat_agent_action_provider_error", {
+            ...providerLogFields(error),
+            internalCategory: "AI_NOT_CONFIGURED",
+          });
+          return errorResult("AI_NOT_CONFIGURED", MODEL_ACCESS_DENIED_MESSAGE);
+        }
+        if (error.status === 404) {
+          log.warn("chat_agent_action_provider_error", {
+            ...providerLogFields(error),
+            internalCategory: "AI_NOT_CONFIGURED",
+          });
+          return errorResult("AI_NOT_CONFIGURED", MODEL_UNAVAILABLE_MESSAGE);
+        }
+        log.warn("chat_agent_action_provider_error", {
+          ...providerLogFields(error),
+          internalCategory: "AI_REQUEST_FAILED",
+        });
+        return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);
+      }
+      if (error instanceof ChatAgentResponseError) {
+        // The provider call itself succeeded (HTTP 200) -- the model's
+        // response just didn't parse/validate as the required structured
+        // JSON for this action (summarize/extract_lead).
+        log.warn("chat_agent_action_response_parse_failed", {
+          action: input.action,
+          actorUserId: session.userId,
+          model: env.ANTHROPIC_MODEL,
+          reachedProvider: true,
+          internalCategory: "AI_REQUEST_FAILED",
+        });
         return errorResult("AI_REQUEST_FAILED", REQUEST_FAILED_MESSAGE);
       }
       log.error("chat_agent_action_unexpected_error", { action: input.action });
