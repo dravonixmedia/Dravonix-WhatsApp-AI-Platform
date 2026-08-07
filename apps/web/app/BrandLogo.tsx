@@ -19,12 +19,14 @@ export function BrandLogo({ height = 32 }: { height?: number }) {
   );
 }
 
-export function BrandIcon({ size = 24 }: { size?: number }) {
+export function BrandIcon({ size = 24, className }: { size?: number; className?: string }) {
   const width = Math.round((ICON_ASPECT.width / ICON_ASPECT.height) * size);
   return (
     <img
       src={platformBrand.iconPath}
-      alt="Dravonix"
+      alt=""
+      aria-hidden="true"
+      className={className}
       width={width}
       height={size}
       style={{ display: "block", height: size, width }}

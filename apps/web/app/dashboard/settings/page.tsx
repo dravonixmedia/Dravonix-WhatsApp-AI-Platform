@@ -128,7 +128,7 @@ export default async function SettingsPage() {
 
   return (
     <div>
-      <h1 style={{ fontSize: "1.4rem" }}>Settings</h1>
+      <h1 className="dvx-page-title">Settings</h1>
       <p className="dvx-muted">Company account details for this account.</p>
 
       <div

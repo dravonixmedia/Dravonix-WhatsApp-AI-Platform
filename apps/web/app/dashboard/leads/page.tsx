@@ -107,7 +107,7 @@ export default async function LeadsPage({
         accessToken={session.accessToken}
         watches={LEADS_LIST_WATCHES}
       />
-      <h1 style={{ fontSize: "1.4rem" }}>Leads</h1>
+      <h1 className="dvx-page-title">Leads</h1>
       <p className="dvx-muted">
         Leads collected by the AI chatbot (customer name, service interest, budget, timeline, etc.)
         across every conversation for this company.

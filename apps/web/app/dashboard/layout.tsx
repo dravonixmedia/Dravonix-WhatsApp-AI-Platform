@@ -239,7 +239,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           <div className="dvx-sidebar-panel">
             <div
               style={{
-                marginBottom: "1.5rem",
+                marginBottom: "1.25rem",
                 display: "flex",
                 alignItems: "center",
                 gap: "0.5rem",
@@ -252,26 +252,31 @@ export default async function DashboardLayout({ children }: { children: React.Re
             <div
               className="dvx-card"
               style={{
-                padding: "0.6rem 0.75rem",
-                marginBottom: "1.25rem",
+                padding: "0.65rem 0.8rem",
+                marginBottom: "1rem",
                 display: "flex",
                 flexDirection: "column",
-                gap: "0.15rem",
+                gap: "0.2rem",
                 flexShrink: 0,
               }}
             >
               <span
                 className="dvx-muted"
-                style={{ fontSize: "0.68rem", textTransform: "uppercase" }}
+                style={{
+                  fontSize: "0.68rem",
+                  fontWeight: 600,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                }}
               >
-                Current company
+                Current workspace
               </span>
               <span style={{ fontSize: "0.85rem", fontWeight: 600 }} title={activeCompanyName}>
                 {activeCompanyName}
               </span>
               <span
                 className="dvx-badge dvx-badge--neutral"
-                style={{ alignSelf: "flex-start", marginTop: "0.3rem" }}
+                style={{ alignSelf: "flex-start", marginTop: "0.25rem" }}
               >
                 {roleLabel}
               </span>
@@ -284,7 +289,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             <div
               style={{
                 marginTop: "auto",
-                paddingTop: "1rem",
+                paddingTop: "0.85rem",
                 borderTop: "1px solid var(--border-default)",
                 flexShrink: 0,
               }}
@@ -292,7 +297,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
               <div
                 className="dvx-muted"
                 style={{
-                  fontSize: "0.75rem",
+                  fontSize: "0.72rem",
                   marginBottom: "0.5rem",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -306,7 +311,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
                 <button
                   className="dvx-button dvx-button--secondary"
                   type="submit"
-                  style={{ width: "100%" }}
+                  style={{ width: "100%", padding: "0.55rem 1rem", fontSize: "0.85rem" }}
                 >
                   Sign out
                 </button>
@@ -371,9 +376,35 @@ export default async function DashboardLayout({ children }: { children: React.Re
               <details className="dvx-user-menu">
                 <summary>
                   <Avatar label={session.email ?? "?"} size={32} />
-                  <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
-                    <span style={{ fontSize: "0.85rem", fontWeight: 600 }}>{roleLabel}</span>
-                    <span className="dvx-muted" style={{ fontSize: "0.72rem" }}>
+                  <span
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      lineHeight: 1.25,
+                      maxWidth: 160,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "0.85rem",
+                        fontWeight: 600,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={session.email ?? undefined}
+                    >
+                      {session.email ?? "Account"}
+                    </span>
+                    <span
+                      className="dvx-muted"
+                      style={{
+                        fontSize: "0.72rem",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       {activeCompanyName}
                     </span>
                   </span>
@@ -388,7 +419,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
                       overflowWrap: "break-word",
                     }}
                   >
-                    {session.email}
+                    {roleLabel} · {session.email}
                   </div>
                   <form action={logoutAction}>
                     <button
