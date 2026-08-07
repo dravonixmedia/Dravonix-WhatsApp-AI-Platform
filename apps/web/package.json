@@ -12,6 +12,7 @@
     "deploy:cloudflare": "wrangler deploy"
   },
   "dependencies": {
+    "@dravonix/ai": "workspace:*",
     "@dravonix/billing": "workspace:*",
     "@dravonix/config": "workspace:*",
     "@dravonix/core": "workspace:*",

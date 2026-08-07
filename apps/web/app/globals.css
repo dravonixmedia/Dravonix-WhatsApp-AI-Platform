@@ -942,3 +942,187 @@ a {
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------------
+ * Dashboard Chat Agent panel (internal staff copilot -- see
+ * ChatAgentPanel.tsx / ConversationComposerWithAssistant.tsx). A fixed
+ * overlay, not part of the .dvx-workspace grid, so it never disturbs that
+ * grid's own scroll/layout rules and never obscures the message thread
+ * behind it on desktop. Slides in from the right as a drawer; below 720px
+ * it becomes a bottom sheet instead, with its own scroll and a always-
+ * visible close control.
+ * ------------------------------------------------------------------- */
+
+.dvx-assistant-scrim {
+  display: none;
+}
+
+.dvx-assistant-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100dvh;
+  width: min(380px, 100vw);
+  background: var(--surface-elevated);
+  border-left: 1px solid var(--border-default);
+  box-shadow: var(--shadow-soft);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  animation: dvx-assistant-slide-in 0.18s ease-out;
+}
+
+@keyframes dvx-assistant-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.dvx-assistant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.dvx-assistant-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 1.1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.dvx-assistant-welcome {
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.dvx-assistant-quick-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.dvx-assistant-quick-actions .dvx-button {
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.8rem;
+  padding: 0.55rem 0.5rem;
+}
+
+.dvx-assistant-translate-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.dvx-assistant-action-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.dvx-assistant-action-row select {
+  flex-shrink: 0;
+  width: auto;
+  font-size: 0.75rem;
+}
+
+.dvx-assistant-action-row .dvx-button {
+  flex: 1;
+}
+
+.dvx-assistant-question {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-default);
+}
+
+.dvx-assistant-question input {
+  flex: 1;
+}
+
+.dvx-assistant-status {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 0.6rem 0;
+}
+
+.dvx-assistant-status--error {
+  color: #dc2626;
+}
+
+.dvx-assistant-result {
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dvx-assistant-result-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-medium);
+  padding: 0.75rem;
+}
+
+.dvx-assistant-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.dvx-assistant-result-actions .dvx-button {
+  font-size: 0.78rem;
+}
+
+@media (max-width: 720px) {
+  .dvx-assistant-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 190;
+  }
+
+  .dvx-assistant-panel {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: auto;
+    max-height: 85dvh;
+    border-left: none;
+    border-top: 1px solid var(--border-default);
+    border-radius: var(--radius-medium) var(--radius-medium) 0 0;
+    animation: dvx-assistant-slide-up 0.18s ease-out;
+  }
+
+  @keyframes dvx-assistant-slide-up {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+}

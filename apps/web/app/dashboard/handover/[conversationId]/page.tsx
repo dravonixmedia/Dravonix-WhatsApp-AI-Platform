@@ -2,7 +2,6 @@ import {
   deriveAiLikelyProcessing,
   getConversationThreadForDashboard,
   listHandoverInbox,
-  markConversationRead,
   SupabaseHandoverRepository,
   type HandoverInboxFilterKind,
   type HandoverInboxSort,
@@ -25,9 +24,10 @@ import { Avatar } from "../../Avatar.js";
 import { AiModeBadge, ConversationStateBadge } from "../../badges.js";
 import { WhatsAppIcon } from "../../Icons.js";
 import { loadContactSummary } from "../../loadContactSummary.js";
+import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
+import { ConversationComposerWithAssistant } from "../../ConversationComposerWithAssistant.js";
 import { ConversationThread } from "./ConversationThread.js";
 import { HandoverQueuePanel } from "../HandoverQueuePanel.js";
-import { ReplyComposer } from "./ReplyComposer.js";
 
 function ActionButton({ children }: { children: React.ReactNode }) {
   return (
@@ -96,7 +96,6 @@ export default async function ConversationDetailPage({
     notFound();
   }
 
-  await markConversationRead(repo, conversationId);
   const contact = await loadContactSummary(supabase, conversationId);
 
   const latestInbound = [...thread.messages].reverse().find((m) => m.direction === "inbound");
@@ -119,6 +118,7 @@ export default async function ConversationDetailPage({
         accessToken={session.accessToken}
         watches={CONVERSATION_DETAIL_WATCHES}
       />
+      <MarkConversationReadOnMount conversationId={conversationId} />
       <div className="dvx-workspace">
         <HandoverQueuePanel
           items={items}
@@ -216,7 +216,7 @@ export default async function ConversationDetailPage({
               }}
             >
               {conversation.state === "human_active" ? (
-                <ReplyComposer conversationId={conversationId} />
+                <ConversationComposerWithAssistant conversationId={conversationId} />
               ) : (
                 <p className="dvx-muted" style={{ fontSize: "0.85rem", margin: 0 }}>
                   A human reply requires the conversation to be in human_active (start human

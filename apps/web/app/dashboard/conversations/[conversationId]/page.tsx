@@ -3,7 +3,6 @@ import { AppError } from "@dravonix/core";
 import {
   deriveAiLikelyProcessing,
   getConversationThreadForDashboard,
-  markConversationRead,
   SupabaseHandoverRepository,
 } from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
@@ -24,12 +23,13 @@ import { Avatar } from "../../Avatar.js";
 import { AiModeBadge, ConversationStateBadge } from "../../badges.js";
 import { WhatsAppIcon } from "../../Icons.js";
 import { loadContactSummary } from "../../loadContactSummary.js";
+import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
 // Reused directly from the Human Handover module: these components are
 // conversation-generic (pagination, composer, reconciliation), not
 // handover-specific, so Live Conversations shares them rather than
 // duplicating pagination/composer/idempotency logic.
 import { ConversationThread } from "../../handover/[conversationId]/ConversationThread.js";
-import { ReplyComposer } from "../../handover/[conversationId]/ReplyComposer.js";
+import { ConversationComposerWithAssistant } from "../../ConversationComposerWithAssistant.js";
 import { ConversationListPanel } from "../ConversationListPanel.js";
 import {
   loadConversationsListData,
@@ -91,7 +91,6 @@ export default async function ConversationDetailPage({
     notFound();
   }
 
-  await markConversationRead(repo, conversationId);
   const contact = await loadContactSummary(supabase, conversationId);
 
   const latestInbound = [...thread.messages].reverse().find((m) => m.direction === "inbound");
@@ -122,6 +121,7 @@ export default async function ConversationDetailPage({
         accessToken={session.accessToken}
         watches={CONVERSATION_DETAIL_WATCHES}
       />
+      <MarkConversationReadOnMount conversationId={conversationId} />
       <div className="dvx-workspace">
         <ConversationListPanel data={listData} activeConversationId={conversationId} />
 
@@ -253,7 +253,7 @@ export default async function ConversationDetailPage({
               }}
             >
               {conversation.state === "human_active" && capabilities.canReplyToConversations ? (
-                <ReplyComposer conversationId={conversationId} />
+                <ConversationComposerWithAssistant conversationId={conversationId} />
               ) : conversation.state === "human_active" ? (
                 <p className="dvx-muted" style={{ fontSize: "0.85rem", margin: 0 }}>
                   Your role does not have permission to send replies.

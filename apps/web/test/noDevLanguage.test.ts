@@ -41,6 +41,7 @@ const BANNED_STRINGS = [
   "META_APP_SECRET",
   "META_VERIFY_TOKEN",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "ANTHROPIC_API_KEY",
 ];
 
 const CLIENT_FACING_PAGES = [
@@ -51,6 +52,8 @@ const CLIENT_FACING_PAGES = [
   "app/dashboard/page.tsx",
   "app/dashboard/leads/page.tsx",
   "app/dashboard/leads/[leadId]/page.tsx",
+  "app/dashboard/ChatAgentPanel.tsx",
+  "app/dashboard/ConversationComposerWithAssistant.tsx",
 ];
 
 describe("client-facing dashboard pages never leak internal implementation language", () => {
