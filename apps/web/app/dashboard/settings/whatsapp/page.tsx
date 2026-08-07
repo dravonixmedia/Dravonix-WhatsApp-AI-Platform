@@ -91,7 +91,7 @@ export default async function WhatsAppConnectionPage() {
 
   return (
     <div>
-      <h1 style={{ fontSize: "1.4rem" }}>WhatsApp connection</h1>
+      <h1 className="dvx-page-title">WhatsApp connection</h1>
       <p className="dvx-muted">
         Operational connection status for this company&apos;s WhatsApp Business Account. Access
         tokens and other secrets are never displayed here.

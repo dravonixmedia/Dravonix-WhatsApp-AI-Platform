@@ -1,21 +1,18 @@
 /*
  * Dravonix design tokens.
  *
- * Provenance: dravonixmedia.com could not be reached from this environment
- * (its outbound network policy blocks this sandbox's proxy) to extract
- * computed styles directly, so these values extend the token set already
- * established in this file (--dravonix-primary #1f6feb, --dravonix-secondary
- * #0b1220) rather than inventing an unrelated palette. The dark navy +
- * cyan direction matches the already-approved Human Handover visual
- * language this dashboard is built on top of. If exact brand values are
- * later confirmed from the live site or design source files, update only
- * the values below -- every component consumes these custom properties,
- * never a literal color/shadow/radius.
+ * Provenance: the official Dravonix brand system (dashboard redesign brief) --
+ * Primary Blue #2563EB, Cyan #06B6D4, Deep Navy #0B1220, Slate #334155, Off
+ * White #F8FAFC, Space Grotesk typography. Every component consumes these
+ * custom properties, never a literal color/shadow/radius, so the palette
+ * only ever needs updating in this one place.
  *
  * Dark is the primary, deliberate theme for the authenticated dashboard
- * (deep navy, cyan accents, premium SaaS feel). Light is kept as the
- * accessible alternative for users/OSes that prefer it -- both themes
- * share the same semantic token names so components never branch on theme.
+ * (deep navy #0B1220, blue/cyan accents, premium SaaS feel) -- this is the
+ * theme the brand brief describes. Light is kept as the accessible
+ * alternative for users/OSes that prefer it, with the same brand blue/cyan
+ * carried over for accent consistency; both themes share the same semantic
+ * token names so components never branch on theme.
  */
 
 :root {
@@ -24,16 +21,16 @@
   --surface-primary: #ffffff;
   --surface-elevated: #ffffff;
   --surface-hover: #f1f4f8;
-  --surface-selected: rgba(31, 111, 235, 0.08);
+  --surface-selected: rgba(37, 99, 235, 0.08);
   --border-default: #e2e5ea;
   --border-strong: #c7cdd6;
   --text-primary: #0b1220;
   --text-secondary: #364154;
   --text-muted: #5b6472;
-  --brand-blue: #1f6feb;
-  --brand-blue-strong: #1257c4;
-  --brand-cyan: #0891b2;
-  --brand-gradient: linear-gradient(135deg, #1f6feb 0%, #0891b2 100%);
+  --brand-blue: #2563eb;
+  --brand-blue-strong: #1d4ed8;
+  --brand-cyan: #06b6d4;
+  --brand-gradient: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%);
   --success: #16a34a;
   --success-surface: rgba(22, 163, 74, 0.12);
   --warning: #b45309;
@@ -42,11 +39,14 @@
   --danger-surface: rgba(220, 38, 38, 0.12);
   --info: #0891b2;
   --info-surface: rgba(8, 145, 178, 0.12);
-  --focus-ring: #1f6feb;
+  --focus-ring: #2563eb;
   --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 12px rgba(15, 23, 42, 0.06);
-  --radius-small: 6px;
-  --radius-medium: 10px;
-  --radius-large: 16px;
+  --radius-small: 8px;
+  --radius-medium: 14px;
+  --radius-large: 18px;
+  --font-sans:
+    var(--font-space-grotesk), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
 
   /* Legacy aliases -- existing components/pages still reference these
      names; keep them pointed at the new tokens rather than editing every
@@ -64,21 +64,21 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background-primary: #05070d;
-    --background-secondary: #0a0f1a;
-    --surface-primary: #0f1524;
-    --surface-elevated: #141c2e;
-    --surface-hover: #1a2338;
-    --surface-selected: rgba(34, 211, 238, 0.1);
-    --border-default: #1e2a40;
-    --border-strong: #2c3a56;
-    --text-primary: #f2f5fa;
-    --text-secondary: #aab4c8;
+    --background-primary: #0b1220;
+    --background-secondary: #0e1526;
+    --surface-primary: #111a2e;
+    --surface-elevated: #141f38;
+    --surface-hover: #1b2740;
+    --surface-selected: rgba(37, 99, 235, 0.14);
+    --border-default: rgba(51, 65, 85, 0.55);
+    --border-strong: rgba(71, 88, 115, 0.9);
+    --text-primary: #f8fafc;
+    --text-secondary: #b3c0d6;
     --text-muted: #7c8aa3;
-    --brand-blue: #3b82f6;
-    --brand-blue-strong: #60a5fa;
-    --brand-cyan: #22d3ee;
-    --brand-gradient: linear-gradient(135deg, #3b82f6 0%, #22d3ee 100%);
+    --brand-blue: #2563eb;
+    --brand-blue-strong: #3b82f6;
+    --brand-cyan: #06b6d4;
+    --brand-gradient: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%);
     --success: #34d399;
     --success-surface: rgba(52, 211, 153, 0.14);
     --warning: #fbbf24;
@@ -87,8 +87,8 @@
     --danger-surface: rgba(248, 113, 113, 0.14);
     --info: #22d3ee;
     --info-surface: rgba(34, 211, 238, 0.14);
-    --focus-ring: #22d3ee;
-    --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --focus-ring: #06b6d4;
+    --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -105,7 +105,7 @@ body {
   margin: 0;
   height: 100%;
   overflow-x: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
   background: var(--background-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
@@ -139,7 +139,7 @@ a {
 .dvx-card {
   background: var(--surface-primary);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-medium);
+  border-radius: var(--radius-large);
   padding: 1.5rem;
   box-shadow: var(--shadow-soft);
 }
@@ -168,13 +168,14 @@ a {
   background: var(--brand-blue);
   color: white;
   border: none;
-  border-radius: var(--radius-small);
-  padding: 0.65rem 1.25rem;
+  border-radius: 12px;
+  padding: 0.72rem 1.35rem;
   font-size: 0.95rem;
   font-weight: 500;
   cursor: pointer;
   transition:
     background-color 150ms ease,
+    border-color 150ms ease,
     opacity 150ms ease;
 }
 
@@ -203,7 +204,7 @@ a {
 
 .dvx-input {
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-small);
+  border-radius: 10px;
   padding: 0.6rem 0.8rem;
   font-size: 0.95rem;
   width: 100%;
@@ -227,10 +228,11 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+  min-height: 24px;
   font-size: 0.75rem;
-  font-weight: 500;
-  padding: 0.2rem 0.65rem;
-  border-radius: 999px;
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+  border-radius: 8px;
   white-space: nowrap;
 }
 
@@ -431,7 +433,7 @@ a {
 .dvx-nav-rail {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .dvx-nav-link {
@@ -471,10 +473,10 @@ a {
  * ------------------------------------------------------------------- */
 
 .dvx-sidebar {
-  width: 320px;
+  width: 312px;
   flex-shrink: 0;
   height: 100%;
-  padding: 16px;
+  padding: 24px 24px 24px 24px;
   box-sizing: border-box;
 }
 
@@ -485,8 +487,8 @@ a {
   flex-direction: column;
   background: var(--surface-elevated);
   border: 1px solid var(--border-default);
-  border-radius: 24px;
-  padding: 28px;
+  border-radius: 20px;
+  padding: 22px;
   box-shadow: var(--shadow-soft);
   overflow: hidden;
 }
@@ -498,20 +500,41 @@ a {
   overflow-x: hidden;
   margin: 0 -4px;
   padding: 0 4px;
+  /* Thin, low-contrast scrollbar -- only visible when the sidebar genuinely
+     can't fit at the current viewport height; never hides the nav itself. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.dvx-sidebar-nav-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dvx-sidebar-nav-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.dvx-sidebar-nav-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .dvx-nav-card {
   background: var(--surface-hover);
   border: 1px solid var(--border-default);
-  border-radius: 14px;
-  padding: 0.7rem 0.7rem;
-  min-height: 44px;
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+  min-height: 48px;
   width: 100%;
   text-align: left;
   font: inherit;
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
 }
 
 .dvx-nav-card-label {
@@ -537,7 +560,7 @@ a {
 .dvx-draiva-nav-card {
   align-items: flex-start;
   gap: 0.6rem;
-  min-height: 56px;
+  min-height: 52px;
 }
 
 .dvx-draiva-nav-card svg {
@@ -601,22 +624,32 @@ a {
   display: flex;
   align-items: center;
   gap: 1rem;
-  padding: 0.75rem 1.5rem;
+  padding: 0.85rem 1.75rem;
   background: var(--background-primary);
   border-bottom: 1px solid var(--border-default);
 }
 
 .dvx-topbar-search {
   flex: 1;
-  max-width: 420px;
+  min-width: 0;
+  max-width: 520px;
+  min-height: 44px;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  background: var(--surface-primary);
+  gap: 0.6rem;
+  background: var(--surface-elevated);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-medium);
-  padding: 0.5rem 0.8rem;
+  border-radius: 12px;
+  padding: 0.5rem 0.9rem;
   color: var(--text-muted);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.dvx-topbar-search:focus-within {
+  border-color: var(--brand-cyan);
+  box-shadow: 0 0 0 3px var(--surface-selected);
 }
 
 .dvx-topbar-search input {
@@ -714,18 +747,23 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: var(--radius-small);
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
   border: 1px solid var(--border-default);
-  background: var(--surface-primary);
+  background: var(--surface-elevated);
   color: var(--text-secondary);
   cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
 }
 
 .dvx-icon-button:hover {
-  background: var(--surface-hover);
-  color: var(--text-primary);
+  background: var(--surface-selected);
+  border-color: var(--brand-cyan);
+  color: var(--brand-cyan);
 }
 
 .dvx-icon-button-badge {
@@ -765,7 +803,14 @@ a {
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.55rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 10px;
+  transition: background-color 180ms ease;
+}
+
+.dvx-user-menu > summary:hover {
+  background: var(--surface-hover);
 }
 
 .dvx-user-menu > summary::-webkit-details-marker {
@@ -776,7 +821,7 @@ a {
   position: absolute;
   right: 0;
   top: calc(100% + 0.5rem);
-  min-width: 220px;
+  min-width: 230px;
   background: var(--surface-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-medium);
@@ -786,38 +831,212 @@ a {
 }
 
 /* ---------------------------------------------------------------------
+ * Shared page title -- every dashboard page below Overview (which uses its
+ * own larger welcome-hero heading instead).
+ * ------------------------------------------------------------------- */
+
+.dvx-page-title {
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.25rem;
+  color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------------------
+ * Welcome hero -- Overview page only. No date/time pill is rendered here:
+ * the platform has no authoritative server-side timezone implementation
+ * yet, so a "current time" pill would necessarily be fake (browser-local
+ * or hardcoded). Omitted entirely until that lands, per the redesign spec.
+ * ------------------------------------------------------------------- */
+
+.dvx-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-large);
+  border: 1px solid var(--border-default);
+  background:
+    radial-gradient(120% 160% at 100% 0%, rgba(6, 182, 212, 0.16) 0%, transparent 55%),
+    radial-gradient(120% 160% at 0% 100%, rgba(37, 99, 235, 0.18) 0%, transparent 60%),
+    var(--background-secondary);
+  padding: 2rem 2.25rem;
+}
+
+.dvx-hero-icon {
+  position: absolute;
+  top: -18px;
+  right: -18px;
+  opacity: 0.1;
+  pointer-events: none;
+}
+
+.dvx-hero-eyebrow {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand-cyan);
+  margin-bottom: 0.6rem;
+}
+
+.dvx-hero-heading {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.5rem;
+  color: var(--text-primary);
+}
+
+.dvx-hero-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 46ch;
+}
+
+@media (max-width: 480px) {
+  .dvx-hero {
+    padding: 1.5rem 1.25rem;
+  }
+
+  .dvx-hero-heading {
+    font-size: 1.6rem;
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Needs attention -- compact single-row status card. Amber accent applies
+ * only when a genuine attention state exists; a clear state stays neutral.
+ * ------------------------------------------------------------------- */
+
+.dvx-attention-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  padding: 1rem 1.25rem;
+}
+
+.dvx-attention-card--warning {
+  border-color: rgba(217, 119, 6, 0.4);
+  background: var(--warning-surface);
+}
+
+.dvx-attention-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  background: var(--surface-selected);
+  color: var(--brand-cyan);
+}
+
+.dvx-attention-card--warning .dvx-attention-icon {
+  background: rgba(217, 119, 6, 0.16);
+  color: var(--warning);
+}
+
+/* ---------------------------------------------------------------------
+ * Analytics operational summary -- Conversations Overview / AI Activity.
+ * These are live current-snapshot metrics, not historical charts: the
+ * schema has no time-series table to chart yet. Structured as a simple
+ * label/value list so a real chart can replace it later without a layout
+ * rewrite (see app/dashboard/page.tsx).
+ * ------------------------------------------------------------------- */
+
+.dvx-analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.1rem;
+}
+
+.dvx-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.dvx-summary-row:last-of-type {
+  border-bottom: none;
+}
+
+.dvx-summary-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.dvx-summary-value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.dvx-summary-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0.85rem 0 0;
+}
+
+/* ---------------------------------------------------------------------
  * KPI cards
  * ------------------------------------------------------------------- */
 
 .dvx-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.1rem;
+}
+
+@media (max-width: 1180px) {
+  .dvx-kpi-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 860px) {
+  .dvx-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .dvx-kpi-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .dvx-kpi-card {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.85rem;
+  padding: 1.35rem;
 }
 
 .dvx-kpi-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: var(--radius-small);
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
 }
 
 .dvx-kpi-value {
-  font-size: 1.9rem;
+  font-size: 2.1rem;
   font-weight: 700;
   line-height: 1;
+  letter-spacing: -0.01em;
 }
 
 .dvx-kpi-label {
-  font-size: 0.82rem;
+  font-size: 0.85rem;
+  font-weight: 500;
   color: var(--text-secondary);
 }
 
@@ -940,6 +1159,29 @@ a {
   color: var(--text-primary);
 }
 
+.dvx-draiva-page-description {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 0.35rem 0 0;
+  max-width: 60ch;
+}
+
+/* Notifications page rows. Every row this page renders is, by definition,
+   an unread/needs-attention item (see app/dashboard/notifications/page.tsx --
+   there is no separate persisted read flag; once read, a row leaves the
+   list entirely), so the cyan unread accent applies to every row rather
+   than being conditional on a read/unread field that doesn't exist. */
+.dvx-notification-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem 0.75rem;
+  padding: 0.85rem 1.1rem 0.85rem 1rem;
+  border-bottom: 1px solid var(--border-default);
+  border-left: 3px solid var(--brand-cyan);
+  background: var(--surface-selected);
+}
+
 .dvx-panel-header {
   display: flex;
   align-items: center;
@@ -960,20 +1202,34 @@ a {
   text-decoration: none;
   display: inline-flex;
   align-items: center;
-  font-size: 0.78rem;
+  min-height: 33px;
+  font-size: 0.8rem;
   font-weight: 500;
-  padding: 0.3rem 0.7rem;
+  padding: 0.4rem 0.85rem;
   border-radius: 999px;
   background: var(--surface-hover);
   color: var(--text-secondary);
   border: 1px solid transparent;
   cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+.dvx-filter-pill:hover {
+  background: var(--surface-selected);
+  color: var(--text-primary);
 }
 
 .dvx-filter-pill--active {
   background: var(--surface-selected);
   color: var(--brand-cyan);
   border-color: var(--brand-cyan);
+}
+
+.dvx-filter-pill--active:hover {
+  color: var(--brand-cyan);
 }
 
 /* ---------------------------------------------------------------------

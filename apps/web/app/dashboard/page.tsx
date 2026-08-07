@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { platformBrand } from "@dravonix/config";
 import { listConversations } from "../../lib/repositories/conversationsRepository.js";
 import { listLeads } from "../../lib/repositories/leadsRepository.js";
 import { loadNotificationSummary } from "../../lib/repositories/notificationsRepository.js";
 import { getDashboardSession } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
+import { BrandIcon } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
 import { AiModeBadge, LeadStageBadge } from "./badges.js";
 import { EmptyState } from "./EmptyState.js";
@@ -194,10 +194,14 @@ export default async function DashboardOverviewPage() {
 
   return (
     <div>
-      <h1 style={{ fontSize: "1.4rem", marginBottom: "0.25rem" }}>Overview</h1>
-      <p className="dvx-text-secondary" style={{ marginTop: 0 }}>
-        {platformBrand.productName} — {activeCompanyName}
-      </p>
+      <section className="dvx-hero">
+        <BrandIcon size={140} className="dvx-hero-icon" />
+        <span className="dvx-hero-eyebrow">Welcome back</span>
+        <h1 className="dvx-hero-heading">Welcome, {activeCompanyName} 👋</h1>
+        <p className="dvx-hero-subtitle">
+          Here&apos;s what&apos;s happening with your WhatsApp AI Platform today.
+        </p>
+      </section>
 
       <div className="dvx-kpi-grid" style={{ marginTop: "1.5rem" }}>
         {kpis.map((kpi) => (
@@ -206,35 +210,96 @@ export default async function DashboardOverviewPage() {
       </div>
 
       {!needsAttention ? (
-        <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
-          <span className="dvx-badge dvx-badge--success">All clear</span>
-          <p className="dvx-muted" style={{ fontSize: "0.85rem", marginTop: "0.75rem" }}>
-            No conversations currently need attention.
-          </p>
+        <div className="dvx-card dvx-attention-card" style={{ marginTop: "1.5rem" }}>
+          <span className="dvx-attention-icon" aria-hidden="true">
+            <HandoverIcon size={18} />
+          </span>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>All clear</div>
+            <p className="dvx-muted" style={{ fontSize: "0.82rem", margin: "0.15rem 0 0" }}>
+              No conversations currently need attention.
+            </p>
+          </div>
         </div>
       ) : (
-        <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
-          <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Needs attention</div>
-          <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
-            {counts.pendingHandoverRequests > 0
-              ? `${counts.pendingHandoverRequests} conversation(s) awaiting a human response. `
-              : ""}
-            {counts.unassignedHandovers > 0
-              ? `${counts.unassignedHandovers} handover(s) with no team member assigned. `
-              : ""}
-            {counts.unreadCustomerMessages > 0
-              ? `${counts.unreadCustomerMessages} unread customer message(s). `
-              : ""}
-            {counts.aiPaused > 0 ? `${counts.aiPaused} conversation(s) with AI paused. ` : ""}
-            <Link href="/dashboard/handover">Open Human Handover Inbox →</Link>
-          </p>
+        <div
+          className="dvx-card dvx-attention-card dvx-attention-card--warning"
+          style={{ marginTop: "1.5rem" }}
+        >
+          <span className="dvx-attention-icon" aria-hidden="true">
+            <HandoverIcon size={18} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>Needs attention</div>
+            <p className="dvx-muted" style={{ fontSize: "0.82rem", margin: "0.15rem 0 0" }}>
+              {counts.pendingHandoverRequests > 0
+                ? `${counts.pendingHandoverRequests} conversation(s) awaiting a human response. `
+                : ""}
+              {counts.unassignedHandovers > 0
+                ? `${counts.unassignedHandovers} handover(s) with no team member assigned. `
+                : ""}
+              {counts.unreadCustomerMessages > 0
+                ? `${counts.unreadCustomerMessages} unread customer message(s). `
+                : ""}
+              {counts.aiPaused > 0 ? `${counts.aiPaused} conversation(s) with AI paused. ` : ""}
+            </p>
+          </div>
+          <Link href="/dashboard/handover" className="dvx-button dvx-button--secondary">
+            Open inbox →
+          </Link>
         </div>
       )}
+
+      <div className="dvx-analytics-grid" style={{ marginTop: "1.5rem" }}>
+        <div className="dvx-card">
+          <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Conversations overview</span>
+          <div style={{ marginTop: "0.5rem" }}>
+            <div className="dvx-summary-row">
+              <span className="dvx-summary-label">Active conversations</span>
+              <span className="dvx-summary-value">{counts.activeConversations}</span>
+            </div>
+            <div className="dvx-summary-row">
+              <span className="dvx-summary-label">Currently with a human</span>
+              <span className="dvx-summary-value">{counts.activeHumanAssistance}</span>
+            </div>
+            <div className="dvx-summary-row">
+              <span className="dvx-summary-label">Awaiting a human</span>
+              <span className="dvx-summary-value">{counts.pendingHandoverRequests}</span>
+            </div>
+          </div>
+          <p className="dvx-summary-note">
+            Live snapshot of current conversation state. Trend history will appear here once
+            historical tracking is available.
+          </p>
+        </div>
+
+        <div className="dvx-card">
+          <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>AI activity</span>
+          <div style={{ marginTop: "0.5rem" }}>
+            <div className="dvx-summary-row">
+              <span className="dvx-summary-label">AI-paused conversations</span>
+              <span className="dvx-summary-value">{counts.aiPaused}</span>
+            </div>
+            <div className="dvx-summary-row">
+              <span className="dvx-summary-label">Unread customer messages</span>
+              <span className="dvx-summary-value">{counts.unreadCustomerMessages}</span>
+            </div>
+            <div className="dvx-summary-row">
+              <span className="dvx-summary-label">New leads (7d)</span>
+              <span className="dvx-summary-value">{counts.recentLeads ?? "—"}</span>
+            </div>
+          </div>
+          <p className="dvx-summary-note">
+            Live snapshot of current AI state. Resolution-rate and response-time analytics will
+            appear here once historical tracking is available.
+          </p>
+        </div>
+      </div>
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
           gap: "1rem",
           marginTop: "1.5rem",
         }}

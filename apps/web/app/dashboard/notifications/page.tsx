@@ -122,7 +122,7 @@ export default async function NotificationsPage({
 
   return (
     <div className="dvx-page-fill">
-      <h1 style={{ fontSize: "1.4rem" }}>Notifications</h1>
+      <h1 className="dvx-page-title">Notifications</h1>
       <p className="dvx-muted">
         Stay on top of customer messages, handovers and activity that needs your attention.
       </p>
@@ -168,17 +168,7 @@ export default async function NotificationsPage({
                 ? `/dashboard/handover/${row.conversationId}`
                 : `/dashboard/conversations/${row.conversationId}`;
             return (
-              <div
-                key={row.key}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                  gap: "0.6rem 0.75rem",
-                  padding: "0.85rem 1.1rem",
-                  borderBottom: "1px solid var(--border-default)",
-                }}
-              >
+              <div key={row.key} className="dvx-notification-row">
                 <span
                   className="dvx-kpi-icon"
                   style={{

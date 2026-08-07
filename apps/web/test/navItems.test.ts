@@ -265,9 +265,11 @@ describe("dashboard sidebar navigation", () => {
     expect(cssSource).toMatch(/body:has\(#dvx-nav-toggle:checked\)\s*\{\s*overflow:\s*hidden;/);
   });
 
-  it("gives every nav card a minimum 44px touch target for mobile", () => {
+  it("gives every nav card at least a 44px touch target for mobile", () => {
     const rule = cssSource.match(/\.dvx-nav-card\s*\{[^}]*\}/);
     expect(rule).not.toBeNull();
-    expect(rule?.[0]).toMatch(/min-height:\s*44px/);
+    const heightMatch = rule?.[0].match(/min-height:\s*(\d+)px/);
+    expect(heightMatch).not.toBeNull();
+    expect(Number(heightMatch?.[1])).toBeGreaterThanOrEqual(44);
   });
 });

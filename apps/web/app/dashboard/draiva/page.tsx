@@ -61,6 +61,9 @@ export default async function DraivaPage() {
           AI Conversation Assistant by
           <span className="dvx-draiva-brand"> Dravonix</span>
         </span>
+        <p className="dvx-draiva-page-description">
+          Analyse conversations, prepare replies, translate messages and extract customer insights.
+        </p>
       </div>
       <DraivaWorkspace conversations={items} />
     </div>
