@@ -74,6 +74,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_realtime.sql"
 echo "Running Global Timezone + Daypart Awareness (migration 14) RLS/RPC hardening assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_timezone.sql"
 
+echo "Running Business Currency (migration 15) RLS/RPC hardening + timezone independence assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_currency.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------

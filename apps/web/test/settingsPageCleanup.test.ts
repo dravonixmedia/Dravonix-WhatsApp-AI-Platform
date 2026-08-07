@@ -127,6 +127,84 @@ describe("Settings page: honest subscription placeholder", () => {
   });
 });
 
+describe("Settings page: Business Timezone selector", () => {
+  it("renders TimezoneCombobox with the exact required label and supporting text", () => {
+    expect(source).toContain('label="Business Timezone"');
+    expect(source).toContain(
+      'helpText="Used for business hours, operational dates and company-local scheduling context."',
+    );
+    expect(source).toContain('saveLabel="Save Timezone"');
+  });
+
+  it("sources its options from listSupportedTimezones(), never a hardcoded list", () => {
+    expect(source).toContain("options={listSupportedTimezones()}");
+  });
+
+  it("pre-fills the current company timezone from the server-resolved company row", () => {
+    expect(source).toContain('initialValue={company?.timezone ?? ""}');
+  });
+
+  it("saves through the existing updateCompanyTimezoneAction Server Action, not a new duplicate one", () => {
+    expect(source).toContain("onSave={updateCompanyTimezoneAction}");
+  });
+
+  it("no longer uses the native <input list>+<datalist> pattern", () => {
+    expect(source).not.toContain("<datalist");
+    expect(source).not.toContain('list="timezone-options"');
+  });
+});
+
+describe("Settings page: Business Currency selector", () => {
+  it("renders CurrencySelect with the exact required label and supporting text", () => {
+    expect(source).toContain('label="Business Currency"');
+    expect(source).toContain(
+      'helpText="Used for financial values, billing displays and business-level monetary settings."',
+    );
+    expect(source).toContain('saveLabel="Save Currency"');
+  });
+
+  it("sources its options from listSupportedCurrencies(), never a hardcoded inline list", () => {
+    expect(source).toContain("currencies={listSupportedCurrencies()}");
+  });
+
+  it("pre-fills the current company currency from the server-resolved company row", () => {
+    expect(source).toMatch(/initialValue=\{company\?\.default_currency\s*\?\?\s*"INR"\}/);
+  });
+
+  it("saves through a dedicated updateCompanyCurrencyAction Server Action, reusing the existing default_currency column", () => {
+    expect(source).toContain("onSave={updateCompanyCurrencyAction}");
+  });
+
+  it("is no longer a read-only SettingsRow", () => {
+    expect(source).not.toContain('SettingsRow label="Currency"');
+  });
+});
+
+describe("Settings page: Business Timezone and Business Currency are independent", () => {
+  it("the two selectors are wired to two distinct Server Actions, never a shared handler", () => {
+    const timezoneCallIndex = source.indexOf("onSave={updateCompanyTimezoneAction}");
+    const currencyCallIndex = source.indexOf("onSave={updateCompanyCurrencyAction}");
+    expect(timezoneCallIndex).toBeGreaterThan(-1);
+    expect(currencyCallIndex).toBeGreaterThan(-1);
+    expect(timezoneCallIndex).not.toBe(currencyCallIndex);
+  });
+
+  it("the currency selector's initialValue never derives from the timezone field, and vice versa", () => {
+    function extractSelfClosingTag(tag: string): string {
+      const start = source.indexOf(`<${tag}`);
+      expect(start).toBeGreaterThan(-1);
+      const end = source.indexOf("/>", start);
+      expect(end).toBeGreaterThan(start);
+      return source.slice(start, end);
+    }
+
+    const timezoneBlock = extractSelfClosingTag("TimezoneCombobox");
+    const currencyBlock = extractSelfClosingTag("CurrencySelect");
+    expect(timezoneBlock).not.toContain("default_currency");
+    expect(currencyBlock).not.toContain("company?.timezone");
+  });
+});
+
 describe("Settings page: WhatsApp secrets never selected or rendered", () => {
   it("never selects an access-token, app-secret, or verify-token column", () => {
     const rendered = withoutComments(source);
