@@ -1,10 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { formatBadgeCount } from "../../lib/notificationBadge.js";
 import { SparkleIcon } from "./Icons.js";
-import { useNotificationPanel } from "./NotificationPanelContext.js";
 
 export interface NavLinkItem {
   href: string;
@@ -14,30 +13,34 @@ export interface NavLinkItem {
 }
 
 /**
- * One ordered sidebar list mixes plain route links with two specially
- * rendered entries: "notifications" (a button that opens the existing
- * NotificationBell dropdown via shared context, not a route of its own) and
- * "draiva" (the two-line DRAIVA AI card, section 5 of the sidebar polish
- * spec). Both are excluded from Link/active-route styling on purpose --
- * neither is a navigable page.
+ * One ordered sidebar list mixes plain route links with one specially
+ * rendered entry: "draiva" (the two-line DRAIVA AI card, section 5 of the
+ * sidebar polish spec). Both Notifications and DRAIVA are now real,
+ * server-rendered dashboard destinations (/dashboard/notifications,
+ * /dashboard/draiva) -- the sidebar item is nothing more than a Link to
+ * each, exactly like Overview or Leads. "draiva" only exists as its own
+ * entry kind because it needs the two-line card layout, not because it
+ * behaves differently as a navigation target.
  */
-export type SidebarNavEntry =
-  | ({ kind: "link" } & NavLinkItem)
-  | { kind: "notifications"; label: string; icon: React.ReactNode; badgeCount: number }
-  | { kind: "draiva" };
+export type SidebarNavEntry = ({ kind: "link" } & NavLinkItem) | { kind: "draiva"; href: string };
 
 function isActive(pathname: string, href: string): boolean {
-  const path = href.split("#")[0] ?? href;
-  if (path === "/dashboard") return pathname === "/dashboard";
-  return pathname === path || pathname.startsWith(`${path}/`);
+  if (href === "/dashboard") return pathname === "/dashboard";
+  return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-// Matches only a single conversation's detail route -- /dashboard/conversations/<id>
-// or /dashboard/handover/<id> -- which is exactly where
-// ConversationComposerWithAssistant (and therefore ChatAgentPanel) is
-// mounted. List pages (/dashboard/conversations, /dashboard/handover) and
-// any deeper subpath deliberately do not match.
-const CONVERSATION_DETAIL_ROUTE = /^\/dashboard\/(?:conversations|handover)\/[^/]+\/?$/;
+// Unchecks the existing checkbox-driven mobile drawer (see layout.tsx's
+// #dvx-nav-toggle) after a sidebar navigation. A <Link> click is a
+// same-instance client-side route change, so the checkbox's own DOM node
+// (and therefore its checked state) survives the navigation unless cleared
+// explicitly -- this is a no-op on desktop, where the checkbox is never
+// checked in the first place.
+function closeMobileDrawer(): void {
+  const toggle = document.getElementById("dvx-nav-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) {
+    toggle.checked = false;
+  }
+}
 
 /**
  * Client component so the sidebar can highlight the current route via
@@ -47,51 +50,19 @@ const CONVERSATION_DETAIL_ROUTE = /^\/dashboard\/(?:conversations|handover)\/[^/
  */
 export function NavLinks({ entries }: { entries: SidebarNavEntry[] }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const { toggle: toggleNotifications } = useNotificationPanel();
-
-  function handleDraivaClick() {
-    // Existing DRAIVA panel is owned by ConversationComposerWithAssistant on
-    // a conversation's own detail page -- reuse it via a plain DOM event
-    // rather than lifting its state or duplicating ChatAgentPanel here (see
-    // that component's own listener for "dvx:open-draiva"). Off a detail
-    // page, there's nothing to open yet, so route the user there to pick one.
-    if (CONVERSATION_DETAIL_ROUTE.test(pathname)) {
-      window.dispatchEvent(new Event("dvx:open-draiva"));
-      return;
-    }
-    router.push("/dashboard/conversations");
-  }
 
   return (
     <nav className="dvx-nav-rail" aria-label="Dashboard">
       {entries.map((entry) => {
-        if (entry.kind === "notifications") {
-          return (
-            <button
-              key="dvx-nav-notifications"
-              type="button"
-              className="dvx-nav-link dvx-nav-card"
-              onClick={toggleNotifications}
-              aria-haspopup="true"
-              aria-controls="dvx-notification-panel"
-            >
-              {entry.icon}
-              <span className="dvx-nav-card-label">{entry.label}</span>
-              {entry.badgeCount > 0 ? (
-                <span className="dvx-nav-badge">{formatBadgeCount(entry.badgeCount)}</span>
-              ) : null}
-            </button>
-          );
-        }
-
         if (entry.kind === "draiva") {
+          const active = isActive(pathname, entry.href);
           return (
-            <button
+            <Link
               key="dvx-nav-draiva"
-              type="button"
-              className="dvx-nav-link dvx-nav-card dvx-draiva-nav-card"
-              onClick={handleDraivaClick}
+              href={entry.href}
+              aria-current={active ? "page" : undefined}
+              onClick={closeMobileDrawer}
+              className={`dvx-nav-link dvx-nav-card dvx-draiva-nav-card${active ? " dvx-nav-link--active" : ""}`}
               aria-label="DRAIVA AI Conversation Assistant by Dravonix"
             >
               <SparkleIcon size={16} />
@@ -102,7 +73,7 @@ export function NavLinks({ entries }: { entries: SidebarNavEntry[] }) {
                   <span className="dvx-draiva-brand"> Dravonix</span>
                 </span>
               </span>
-            </button>
+            </Link>
           );
         }
 
@@ -112,6 +83,7 @@ export function NavLinks({ entries }: { entries: SidebarNavEntry[] }) {
             key={entry.href}
             href={entry.href}
             aria-current={active ? "page" : undefined}
+            onClick={closeMobileDrawer}
             className={`dvx-nav-link dvx-nav-card${active ? " dvx-nav-link--active" : ""}`}
           >
             {entry.icon}

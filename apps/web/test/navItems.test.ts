@@ -4,12 +4,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Dashboard sidebar navigation -- covers both the original dashboard
- * correction pass (Knowledge Base/Billing must never appear; Settings/
- * WhatsApp Connection gated by real permissions, never a hardcoded email or
- * role) and the final sidebar UI/UX polish pass (exact 9-item order, the
- * DRAIVA two-line entry, the split Team Settings/Company Settings gate, and
- * that clicking DRAIVA can never send a WhatsApp message).
+ * Dashboard sidebar navigation -- covers the original dashboard correction
+ * pass (Knowledge Base/Billing must never appear; Settings/WhatsApp
+ * Connection gated by real permissions, never a hardcoded email or role),
+ * the sidebar UI/UX polish pass (exact 9-item order, the DRAIVA two-line
+ * entry, the split Team Settings/Company Settings gate), and the dedicated
+ * Notifications/DRAIVA sections pass: both are now plain routed links
+ * (/dashboard/notifications, /dashboard/draiva), not a popup toggle or a
+ * conditional redirect to Live Conversations.
  *
  * Static source assertions rather than importing app/dashboard/layout.tsx
  * directly: that file transitively imports lib/session.ts, which wraps
@@ -36,6 +38,10 @@ function indexOfOrThrow(source: string, needle: string): number {
     throw new Error(`Expected to find ${JSON.stringify(needle)} in source`);
   }
   return index;
+}
+
+function withoutComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 describe("dashboard sidebar navigation", () => {
@@ -79,12 +85,14 @@ describe("dashboard sidebar navigation", () => {
     expect(teamSettings).toBeGreaterThan(draiva);
   });
 
-  it("keeps every existing route unchanged", () => {
+  it("keeps every existing route unchanged and links Notifications/DRAIVA to their new dedicated routes", () => {
     expect(layoutSource).toContain('href: "/dashboard"');
     expect(layoutSource).toContain('href: "/dashboard/conversations"');
     expect(layoutSource).toContain('href: "/dashboard/handover"');
     expect(layoutSource).toContain('href: "/dashboard/leads"');
     expect(layoutSource).toContain('href: "/dashboard/settings/whatsapp"');
+    expect(layoutSource).toContain('href: "/dashboard/notifications"');
+    expect(layoutSource).toContain('kind: "draiva", href: "/dashboard/draiva"');
   });
 
   it("gates Team Settings behind capabilities.canManageTeam alone, never a hardcoded email or role", () => {
@@ -109,11 +117,9 @@ describe("dashboard sidebar navigation", () => {
       join(webRoot, "app/dashboard/billing/page.tsx"),
       "utf8",
     );
-    const withoutComments = billingRouteSource
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const rendered = withoutComments(billingRouteSource);
     expect(billingRouteSource).toContain('redirect("/dashboard/settings")');
-    expect(withoutComments).not.toContain("Starter (trial)");
+    expect(rendered).not.toContain("Starter (trial)");
   });
 
   it("gates the WhatsApp Connection nav entry behind capabilities.canManageWhatsapp, never a hardcoded email or role", () => {
@@ -185,25 +191,28 @@ describe("dashboard sidebar navigation", () => {
     expect(sidebarSection).not.toMatch(/rgba?\(/);
   });
 
-  it("excludes the Notifications and DRAIVA entries from route-active <Link> styling -- neither is a navigable page", () => {
-    const notificationsBlock = navLinksSource.match(
-      /if \(entry\.kind === "notifications"\)[\s\S]*?\n {8}\}/,
-    );
-    const draivaBlock = navLinksSource.match(/if \(entry\.kind === "draiva"\)[\s\S]*?\n {8}\}/);
-    expect(notificationsBlock).not.toBeNull();
-    expect(draivaBlock).not.toBeNull();
-    expect(notificationsBlock?.[0]).not.toContain("aria-current");
-    expect(draivaBlock?.[0]).not.toContain("aria-current");
+  it("renders every sidebar entry, including Notifications and DRAIVA, as a real <Link> -- no button/popup-toggle entry kind exists anymore", () => {
+    const codeOnly = withoutComments(navLinksSource);
+    expect(codeOnly).not.toMatch(/kind === "notifications"/);
+    expect(codeOnly).not.toMatch(/useNotificationPanel/);
+    expect(codeOnly).not.toMatch(/toggleNotifications/);
+    // Every entry (including "draiva") renders through a single <Link>.
+    expect((navLinksSource.match(/<Link\b/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
-  it("computes active-route styling only for real links, via isActive(pathname, entry.href)", () => {
+  it("computes active-route styling, including for DRAIVA, via isActive(pathname, entry.href)", () => {
     expect(navLinksSource).toContain("function isActive(");
-    expect(navLinksSource).toMatch(/const active = isActive\(pathname, entry\.href\)/);
+    expect(navLinksSource).toMatch(/const active = isActive\(pathname, entry\.href\)/g);
     expect(navLinksSource).toContain("dvx-nav-link--active");
+    // DRAIVA's own branch also computes and applies the active class.
+    const draivaBranch = navLinksSource.match(/if \(entry\.kind === "draiva"\)[\s\S]*?\n {8}\}/);
+    expect(draivaBranch).not.toBeNull();
+    expect(draivaBranch?.[0]).toContain("isActive(pathname, entry.href)");
+    expect(draivaBranch?.[0]).toContain("dvx-nav-link--active");
   });
 
   it("renders a right-aligned badge for any entry with a positive badgeCount, reusing formatBadgeCount -- Human Handover and Notifications keep their live counts", () => {
-    expect(navLinksSource).toMatch(/badgeCount > 0 \?/);
+    expect(navLinksSource).toMatch(/badgeCount && entry\.badgeCount > 0 \?/);
     expect(navLinksSource).toContain("formatBadgeCount(");
     expect(cssSource).toMatch(/\.dvx-nav-badge\s*\{[^}]*margin-left:\s*auto/);
   });
@@ -217,31 +226,36 @@ describe("dashboard sidebar navigation", () => {
     );
   });
 
-  it("clicking DRAIVA can never send a WhatsApp message -- it only dispatches a DOM event or navigates, and the listener it wires up only opens the existing assistant panel", () => {
-    const handler = navLinksSource.match(/function handleDraivaClick\(\)\s*\{[\s\S]*?\n {2}\}/);
-    expect(handler).not.toBeNull();
-    const body = handler?.[0] ?? "";
-    expect(body).toMatch(/window\.dispatchEvent\(new Event\("dvx:open-draiva"\)\)/);
-    expect(body).toMatch(/router\.push\("\/dashboard\/conversations"\)/);
-    expect(body).not.toMatch(/send/i);
-    expect(body).not.toMatch(/fetch\(/);
-    expect(body).not.toMatch(/whatsapp/i);
-
-    const listener = composerSource.match(/function handleOpenDraiva\(\)\s*\{[\s\S]*?\n {4}\}/);
-    expect(listener).not.toBeNull();
-    expect(listener?.[0].trim()).toBe(
-      "function handleOpenDraiva() {\n      setAssistantOpen(true);\n    }",
-    );
+  it("no longer redirects DRAIVA to Live Conversations, dispatches a custom DOM event, or reads the current pathname to decide where it goes -- it is a plain link to /dashboard/draiva", () => {
+    const codeOnly = withoutComments(navLinksSource);
+    expect(codeOnly).not.toMatch(/dvx:open-draiva/);
+    expect(codeOnly).not.toMatch(/handleDraivaClick/);
+    expect(codeOnly).not.toMatch(/CONVERSATION_DETAIL_ROUTE/);
+    expect(codeOnly).not.toMatch(/router\.push\("\/dashboard\/conversations"\)/);
+    expect(codeOnly).not.toMatch(/useRouter/);
   });
 
-  it("never lets the DRAIVA sidebar entry manage its own duplicate ChatAgentPanel state -- it only imports NotificationPanelContext, not ChatAgentPanel", () => {
-    // Comments legitimately explain *why* ChatAgentPanel isn't imported
-    // here; only the executable code must never import/use it.
-    const codeOnly = navLinksSource
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  it("the now-dead dvx:open-draiva listener was removed from ConversationComposerWithAssistant -- nothing dispatches it anymore", () => {
+    const codeOnly = withoutComments(composerSource);
+    expect(codeOnly).not.toMatch(/dvx:open-draiva/);
+    expect(codeOnly).not.toMatch(/handleOpenDraiva/);
+    // "Ask DRAIVA" in-conversation launcher is untouched.
+    expect(composerSource).toMatch(/>\s*Ask DRAIVA\s*</);
+  });
+
+  it("never lets the sidebar manage its own duplicate ChatAgentPanel state -- it never imports ChatAgentPanel or calls chatAgentAction directly", () => {
+    const codeOnly = withoutComments(navLinksSource);
     expect(codeOnly).not.toMatch(/ChatAgentPanel/);
     expect(codeOnly).not.toMatch(/chatAgentAction/);
+  });
+
+  it("closes the mobile drawer after any sidebar navigation, including Notifications and DRAIVA", () => {
+    expect(navLinksSource).toContain("function closeMobileDrawer()");
+    expect(navLinksSource).toContain('getElementById("dvx-nav-toggle")');
+    // Every rendered <Link> (both the plain-link branch and the draiva
+    // branch) wires the same onClick handler -- not just some of them.
+    const linkOnClicks = navLinksSource.match(/<Link[\s\S]*?onClick=\{closeMobileDrawer\}/g) ?? [];
+    expect(linkOnClicks.length).toBeGreaterThanOrEqual(2);
   });
 
   it("preserves the existing checkbox-driven mobile drawer mechanism and locks background scroll while it's open", () => {

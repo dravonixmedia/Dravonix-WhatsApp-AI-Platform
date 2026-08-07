@@ -52,11 +52,19 @@ export const dynamic = "force-dynamic";
  * the original combined gate: no role that could see Settings before loses
  * sidebar access now (e.g. billing_viewer, canManageBilling only, still sees
  * Company Settings). WhatsApp Connection keeps its own gate/route unchanged.
- * DRAIVA is gated on canReplyToConversations -- the same permission that
- * already controls whether ConversationComposerWithAssistant renders the
- * "Ask DRAIVA" entry point at all (see conversations/[conversationId]/
- * page.tsx and handover/[conversationId]/page.tsx). Human Handover stays
- * unconditional, matching its pre-existing (RLS-backed) visibility.
+ *
+ * Notifications and DRAIVA are both real, dedicated dashboard destinations
+ * (/dashboard/notifications, /dashboard/draiva) -- plain links, like every
+ * other item here, not popups or shortcuts (see those routes' own
+ * page.tsx for the workspaces themselves). The top-right notification bell
+ * is a separate, compact affordance that keeps working unchanged; the
+ * sidebar item no longer toggles it. DRAIVA is gated on
+ * canReplyToConversations -- the same permission that already controls
+ * whether ConversationComposerWithAssistant renders the "Ask DRAIVA" entry
+ * point at all (see conversations/[conversationId]/page.tsx and
+ * handover/[conversationId]/page.tsx), and that /dashboard/draiva's own
+ * page.tsx re-checks server-side. Human Handover stays unconditional,
+ * matching its pre-existing (RLS-backed) visibility.
  */
 export function buildNavItems(
   capabilities: ReturnType<typeof getDashboardCapabilities>,
@@ -79,7 +87,8 @@ export function buildNavItems(
     },
     { kind: "link", href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> },
     {
-      kind: "notifications",
+      kind: "link",
+      href: "/dashboard/notifications",
       label: "Notifications",
       icon: <BellIcon size={18} />,
       badgeCount: badgeCounts.notifications,
@@ -87,7 +96,7 @@ export function buildNavItems(
   ];
 
   if (capabilities.canReplyToConversations) {
-    entries.push({ kind: "draiva" });
+    entries.push({ kind: "draiva", href: "/dashboard/draiva" });
   }
 
   if (capabilities.canManageTeam) {

@@ -902,6 +902,44 @@ a {
   border-color: var(--brand-cyan);
 }
 
+/* Lets a <button> (the DRAIVA workspace's client-side conversation
+   selector, which must not navigate) reuse .dvx-conv-row/.dvx-conv-row--
+   selected unmodified instead of a second, near-duplicate set of row
+   styles -- only resets the handful of properties a <button> needs that
+   an <a> doesn't. */
+.dvx-conv-row-button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/* DRAIVA dedicated workspace (/dashboard/draiva) page identity -- same
+   cyan/white brand treatment as the sidebar's two-line DRAIVA card
+   (.dvx-draiva-nav-title/.dvx-draiva-brand), just sized for a page header
+   instead of a nav item. */
+.dvx-draiva-page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 1rem;
+}
+
+.dvx-draiva-page-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--brand-cyan);
+}
+
+.dvx-draiva-page-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
 .dvx-panel-header {
   display: flex;
   align-items: center;
