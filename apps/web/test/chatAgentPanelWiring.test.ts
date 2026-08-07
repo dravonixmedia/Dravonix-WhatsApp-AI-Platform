@@ -608,3 +608,38 @@ describe("Composer wiring: both Live Conversations and Human Handover use the sa
     expect(handoverPageSource).not.toMatch(/<ReplyComposer\b/);
   });
 });
+
+describe("DRAIVA draft-action label: conversation-scoped panel unchanged, standalone workspace relabeled", () => {
+  it("ChatAgentPanel's draft-result button label and its confirmation text are configurable, defaulting to the original 'Use in reply' wording -- so any caller that passes neither prop (every existing conversation-detail caller) is completely unaffected", () => {
+    expect(panelSource).toMatch(/useInReplyLabel = "Use in reply"/);
+    expect(panelSource).toMatch(
+      /useInReplyConfirmationText = "Translation added to the reply box\."/,
+    );
+    expect(panelSource).toContain("{useInReplyLabel}");
+    expect(panelSource).toContain("{useInReplyConfirmationText}");
+  });
+
+  it("ConversationComposerWithAssistant (the in-conversation launcher) never passes either label override -- it keeps the default 'Use in reply' text and behaviour", () => {
+    expect(composerWrapperSource).not.toContain("useInReplyLabel");
+    expect(composerWrapperSource).not.toContain("useInReplyConfirmationText");
+  });
+
+  it("'Use in reply' in an actual conversation still only calls onUseReply, which ConversationComposerWithAssistant wires directly to the composer's draft setter -- fills the box, keeps it editable, never sends", () => {
+    expect(composerWrapperSource).toContain("onUseReply={setDraft}");
+    expect(composerWrapperSource).not.toMatch(/onUseReply=\{.*(send|submit)/i);
+  });
+
+  it("the informational-result 'Copy'/'Copied' button is unconditional -- rendered for every result type (drafts and summaries/lead-extractions/ask-answers alike), completely independent of useInReplyLabel", () => {
+    const copyButtonBlock = panelSource.match(
+      /aria-label="Copy DRAIVA result"[\s\S]*?\{copied \? "Copied" : "Copy"\}/,
+    );
+    expect(copyButtonBlock).not.toBeNull();
+    // Not inside the same conditional that gates the draft-only button --
+    // i.e. it isn't wrapped by the isDraftResult check.
+    const isDraftGatedButton = panelSource.match(
+      /isDraftResult \|\| \(showingTranslateResult[\s\S]*?\{useInReplyLabel\}[\s\S]*?<\/button>\s*\) : null\}/,
+    );
+    expect(isDraftGatedButton).not.toBeNull();
+    expect(isDraftGatedButton?.[0]).not.toContain('aria-label="Copy DRAIVA result"');
+  });
+});

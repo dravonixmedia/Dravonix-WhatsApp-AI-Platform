@@ -88,12 +88,25 @@ describe("dedicated DRAIVA page", () => {
     expect(codeOnly).not.toMatch(/fetch\(/);
   });
 
-  it("'Use in reply' safely copies the result instead of inventing a fragile cross-route draft-transfer mechanism, and a separate 'Open conversation' link is always available", () => {
+  it("never displays a 'Use in reply' label -- the draft-result action is relabeled 'Copy Draft' since it only ever copies to the clipboard here, and a separate 'Open conversation' link is always available", () => {
+    expect(workspaceSource).not.toMatch(/Use in [Rr]eply/);
+    expect(workspaceSource).toContain('useInReplyLabel="Copy Draft"');
     expect(workspaceSource).toContain("navigator.clipboard.writeText");
     expect(workspaceSource).toContain("Open conversation");
     expect(workspaceSource).toMatch(
       /href=\{`\/dashboard\/conversations\/\$\{selected\.conversationId\}`\}/,
     );
+  });
+
+  it("does not invent a fragile draft-transfer mechanism -- no localStorage/sessionStorage/query-string draft passing across routes", () => {
+    const codeOnly = withoutComments(workspaceSource) + withoutComments(pageSource);
+    expect(codeOnly).not.toMatch(/localStorage/);
+    expect(codeOnly).not.toMatch(/sessionStorage/);
+    expect(codeOnly).not.toMatch(/[?&]draft=/);
+  });
+
+  it("also relabels the copy confirmation text so it never claims the (non-existent) reply box was updated", () => {
+    expect(workspaceSource).toContain('useInReplyConfirmationText="Copied to clipboard."');
   });
 
   it("never auto-navigates away to Live Conversations on its own -- selecting a conversation only updates local state", () => {

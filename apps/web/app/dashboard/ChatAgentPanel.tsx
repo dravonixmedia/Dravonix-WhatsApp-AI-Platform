@@ -87,12 +87,23 @@ export function ChatAgentPanel({
   onClose,
   currentDraft,
   onUseReply,
+  // Every existing conversation-detail caller (ConversationComposerWithAssistant)
+  // omits these two props entirely, so it keeps the exact original "Use in
+  // reply" wording and behaviour (fills the composer, draft stays editable,
+  // Send is still manual). The standalone /dashboard/draiva workspace has no
+  // composer to fill -- its onUseReply only copies to the clipboard -- so it
+  // passes labels that describe what actually happens there instead of
+  // reusing a label that implies a composer this page doesn't have.
+  useInReplyLabel = "Use in reply",
+  useInReplyConfirmationText = "Translation added to the reply box.",
 }: {
   conversationId: string;
   open: boolean;
   onClose: () => void;
   currentDraft: string;
   onUseReply: (text: string) => void;
+  useInReplyLabel?: string;
+  useInReplyConfirmationText?: string;
 }) {
   const [view, setView] = useState<PanelView>({ status: "idle" });
   const [lastRequest, setLastRequest] = useState<PendingRequest | null>(null);
@@ -545,7 +556,7 @@ export function ChatAgentPanel({
                         : () => onUseReply(view.result.displayText)
                     }
                   >
-                    Use in reply
+                    {useInReplyLabel}
                   </button>
                 ) : null}
                 <button
@@ -587,7 +598,7 @@ export function ChatAgentPanel({
               </div>
               {showingTranslateResult && justInsertedTranslation ? (
                 <p className="dvx-muted" style={{ fontSize: "0.72rem" }}>
-                  Translation added to the reply box.
+                  {useInReplyConfirmationText}
                 </p>
               ) : null}
               {isDraftResult || (showingTranslateResult && translateResultShowsUseInReply) ? (

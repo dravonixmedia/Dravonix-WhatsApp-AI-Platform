@@ -61,12 +61,13 @@ export function DraivaWorkspace({ conversations }: { conversations: Conversation
     setCopyHint(false);
   }
 
-  // Preferred safe behaviour (this workspace has no reply composer of its
-  // own to fill, and no safe way exists to prefill a *different* route's
-  // composer from here without inventing a fragile cross-route draft
-  // mechanism -- see the "Open conversation" link below instead): copy the
-  // result so nothing generated is ever silently lost, matching the
-  // panel's own always-available "Copy" action.
+  // Wired to ChatAgentPanel's draft-result button, relabeled "Copy Draft"
+  // here (see useInReplyLabel below) precisely because this is all it does:
+  // this workspace has no reply composer of its own to fill, and no safe
+  // way exists to prefill a *different* route's composer from here without
+  // inventing a fragile cross-route draft mechanism -- see the "Open
+  // conversation" link below instead. Copying keeps nothing generated ever
+  // silently lost.
   function handleUseInReply(text: string) {
     void navigator.clipboard.writeText(text);
     setCopyHint(true);
@@ -214,6 +215,8 @@ export function DraivaWorkspace({ conversations }: { conversations: Conversation
             onClose={() => setSelectedId(null)}
             currentDraft=""
             onUseReply={handleUseInReply}
+            useInReplyLabel="Copy Draft"
+            useInReplyConfirmationText="Copied to clipboard."
           />
         ) : (
           <div className="dvx-workspace-center">
