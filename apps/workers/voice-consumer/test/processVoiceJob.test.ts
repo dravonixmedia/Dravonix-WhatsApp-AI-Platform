@@ -1,6 +1,6 @@
 import { MockAiProvider } from "@dravonix/ai";
 import type { EntitlementRepository, EntitlementSnapshot } from "@dravonix/billing";
-import type { ConversationState } from "@dravonix/core";
+import { resolveConversationTemporalContext, type ConversationState } from "@dravonix/core";
 import type {
   HandoverWorkerRepository,
   MessageChannelType,
@@ -58,6 +58,11 @@ function baseConversationContext(
       customerReplyPreference: null,
       lastDetectedLanguage: null,
     },
+    temporal: resolveConversationTemporalContext({
+      companyTimezone: "Asia/Kolkata",
+      customerTimezone: null,
+      now: new Date("2026-01-15T09:00:00.000Z"),
+    }),
     waId: "919820000001",
     phoneNumberId: "TEST_PHONE_NUMBER_ID",
     voiceSettings: {
@@ -275,6 +280,25 @@ describe("processVoiceJob", () => {
     expect(repo.recordedGeneratedAudio).toHaveLength(1);
     expect(handoverRepo.getOutboundStatus("msg-1", "text")).toBe("sent");
     expect(handoverRepo.getOutboundStatus("msg-1", "audio")).toBe("sent");
+  });
+
+  it("passes the conversation's resolved temporal context through to the AI generation input, identically to the text pipeline (Global Timezone + Daypart Awareness)", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    repo.context = baseConversationContext({
+      temporal: resolveConversationTemporalContext({
+        companyTimezone: "Asia/Dubai",
+        customerTimezone: "Europe/London",
+        now: new Date("2026-06-10T10:00:00.000Z"),
+      }),
+    });
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(aiProvider.calls).toHaveLength(1);
+    const temporal = aiProvider.calls[0]?.input.temporal;
+    expect(temporal?.company.timezone).toBe("Asia/Dubai");
+    expect(temporal?.customer.timezone).toBe("Europe/London");
+    expect(temporal?.customer.timezoneKnown).toBe(true);
   });
 
   it("sends exactly one text and one voice reply per inbound message across a simulated redelivery, without re-synthesizing", async () => {

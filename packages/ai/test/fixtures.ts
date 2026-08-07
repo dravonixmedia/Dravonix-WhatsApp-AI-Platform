@@ -1,3 +1,4 @@
+import { resolveConversationTemporalContext } from "@dravonix/core";
 import type { AiGenerationInput } from "../src/provider.js";
 
 export function makeInput(overrides: Partial<AiGenerationInput> = {}): AiGenerationInput {
@@ -33,6 +34,11 @@ export function makeInput(overrides: Partial<AiGenerationInput> = {}): AiGenerat
     },
     knowledge: [],
     customerMessage: "Hi, what services do you offer?",
+    temporal: resolveConversationTemporalContext({
+      companyTimezone: "Asia/Kolkata",
+      customerTimezone: null,
+      now: new Date("2026-01-15T09:00:00.000Z"),
+    }),
     ...overrides,
   };
 }

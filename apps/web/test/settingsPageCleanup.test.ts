@@ -102,7 +102,16 @@ describe("Settings page: honest subscription placeholder", () => {
     ]) {
       expect(source).not.toContain(forbidden);
     }
-    expect(source).not.toContain("<form");
+    // Scoped to the subscription-status card specifically -- the Company
+    // Details card legitimately gained a real Business Timezone form
+    // (Global Timezone + Daypart Awareness), so a whole-file "no <form>"
+    // check would no longer distinguish "no fake subscription UI" from
+    // "no forms anywhere on the page" at all.
+    const subscriptionCardMatch = source.match(
+      /<SectionCard title="Subscription status">[\s\S]*?<\/SectionCard>/,
+    );
+    expect(subscriptionCardMatch).not.toBeNull();
+    expect(subscriptionCardMatch?.[0]).not.toContain("<form");
   });
 
   it("never queries a subscriptions/plans/entitlements table", () => {

@@ -16,12 +16,14 @@ import {
   pauseAiAction,
   resumeAiAction,
 } from "../../../../lib/actions/handover.js";
+import { getDashboardCapabilities } from "../../../../lib/permissions.js";
 import { RealtimeRefreshBoundary } from "../../../../lib/realtime/RealtimeRefreshBoundary.js";
 import { CONVERSATION_DETAIL_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { Avatar } from "../../Avatar.js";
 import { AiModeBadge, ConversationStateBadge } from "../../badges.js";
+import { CustomerTimezoneField } from "../../CustomerTimezoneField.js";
 import { WhatsAppIcon } from "../../Icons.js";
 import { loadContactSummary } from "../../loadContactSummary.js";
 import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
@@ -51,6 +53,7 @@ export default async function ConversationDetailPage({
 
   const session = await getDashboardSession();
   if (!session) return null;
+  const capabilities = getDashboardCapabilities(session.activeRole);
 
   const supabase = await createServerSupabaseClient();
   const repo = new SupabaseHandoverRepository(supabase);
@@ -255,6 +258,13 @@ export default async function ConversationDetailPage({
                       {contact.lastDetectedLanguage}
                     </dd>
                   </div>
+                ) : null}
+                {contact ? (
+                  <CustomerTimezoneField
+                    contactId={contact.contactId}
+                    timezone={contact.timezone}
+                    canEdit={capabilities.canReplyToConversations}
+                  />
                 ) : null}
               </dl>
             </div>

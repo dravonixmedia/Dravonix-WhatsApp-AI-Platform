@@ -1,3 +1,4 @@
+import { resolveConversationTemporalContext } from "@dravonix/core";
 import { describe, expect, it } from "vitest";
 import { buildChatAgentSystemPrompt } from "../../src/chatAgent/systemPrompt.js";
 import type { ChatAgentInput } from "../../src/chatAgent/types.js";
@@ -19,6 +20,11 @@ function baseInput(overrides: Partial<ChatAgentInput> = {}): ChatAgentInput {
     conversation: { state: "human_active", aiMode: "active" },
     contact: null,
     lead: null,
+    temporal: resolveConversationTemporalContext({
+      companyTimezone: "Asia/Kolkata",
+      customerTimezone: null,
+      now: new Date("2026-01-15T09:00:00.000Z"),
+    }),
     ...overrides,
   };
 }

@@ -1,8 +1,10 @@
+import type { ConversationTemporalContext } from "@dravonix/core";
 import type {
   CompanyAiContext,
   ConversationMemoryContext,
   RetrievedKnowledgeSnippet,
 } from "../provider.js";
+import { renderTemporalContextBlock, TEMPORAL_PROMPT_RULES } from "./temporalPromptBlock.js";
 
 /**
  * Assembles the system prompt for a single Claude call: company identity, tone,
@@ -15,8 +17,12 @@ export function buildSystemPrompt(
   company: CompanyAiContext,
   memory: ConversationMemoryContext,
   knowledge: RetrievedKnowledgeSnippet[],
+  temporal: ConversationTemporalContext,
 ): string {
   const sections: string[] = [];
+
+  sections.push(renderTemporalContextBlock(temporal));
+  sections.push(["TEMPORAL RULES:", ...TEMPORAL_PROMPT_RULES].join("\n"));
 
   sections.push(
     `You are ${company.botName}, the WhatsApp assistant for ${company.companyName}. ` +

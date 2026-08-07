@@ -7,6 +7,10 @@ import {
   type ChatAgentLeadContext,
   type ChatAgentMessage,
 } from "@dravonix/ai";
+import {
+  resolveConversationTemporalContext,
+  type ConversationTemporalContext,
+} from "@dravonix/core";
 
 export interface ChatAgentContext {
   messages: ChatAgentMessage[];
@@ -14,6 +18,7 @@ export interface ChatAgentContext {
   company: ChatAgentCompanyContext;
   contact: ChatAgentContactContext | null;
   lead: ChatAgentLeadContext | null;
+  temporal: ConversationTemporalContext;
 }
 
 /**
@@ -54,7 +59,7 @@ export async function loadChatAgentContext(
   threadMessages: ConversationThreadMessage[],
 ): Promise<ChatAgentContext> {
   const [companyResult, settingsResult, contactResult, leadResult] = await Promise.all([
-    supabase.from("companies").select("name").eq("id", companyId).single(),
+    supabase.from("companies").select("name, timezone").eq("id", companyId).single(),
     supabase
       .from("company_settings")
       .select("tone, enabled_languages, fallback_language, restricted_topics")
@@ -62,7 +67,9 @@ export async function loadChatAgentContext(
       .maybeSingle(),
     supabase
       .from("conversations")
-      .select("contacts (whatsapp_wa_id, display_name, profile_name, last_detected_language)")
+      .select(
+        "contacts (whatsapp_wa_id, display_name, profile_name, last_detected_language, timezone)",
+      )
       .eq("id", conversationId)
       .eq("company_id", companyId)
       .maybeSingle(),
@@ -92,6 +99,7 @@ export async function loadChatAgentContext(
     display_name: string | null;
     profile_name: string | null;
     last_detected_language: string | null;
+    timezone: string | null;
   };
   const rawContact = contactResult.data?.contacts as ContactRow | ContactRow[] | null | undefined;
   const contactRow = Array.isArray(rawContact) ? rawContact[0] : rawContact;
@@ -118,5 +126,12 @@ export async function loadChatAgentContext(
       }
     : null;
 
-  return { messages, historyTruncated: truncated, company, contact, lead };
+  // Computed here, at request execution time -- never at module scope.
+  const temporal = resolveConversationTemporalContext({
+    companyTimezone: companyResult.data?.timezone,
+    customerTimezone: contactRow?.timezone,
+    now: new Date(),
+  });
+
+  return { messages, historyTruncated: truncated, company, contact, lead, temporal };
 }

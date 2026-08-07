@@ -129,11 +129,15 @@ export function buildActionInstruction(input: ChatAgentInput): string {
           : "";
       return (
         `Translate the text below into ${languageName}, preserving its exact original meaning.${malayalamGuidance} ` +
-        "Preserve names, prices, currencies, dates, times, phone numbers, URLs, email addresses, company names, " +
-        "product names, and brand names exactly as written -- do not localize or alter them. Preserve emojis where they appear, and keep the " +
-        "original paragraph structure. Do not add any promise, price, date, meeting confirmation, callback " +
-        "confirmation, or any other detail that is not already present in the source text. Respond with ONLY " +
-        "the translated text -- no preamble, no labels, no quotation marks, no JSON.\n\n" +
+        "Preserve names, prices, currencies, dates, times, timezone names, UTC offsets, phone numbers, URLs, " +
+        "email addresses, company names, product names, and brand names exactly as written -- do not localize " +
+        'or alter them. Translate relative temporal phrases (e.g. "tomorrow morning", "tonight", "this ' +
+        'evening", "later today") into their natural equivalent in the target language, but never reinterpret ' +
+        "them into a different or more specific date/time just because the text is being translated -- " +
+        "translation changes the language, not the scheduling meaning. Preserve emojis where they appear, and " +
+        "keep the original paragraph structure. Do not add any promise, price, date, meeting confirmation, " +
+        "callback confirmation, or any other detail that is not already present in the source text. Respond " +
+        "with ONLY the translated text -- no preamble, no labels, no quotation marks, no JSON.\n\n" +
         `Text to translate:\n${input.staffDraft}`
       );
     }

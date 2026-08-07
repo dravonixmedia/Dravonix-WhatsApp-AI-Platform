@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { maskPhoneNumber } from "@dravonix/handover";
+import { updateCompanyTimezoneAction } from "../../../lib/actions/timezone.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
+import { listSupportedTimezones } from "../../../lib/timezoneList.js";
 
 export const dynamic = "force-dynamic";
 
@@ -147,7 +149,43 @@ export default async function SettingsPage() {
               value={company?.status ? company.status.replace(/_/g, " ") : null}
             />
             <SettingsRow label="Admin email" value={adminEmail} />
-            <SettingsRow label="Time zone" value={company?.timezone ?? null} />
+            <div style={{ padding: "0.6rem 0", borderTop: "1px solid var(--border-default)" }}>
+              <label
+                htmlFor="business-timezone"
+                style={{ fontSize: "0.8rem", fontWeight: 600, display: "block" }}
+              >
+                Business Timezone
+              </label>
+              <p className="dvx-muted" style={{ fontSize: "0.75rem", margin: "0.15rem 0 0.5rem" }}>
+                Used for business hours, operational dates and company-local scheduling context.
+              </p>
+              <form
+                action={async (formData) => {
+                  "use server";
+                  await updateCompanyTimezoneAction(String(formData.get("timezone")));
+                }}
+                style={{ display: "flex", gap: "0.5rem" }}
+              >
+                <input
+                  id="business-timezone"
+                  name="timezone"
+                  list="timezone-options"
+                  defaultValue={company?.timezone ?? ""}
+                  placeholder="e.g. Asia/Kolkata"
+                  className="dvx-input"
+                  style={{ flex: 1 }}
+                  autoComplete="off"
+                />
+                <datalist id="timezone-options">
+                  {listSupportedTimezones().map((tz) => (
+                    <option key={tz} value={tz} />
+                  ))}
+                </datalist>
+                <button className="dvx-button dvx-button--secondary" type="submit">
+                  Save
+                </button>
+              </form>
+            </div>
             <SettingsRow label="Currency" value={company?.default_currency ?? null} />
             <SettingsRow
               label="Created"
