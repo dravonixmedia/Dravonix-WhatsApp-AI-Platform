@@ -43,4 +43,12 @@ describe("CurrencySelect: accessible native dropdown", () => {
     expect(source).not.toContain("company.timezone");
     expect(source).not.toContain("p_timezone");
   });
+
+  it("imports its Server Action directly rather than receiving it as a prop (Failed to fetch fix)", () => {
+    expect(source).toMatch(
+      /^import \{ updateCompanyCurrencyAction \} from "\.\.\/\.\.\/\.\.\/lib\/actions\/currency\.js";$/m,
+    );
+    expect(source).not.toContain("onSave");
+    expect(source).toContain("await updateCompanyCurrencyAction(value)");
+  });
 });

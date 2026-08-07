@@ -1,53 +1,51 @@
 "use client";
 
 import { useId, useMemo, useState, useTransition, type KeyboardEvent } from "react";
+import { updateCompanyTimezoneAction } from "../../../lib/actions/timezone.js";
 
 /**
  * Accessible searchable timezone combobox (ARIA combobox + listbox
- * pattern). Replaces the earlier <input list>+<datalist> approach for two
- * confirmed, non-speculative reasons:
+ * pattern). Two confirmed, non-speculative fixes over the prior build:
  *
- * 1. Native <datalist> has no visible "more options exist" affordance --
- *    once the field is pre-filled with the saved value, it just looks like
- *    a plain text box with one value in it, with no indicator that
- *    hundreds of other options exist underneath.
- * 2. Intl.supportedValuesOf("timeZone") -- the previous option source --
- *    only returns ICU's "canonical" zone IDs and omits legacy-but-valid
- *    aliases. Verified directly: it does not include "Asia/Kolkata" (ICU
- *    canonicalizes to "Asia/Calcutta"), which is companies.timezone's own
- *    database default. A company whose saved timezone was still the
- *    default would find its own value absent from the option list --
- *    exactly the reported "selector only shows Asia/Kolkata, nothing else
- *    is selectable" symptom, not a UI-only issue. lib/timezoneList.ts now
- *    patches this specific, verified gap; this component additionally
- *    guarantees the current value is always present regardless (below),
- *    as defense in depth against any other company's saved value that
- *    happens to be some other legacy alias.
+ * 1. "Failed to fetch" on save: the prior version received the Server
+ *    Action via an `onSave` prop passed down from the Server Component
+ *    (page.tsx) instead of importing it directly inside this "use client"
+ *    file. Every other working client mutation in this codebase (see
+ *    ReplyComposer.tsx, ReconcileAiMessageForm.tsx) imports its Server
+ *    Action directly in the client file and calls it inside
+ *    startTransition -- none of them receive it as a prop. This component
+ *    now matches that exact, already-proven-on-staging pattern.
+ * 2. Combobox opened showing only the current value: the prior version
+ *    used one `query` state both as the input's displayed text AND as the
+ *    filter string, pre-filled with the saved value. On open, before the
+ *    user typed anything, the filter narrowed to substring matches of the
+ *    current value -- which is only ever itself. `selectedValue` (the
+ *    committed value) and `searchQuery` (the filter, starts empty) are now
+ *    tracked separately: the full list shows on open, filtering only
+ *    starts once the user actually types.
  *
  * The `options` list is supplied by the server (lib/timezoneList.ts) --
  * this component only filters/selects among values it was given (plus the
- * guaranteed-present initialValue), and only ever calls `onSave` with a
- * string taken verbatim from that combined list, never arbitrary typed
- * text.
+ * guaranteed-present initialValue), and only ever saves a string taken
+ * verbatim from that combined list, never arbitrary typed text.
  */
 export function TimezoneCombobox({
   label,
   helpText,
   initialValue,
   options,
-  onSave,
   saveLabel = "Save Timezone",
 }: {
   label: string;
   helpText: string;
   initialValue: string;
   options: readonly string[];
-  onSave: (timezone: string) => Promise<void>;
   saveLabel?: string;
 }) {
   const inputId = useId();
   const listboxId = useId();
-  const [query, setQuery] = useState(initialValue);
+  const [selectedValue, setSelectedValue] = useState(initialValue);
+  const [searchQuery, setSearchQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [status, setStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
@@ -59,17 +57,22 @@ export function TimezoneCombobox({
     return [initialValue, ...options];
   }, [options, initialValue]);
 
+  // Empty searchQuery means "not actively searching" -- show the full list
+  // (still capped for render performance), not a filter of the selected value.
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
     const matches =
       q.length === 0 ? allOptions : allOptions.filter((tz) => tz.toLowerCase().includes(q));
     return matches.slice(0, 50);
-  }, [allOptions, query]);
+  }, [allOptions, searchQuery]);
 
-  const isValidSelection = allOptions.includes(query.trim());
+  const displayValue = searchQuery.length > 0 ? searchQuery : selectedValue;
+  const effectiveValue = displayValue.trim();
+  const isValidSelection = allOptions.includes(effectiveValue);
 
   function selectOption(value: string) {
-    setQuery(value);
+    setSelectedValue(value);
+    setSearchQuery("");
     setOpen(false);
     setStatus("idle");
   }
@@ -90,16 +93,19 @@ export function TimezoneCombobox({
       }
     } else if (event.key === "Escape") {
       setOpen(false);
+      setSearchQuery("");
     }
   }
 
   function handleSave() {
     if (!isValidSelection) return;
-    const value = query.trim();
+    const value = effectiveValue;
     setStatus("saving");
     startTransition(async () => {
       try {
-        await onSave(value);
+        await updateCompanyTimezoneAction(value);
+        setSelectedValue(value);
+        setSearchQuery("");
         setStatus("success");
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "Unable to save timezone");
@@ -139,9 +145,9 @@ export function TimezoneCombobox({
             aria-controls={listboxId}
             aria-activedescendant={activeOptionId}
             autoComplete="off"
-            value={query}
+            value={displayValue}
             onChange={(event) => {
-              setQuery(event.target.value);
+              setSearchQuery(event.target.value);
               setOpen(true);
               setActiveIndex(0);
               setStatus("idle");

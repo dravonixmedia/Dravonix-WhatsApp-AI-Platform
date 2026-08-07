@@ -1,7 +1,5 @@
 import Link from "next/link";
 import { maskPhoneNumber } from "@dravonix/handover";
-import { updateCompanyCurrencyAction } from "../../../lib/actions/currency.js";
-import { updateCompanyTimezoneAction } from "../../../lib/actions/timezone.js";
 import { listSupportedCurrencies } from "../../../lib/currencyList.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
@@ -158,7 +156,6 @@ export default async function SettingsPage() {
               helpText="Used for business hours, operational dates and company-local scheduling context."
               initialValue={company?.timezone ?? ""}
               options={listSupportedTimezones()}
-              onSave={updateCompanyTimezoneAction}
               saveLabel="Save Timezone"
             />
             <CurrencySelect
@@ -166,7 +163,6 @@ export default async function SettingsPage() {
               helpText="Used for financial values, billing displays and business-level monetary settings."
               initialValue={company?.default_currency ?? "INR"}
               currencies={listSupportedCurrencies()}
-              onSave={updateCompanyCurrencyAction}
               saveLabel="Save Currency"
             />
             <SettingsRow

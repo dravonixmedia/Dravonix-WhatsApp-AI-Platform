@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { updateCompanyCurrencyAction } from "../../../lib/actions/currency.js";
 import type { SupportedCurrency } from "../../../lib/currencyList.js";
 
 /**
@@ -10,20 +11,24 @@ import type { SupportedCurrency } from "../../../lib/currencyList.js";
  * complexity; a native <select> is already fully keyboard- and
  * screen-reader-accessible. Entirely independent of TimezoneCombobox: no
  * shared state, no timezone->currency or currency->timezone lookup.
+ *
+ * Imports its Server Action directly rather than receiving it as a prop --
+ * see TimezoneCombobox.tsx's identical note: every other working client
+ * mutation in this codebase (ReplyComposer.tsx, ReconcileAiMessageForm.tsx)
+ * imports its Server Action directly, and passing one as a prop from a
+ * Server Component was the confirmed cause of the "Failed to fetch" bug.
  */
 export function CurrencySelect({
   label,
   helpText,
   initialValue,
   currencies,
-  onSave,
   saveLabel = "Save Currency",
 }: {
   label: string;
   helpText: string;
   initialValue: string;
   currencies: readonly SupportedCurrency[];
-  onSave: (currency: string) => Promise<void>;
   saveLabel?: string;
 }) {
   const [value, setValue] = useState(initialValue);
@@ -35,7 +40,7 @@ export function CurrencySelect({
     setStatus("saving");
     startTransition(async () => {
       try {
-        await onSave(value);
+        await updateCompanyCurrencyAction(value);
         setStatus("success");
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "Unable to save currency");

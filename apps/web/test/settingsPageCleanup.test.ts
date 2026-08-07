@@ -16,6 +16,14 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, "..");
 const source = readFileSync(join(webRoot, "app/dashboard/settings/page.tsx"), "utf8");
+const timezoneComboboxSource = readFileSync(
+  join(webRoot, "app/dashboard/settings/TimezoneCombobox.tsx"),
+  "utf8",
+);
+const currencySelectSource = readFileSync(
+  join(webRoot, "app/dashboard/settings/CurrencySelect.tsx"),
+  "utf8",
+);
 
 function withoutComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -145,7 +153,14 @@ describe("Settings page: Business Timezone selector", () => {
   });
 
   it("saves through the existing updateCompanyTimezoneAction Server Action, not a new duplicate one", () => {
-    expect(source).toContain("onSave={updateCompanyTimezoneAction}");
+    // The Server Action is imported directly inside TimezoneCombobox.tsx
+    // itself (not passed down as a prop from page.tsx) -- passing it as a
+    // prop from a Server Component was the confirmed cause of the
+    // deployed "Failed to fetch" bug; see timezoneCombobox.test.ts.
+    expect(source).not.toContain("updateCompanyTimezoneAction");
+    expect(timezoneComboboxSource).toContain(
+      'import { updateCompanyTimezoneAction } from "../../../lib/actions/timezone.js";',
+    );
   });
 
   it("no longer uses the native <input list>+<datalist> pattern", () => {
@@ -172,7 +187,12 @@ describe("Settings page: Business Currency selector", () => {
   });
 
   it("saves through a dedicated updateCompanyCurrencyAction Server Action, reusing the existing default_currency column", () => {
-    expect(source).toContain("onSave={updateCompanyCurrencyAction}");
+    // Imported directly inside CurrencySelect.tsx, not passed as a prop --
+    // see the identical note above for TimezoneCombobox.
+    expect(source).not.toContain("updateCompanyCurrencyAction");
+    expect(currencySelectSource).toContain(
+      'import { updateCompanyCurrencyAction } from "../../../lib/actions/currency.js";',
+    );
   });
 
   it("is no longer a read-only SettingsRow", () => {
@@ -182,11 +202,10 @@ describe("Settings page: Business Currency selector", () => {
 
 describe("Settings page: Business Timezone and Business Currency are independent", () => {
   it("the two selectors are wired to two distinct Server Actions, never a shared handler", () => {
-    const timezoneCallIndex = source.indexOf("onSave={updateCompanyTimezoneAction}");
-    const currencyCallIndex = source.indexOf("onSave={updateCompanyCurrencyAction}");
-    expect(timezoneCallIndex).toBeGreaterThan(-1);
-    expect(currencyCallIndex).toBeGreaterThan(-1);
-    expect(timezoneCallIndex).not.toBe(currencyCallIndex);
+    expect(timezoneComboboxSource).toContain("updateCompanyTimezoneAction");
+    expect(currencySelectSource).toContain("updateCompanyCurrencyAction");
+    expect(timezoneComboboxSource).not.toContain("updateCompanyCurrencyAction");
+    expect(currencySelectSource).not.toContain("updateCompanyTimezoneAction");
   });
 
   it("the currency selector's initialValue never derives from the timezone field, and vice versa", () => {
