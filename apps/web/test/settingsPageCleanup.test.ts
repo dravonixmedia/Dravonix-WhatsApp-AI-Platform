@@ -29,6 +29,21 @@ function withoutComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+describe("Settings page: Company Settings identity", () => {
+  it("has the exact required heading and supporting text", () => {
+    expect(source).toContain(">Company Settings<");
+    expect(source).toContain(
+      "Manage your company profile, business preferences and workspace configuration.",
+    );
+  });
+
+  it("never renders Team Settings content -- no member list, role, or team-member badges", () => {
+    for (const forbidden of ["Team members", "Team Settings", "maskMemberId", "ROLE_LABELS"]) {
+      expect(source).not.toContain(forbidden);
+    }
+  });
+});
+
 describe("Settings page: tenant scoping", () => {
   it("resolves the company via the server-derived session, never a client-supplied companyId", () => {
     expect(source).toContain('.eq("id", session.activeCompanyId)');
@@ -42,12 +57,6 @@ describe("Settings page: tenant scoping", () => {
     for (const arg of idFilters) {
       expect(arg).toBe("session.activeCompanyId");
     }
-  });
-
-  it("scopes the team-members query to the caller's own company_id", () => {
-    expect(source).toMatch(
-      /from\("company_members"\)[\s\S]{0,150}?\.eq\("company_id",\s*session\.activeCompanyId\)/,
-    );
   });
 
   it("never accepts a companyId parameter on the page's own exported function", () => {
@@ -65,15 +74,9 @@ describe("Settings page: permission gating", () => {
     expect(source).toContain("capabilities.canManageSettings ? (");
   });
 
-  it("gates the team-members query and card behind capabilities.canManageTeam", () => {
-    expect(source).toMatch(
-      /capabilities\.canManageTeam\s*\?\s*supabase\s*\.from\("company_members"\)/,
-    );
-    expect(source).toContain("capabilities.canManageTeam ? (");
-  });
-
-  it("never fetches company_members data when the caller lacks canManageTeam -- not just a hidden UI element", () => {
-    expect(source).toContain("const members = capabilities.canManageTeam ? (membersResult.data");
+  it("never queries company_members -- team management moved to its own /dashboard/team route", () => {
+    expect(source).not.toContain('.from("company_members")');
+    expect(source).not.toContain("canManageTeam");
   });
 
   it("gates the subscription-status card behind capabilities.canManageBilling", () => {

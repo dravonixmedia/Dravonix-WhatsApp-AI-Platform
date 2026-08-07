@@ -10,6 +10,15 @@ export interface NavLinkItem {
   label: string;
   icon: React.ReactNode;
   badgeCount?: number;
+  /**
+   * When true, this entry is only active on an exact pathname match --
+   * never on a sub-route. Needed for Company Settings (/dashboard/settings):
+   * WhatsApp Connection (/dashboard/settings/whatsapp) is a distinct sidebar
+   * destination nested one level below it, and without this flag the default
+   * prefix-match behavior would highlight both entries simultaneously while
+   * viewing WhatsApp Connection.
+   */
+  exact?: boolean;
 }
 
 /**
@@ -24,8 +33,8 @@ export interface NavLinkItem {
  */
 export type SidebarNavEntry = ({ kind: "link" } & NavLinkItem) | { kind: "draiva"; href: string };
 
-function isActive(pathname: string, href: string): boolean {
-  if (href === "/dashboard") return pathname === "/dashboard";
+function isActive(pathname: string, href: string, exact?: boolean): boolean {
+  if (href === "/dashboard" || exact) return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -77,7 +86,7 @@ export function NavLinks({ entries }: { entries: SidebarNavEntry[] }) {
           );
         }
 
-        const active = isActive(pathname, entry.href);
+        const active = isActive(pathname, entry.href, entry.exact);
         return (
           <Link
             key={entry.href}

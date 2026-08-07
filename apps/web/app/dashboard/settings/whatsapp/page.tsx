@@ -106,14 +106,7 @@ export default async function WhatsAppConnectionPage() {
           />
         </div>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-            gap: "1rem",
-            marginTop: "1.5rem",
-          }}
-        >
+        <div className="dvx-card-grid dvx-card-grid--wide" style={{ marginTop: "1.5rem" }}>
           <div className="dvx-card">
             <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>
               Business account

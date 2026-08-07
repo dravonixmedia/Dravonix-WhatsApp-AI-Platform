@@ -129,14 +129,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ lea
         </p>
       ) : null}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: "1rem",
-          marginTop: "1.5rem",
-        }}
-      >
+      <div className="dvx-card-grid dvx-card-grid--narrow" style={{ marginTop: "1.5rem" }}>
         <div className="dvx-card">
           <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.6rem" }}>
             Contact

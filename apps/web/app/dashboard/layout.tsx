@@ -17,6 +17,7 @@ import {
   HandoverIcon,
   LeadsIcon,
   OverviewIcon,
+  SearchIcon,
   SettingsIcon,
   WhatsAppIcon,
 } from "./Icons.js";
@@ -45,13 +46,17 @@ export const dynamic = "force-dynamic";
  * now redirects to Settings, which shows an honest "not configured"
  * subscription-status card instead -- see app/dashboard/billing/page.tsx).
  *
- * The former single "Settings" entry is split into two nav cards that both
- * point at the same, unchanged /dashboard/settings route (different anchors
- * only) -- Team Settings requires canManageTeam, Company Settings requires
- * canManageSettings or canManageBilling, so their union exactly reproduces
- * the original combined gate: no role that could see Settings before loses
- * sidebar access now (e.g. billing_viewer, canManageBilling only, still sees
- * Company Settings). WhatsApp Connection keeps its own gate/route unchanged.
+ * The former single "Settings" entry is split into two nav cards pointing at
+ * two genuinely distinct routes -- Team Settings (/dashboard/team, people
+ * and access; requires canManageTeam) and Company Settings (/dashboard/settings,
+ * company configuration; requires canManageSettings or canManageBilling), so
+ * their union exactly reproduces the original combined gate: no role that
+ * could see Settings before loses sidebar access now (e.g. billing_viewer,
+ * canManageBilling only, still sees Company Settings). An earlier version of
+ * this split pointed both entries at the same /dashboard/settings route with
+ * different URL anchors only, which made the two sidebar destinations render
+ * as the same page -- see app/dashboard/team/page.tsx's docstring. WhatsApp
+ * Connection keeps its own gate/route unchanged.
  *
  * Notifications and DRAIVA are both real, dedicated dashboard destinations
  * (/dashboard/notifications, /dashboard/draiva) -- plain links, like every
@@ -102,7 +107,7 @@ export function buildNavItems(
   if (capabilities.canManageTeam) {
     entries.push({
       kind: "link",
-      href: "/dashboard/settings#team-members",
+      href: "/dashboard/team",
       label: "Team Settings",
       icon: <SettingsIcon />,
     });
@@ -110,9 +115,10 @@ export function buildNavItems(
   if (capabilities.canManageSettings || capabilities.canManageBilling) {
     entries.push({
       kind: "link",
-      href: "/dashboard/settings#company-details",
+      href: "/dashboard/settings",
       label: "Company Settings",
       icon: <SettingsIcon />,
+      exact: true,
     });
   }
   if (capabilities.canManageWhatsapp) {
@@ -332,6 +338,25 @@ export default async function DashboardLayout({ children }: { children: React.Re
           }}
         >
           <header className="dvx-topbar">
+            {/* Mobile-only search toggle: pure CSS (:checked ~ sibling), same
+                pattern as the sidebar drawer's #dvx-nav-toggle above -- below
+                the collapse breakpoint the full search bar is hidden by
+                default and this reveals it as its own row instead of letting
+                it overlap the notification bell/profile area. Search
+                functionality itself is never removed, only relocated. */}
+            <input
+              type="checkbox"
+              id="dvx-search-toggle"
+              className="dvx-topbar-search-toggle-input"
+              aria-label="Toggle search"
+            />
+            <label
+              htmlFor="dvx-search-toggle"
+              className="dvx-topbar-search-toggle-label"
+              aria-hidden="true"
+            >
+              <SearchIcon size={18} />
+            </label>
             <GlobalSearch />
 
             <div className="dvx-topbar-actions">
@@ -341,7 +366,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
                     "use server";
                     await switchCompanyAction(String(formData.get("companyId")));
                   }}
-                  style={{ display: "flex", gap: "0.35rem" }}
+                  className="dvx-company-switcher"
                 >
                   <select
                     name="companyId"
@@ -377,6 +402,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
                 <summary>
                   <Avatar label={session.email ?? "?"} size={32} />
                   <span
+                    className="dvx-user-menu-label"
                     style={{
                       display: "flex",
                       flexDirection: "column",
