@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ReplyComposer } from "./handover/[conversationId]/ReplyComposer.js";
 import { ChatAgentPanel } from "./ChatAgentPanel.js";
 import { SparkleIcon } from "./Icons.js";
@@ -16,6 +16,19 @@ import { SparkleIcon } from "./Icons.js";
 export function ConversationComposerWithAssistant({ conversationId }: { conversationId: string }) {
   const [draft, setDraft] = useState("");
   const [assistantOpen, setAssistantOpen] = useState(false);
+
+  // Sidebar polish phase: the "DRAIVA" sidebar entry has no panel of its
+  // own -- it opens this same, already-mounted assistant via a plain DOM
+  // event (see NavLinks.tsx's handleDraivaClick) rather than lifting this
+  // state or duplicating ChatAgentPanel elsewhere. Purely additive: nothing
+  // about the "Ask DRAIVA" button below changes.
+  useEffect(() => {
+    function handleOpenDraiva() {
+      setAssistantOpen(true);
+    }
+    window.addEventListener("dvx:open-draiva", handleOpenDraiva);
+    return () => window.removeEventListener("dvx:open-draiva", handleOpenDraiva);
+  }, []);
 
   return (
     <div style={{ position: "relative" }}>
