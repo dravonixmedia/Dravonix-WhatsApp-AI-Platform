@@ -63,9 +63,13 @@ describe("notification bell wiring", () => {
     expect(bellSource).not.toMatch(/setInterval/);
   });
 
-  it("the Human Handover nav badge is hidden at zero and capped via formatBadgeCount", () => {
-    expect(navLinksSource).toMatch(/handoverBadgeCount > 0 \?/);
-    expect(navLinksSource).toContain("formatBadgeCount(handoverBadgeCount)");
+  it("the sidebar nav badges (Human Handover, Notifications) are hidden at zero and capped via formatBadgeCount", () => {
+    // NavLinks.tsx renders one generalized badge for any entry with a
+    // positive badgeCount -- Human Handover and Notifications both flow
+    // through it (see layout.tsx's buildNavItems wiring their real counts
+    // into badgeCount, asserted in navItems.test.ts).
+    expect(navLinksSource).toMatch(/badgeCount > 0 \?/);
+    expect(navLinksSource).toContain("formatBadgeCount(");
   });
 
   it("mounts a tenant-scoped RealtimeRefreshBoundary in the shell so the bell/nav badge (and every wrapped page) stay live -- not just pages with their own list-specific boundary", () => {

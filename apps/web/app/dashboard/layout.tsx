@@ -11,6 +11,7 @@ import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
 import { GlobalSearch } from "./GlobalSearch.js";
 import {
+  BellIcon,
   ChevronDownIcon,
   ConversationsIcon,
   HandoverIcon,
@@ -19,8 +20,9 @@ import {
   SettingsIcon,
   WhatsAppIcon,
 } from "./Icons.js";
-import { NavLinks, type NavLinkItem } from "./NavLinks.js";
+import { NavLinks, type SidebarNavEntry } from "./NavLinks.js";
 import { NotificationBell } from "./NotificationBell.js";
+import { NotificationPanelProvider } from "./NotificationPanelContext.js";
 
 // Every /dashboard/* route depends on the request's session cookie (real
 // Supabase Auth, Human Handover Inbox final plan section 15) -- never
@@ -30,49 +32,98 @@ import { NotificationBell } from "./NotificationBell.js";
 // sets real provider secrets by design -- see .github/workflows/ci.yml).
 export const dynamic = "force-dynamic";
 
-const HANDOVER_NAV_ITEM: NavLinkItem = {
-  href: "/dashboard/handover",
-  label: "Human Handover",
-  icon: <HandoverIcon />,
-};
-
 /**
  * Nav is built per-request from the caller's real, permission-derived
- * capabilities -- never a hardcoded email or role string. Knowledge Base is
- * omitted entirely (no client-ready management module exists yet -- see
- * app/dashboard/knowledge/page.tsx). Billing is also omitted: it has no
- * client-ready subscription system yet either (its route now redirects to
- * Settings, which shows an honest "not configured" subscription-status
- * card instead -- see app/dashboard/billing/page.tsx). Settings is shown to
- * any role holding at least one of the permissions a Settings section is
- * gated on (company details, team, or billing), and WhatsApp Connection
- * only to roles holding its own permission, so an agent or viewer never
- * sees a link to a page RLS or the page itself would then have to reject
- * them from.
+ * capabilities -- never a hardcoded email or role string. Order is fixed by
+ * the approved sidebar design (final dashboard UI/UX polish phase): Overview,
+ * Live Conversations, Human Handover, Leads, Notifications, DRAIVA, Team
+ * Settings, Company Settings, WhatsApp Connection.
+ *
+ * Knowledge Base is omitted entirely (no client-ready management module
+ * exists yet -- see app/dashboard/knowledge/page.tsx). Billing is also
+ * omitted: it has no client-ready subscription system yet either (its route
+ * now redirects to Settings, which shows an honest "not configured"
+ * subscription-status card instead -- see app/dashboard/billing/page.tsx).
+ *
+ * The former single "Settings" entry is split into two nav cards that both
+ * point at the same, unchanged /dashboard/settings route (different anchors
+ * only) -- Team Settings requires canManageTeam, Company Settings requires
+ * canManageSettings or canManageBilling, so their union exactly reproduces
+ * the original combined gate: no role that could see Settings before loses
+ * sidebar access now (e.g. billing_viewer, canManageBilling only, still sees
+ * Company Settings). WhatsApp Connection keeps its own gate/route unchanged.
+ *
+ * Notifications and DRAIVA are both real, dedicated dashboard destinations
+ * (/dashboard/notifications, /dashboard/draiva) -- plain links, like every
+ * other item here, not popups or shortcuts (see those routes' own
+ * page.tsx for the workspaces themselves). The top-right notification bell
+ * is a separate, compact affordance that keeps working unchanged; the
+ * sidebar item no longer toggles it. DRAIVA is gated on
+ * canReplyToConversations -- the same permission that already controls
+ * whether ConversationComposerWithAssistant renders the "Ask DRAIVA" entry
+ * point at all (see conversations/[conversationId]/page.tsx and
+ * handover/[conversationId]/page.tsx), and that /dashboard/draiva's own
+ * page.tsx re-checks server-side. Human Handover stays unconditional,
+ * matching its pre-existing (RLS-backed) visibility.
  */
 export function buildNavItems(
   capabilities: ReturnType<typeof getDashboardCapabilities>,
-): NavLinkItem[] {
-  const items: NavLinkItem[] = [
-    { href: "/dashboard", label: "Overview", icon: <OverviewIcon /> },
-    { href: "/dashboard/conversations", label: "Live Conversations", icon: <ConversationsIcon /> },
-    { href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> },
+  badgeCounts: { handover: number; notifications: number },
+): SidebarNavEntry[] {
+  const entries: SidebarNavEntry[] = [
+    { kind: "link", href: "/dashboard", label: "Overview", icon: <OverviewIcon /> },
+    {
+      kind: "link",
+      href: "/dashboard/conversations",
+      label: "Live Conversations",
+      icon: <ConversationsIcon />,
+    },
+    {
+      kind: "link",
+      href: "/dashboard/handover",
+      label: "Human Handover",
+      icon: <HandoverIcon />,
+      badgeCount: badgeCounts.handover,
+    },
+    { kind: "link", href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> },
+    {
+      kind: "link",
+      href: "/dashboard/notifications",
+      label: "Notifications",
+      icon: <BellIcon size={18} />,
+      badgeCount: badgeCounts.notifications,
+    },
   ];
-  if (
-    capabilities.canManageSettings ||
-    capabilities.canManageTeam ||
-    capabilities.canManageBilling
-  ) {
-    items.push({ href: "/dashboard/settings", label: "Settings", icon: <SettingsIcon /> });
+
+  if (capabilities.canReplyToConversations) {
+    entries.push({ kind: "draiva", href: "/dashboard/draiva" });
+  }
+
+  if (capabilities.canManageTeam) {
+    entries.push({
+      kind: "link",
+      href: "/dashboard/settings#team-members",
+      label: "Team Settings",
+      icon: <SettingsIcon />,
+    });
+  }
+  if (capabilities.canManageSettings || capabilities.canManageBilling) {
+    entries.push({
+      kind: "link",
+      href: "/dashboard/settings#company-details",
+      label: "Company Settings",
+      icon: <SettingsIcon />,
+    });
   }
   if (capabilities.canManageWhatsapp) {
-    items.push({
+    entries.push({
+      kind: "link",
       href: "/dashboard/settings/whatsapp",
       label: "WhatsApp Connection",
       icon: <WhatsAppIcon size={18} />,
     });
   }
-  return items;
+  return entries;
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -152,7 +203,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
       maskedPhoneNumber: item.maskedPhoneNumber,
     }));
   const capabilities = getDashboardCapabilities(session.activeRole);
-  const navItems = buildNavItems(capabilities);
+  const navEntries = buildNavItems(capabilities, {
+    handover: handoverBadgeCount,
+    notifications: notificationSummary.totalUnreadCustomerMessages,
+  });
 
   const roleLabel = ROLE_LABELS[session.activeRole] ?? session.activeRole;
   const activeCompanyName =
@@ -161,213 +215,212 @@ export default async function DashboardLayout({ children }: { children: React.Re
     "";
 
   return (
-    <div style={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
-      <RealtimeRefreshBoundary
-        namespace="dashboard-shell"
-        scopeId={session.activeCompanyId}
-        accessToken={session.accessToken}
-        watches={DASHBOARD_SHELL_WATCHES}
-      />
-      <input
-        type="checkbox"
-        id="dvx-nav-toggle"
-        className="dvx-nav-toggle-input"
-        aria-label="Toggle navigation menu"
-      />
-      <label htmlFor="dvx-nav-toggle" className="dvx-nav-toggle-label" aria-hidden="true">
-        <BrandIcon size={22} />
-      </label>
-      <a href="#dvx-main-content" className="dvx-skip-link">
-        Skip to content
-      </a>
-      <aside
-        id="dvx-sidebar-nav"
-        className="dvx-sidebar"
-        style={{
-          width: 240,
-          flexShrink: 0,
-          height: "100%",
-          overflowY: "auto",
-          background: "var(--surface-elevated)",
-          borderRight: "1px solid var(--border-default)",
-          padding: "1.25rem 1rem",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <div
-          style={{ marginBottom: "1.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}
-        >
-          <BrandLogo height={26} />
-        </div>
-
-        <div
-          className="dvx-card"
-          style={{
-            padding: "0.6rem 0.75rem",
-            marginBottom: "1.25rem",
-            display: "flex",
-            flexDirection: "column",
-            gap: "0.15rem",
-          }}
-        >
-          <span className="dvx-muted" style={{ fontSize: "0.68rem", textTransform: "uppercase" }}>
-            Current company
-          </span>
-          <span style={{ fontSize: "0.85rem", fontWeight: 600 }} title={activeCompanyName}>
-            {activeCompanyName}
-          </span>
-          <span
-            className="dvx-badge dvx-badge--neutral"
-            style={{ alignSelf: "flex-start", marginTop: "0.3rem" }}
-          >
-            {roleLabel}
-          </span>
-        </div>
-
-        <NavLinks
-          items={navItems}
-          handover={HANDOVER_NAV_ITEM}
-          handoverBadgeCount={handoverBadgeCount}
+    <NotificationPanelProvider>
+      <div style={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
+        <RealtimeRefreshBoundary
+          namespace="dashboard-shell"
+          scopeId={session.activeCompanyId}
+          accessToken={session.accessToken}
+          watches={DASHBOARD_SHELL_WATCHES}
         />
-
-        <div
-          style={{
-            marginTop: "auto",
-            paddingTop: "1rem",
-            borderTop: "1px solid var(--border-default)",
-          }}
-        >
-          <div
-            className="dvx-muted"
-            style={{
-              fontSize: "0.75rem",
-              marginBottom: "0.5rem",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-            title={session.email ?? undefined}
-          >
-            {session.email}
-          </div>
-          <form action={logoutAction}>
-            <button
-              className="dvx-button dvx-button--secondary"
-              type="submit"
-              style={{ width: "100%" }}
+        <input
+          type="checkbox"
+          id="dvx-nav-toggle"
+          className="dvx-nav-toggle-input"
+          aria-label="Toggle navigation menu"
+        />
+        <label htmlFor="dvx-nav-toggle" className="dvx-nav-toggle-label" aria-hidden="true">
+          <BrandIcon size={22} />
+        </label>
+        <a href="#dvx-main-content" className="dvx-skip-link">
+          Skip to content
+        </a>
+        <aside id="dvx-sidebar-nav" className="dvx-sidebar">
+          <div className="dvx-sidebar-panel">
+            <div
+              style={{
+                marginBottom: "1.5rem",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                flexShrink: 0,
+              }}
             >
-              Sign out
-            </button>
-          </form>
-        </div>
-      </aside>
+              <BrandLogo height={26} />
+            </div>
 
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          minHeight: 0,
-          height: "100%",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-      >
-        <header className="dvx-topbar">
-          <GlobalSearch />
-
-          <div className="dvx-topbar-actions">
-            {session.memberships.length > 1 ? (
-              <form
-                action={async (formData) => {
-                  "use server";
-                  await switchCompanyAction(String(formData.get("companyId")));
-                }}
-                style={{ display: "flex", gap: "0.35rem" }}
+            <div
+              className="dvx-card"
+              style={{
+                padding: "0.6rem 0.75rem",
+                marginBottom: "1.25rem",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.15rem",
+                flexShrink: 0,
+              }}
+            >
+              <span
+                className="dvx-muted"
+                style={{ fontSize: "0.68rem", textTransform: "uppercase" }}
               >
-                <select
-                  name="companyId"
-                  defaultValue={session.activeCompanyId}
-                  className="dvx-input"
-                  style={{ fontSize: "0.8rem", width: "auto" }}
-                  aria-label="Switch company"
-                >
-                  {session.memberships.map((m) => (
-                    <option key={m.companyId} value={m.companyId}>
-                      {m.companyName || m.companySlug}
-                    </option>
-                  ))}
-                </select>
+                Current company
+              </span>
+              <span style={{ fontSize: "0.85rem", fontWeight: 600 }} title={activeCompanyName}>
+                {activeCompanyName}
+              </span>
+              <span
+                className="dvx-badge dvx-badge--neutral"
+                style={{ alignSelf: "flex-start", marginTop: "0.3rem" }}
+              >
+                {roleLabel}
+              </span>
+            </div>
+
+            <div className="dvx-sidebar-nav-scroll">
+              <NavLinks entries={navEntries} />
+            </div>
+
+            <div
+              style={{
+                marginTop: "auto",
+                paddingTop: "1rem",
+                borderTop: "1px solid var(--border-default)",
+                flexShrink: 0,
+              }}
+            >
+              <div
+                className="dvx-muted"
+                style={{
+                  fontSize: "0.75rem",
+                  marginBottom: "0.5rem",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                title={session.email ?? undefined}
+              >
+                {session.email}
+              </div>
+              <form action={logoutAction}>
                 <button
                   className="dvx-button dvx-button--secondary"
                   type="submit"
-                  style={{ fontSize: "0.8rem" }}
+                  style={{ width: "100%" }}
                 >
-                  Switch
+                  Sign out
                 </button>
               </form>
-            ) : null}
-
-            <NotificationBell
-              totalUnreadCustomerMessages={notificationSummary.totalUnreadCustomerMessages}
-              unreadConversations={notificationSummary.unreadConversations}
-              pendingHandoverRequests={pendingHandoverRequests}
-              unassignedHandovers={unassignedHandovers}
-            />
-
-            <details className="dvx-user-menu">
-              <summary>
-                <Avatar label={session.email ?? "?"} size={32} />
-                <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
-                  <span style={{ fontSize: "0.85rem", fontWeight: 600 }}>{roleLabel}</span>
-                  <span className="dvx-muted" style={{ fontSize: "0.72rem" }}>
-                    {activeCompanyName}
-                  </span>
-                </span>
-                <ChevronDownIcon />
-              </summary>
-              <div className="dvx-user-menu-panel">
-                <div
-                  className="dvx-muted"
-                  style={{
-                    fontSize: "0.78rem",
-                    marginBottom: "0.6rem",
-                    overflowWrap: "break-word",
-                  }}
-                >
-                  {session.email}
-                </div>
-                <form action={logoutAction}>
-                  <button
-                    className="dvx-button"
-                    type="submit"
-                    style={{ width: "100%", fontSize: "0.85rem" }}
-                  >
-                    Sign out
-                  </button>
-                </form>
-              </div>
-            </details>
+            </div>
           </div>
-        </header>
+        </aside>
 
-        <main
-          id="dvx-main-content"
+        <div
           style={{
             flex: 1,
             minWidth: 0,
             minHeight: 0,
-            padding: "1.5rem",
+            height: "100%",
             display: "flex",
             flexDirection: "column",
-            overflowY: "auto",
-            overflowX: "hidden",
+            overflow: "hidden",
           }}
         >
-          {children}
-        </main>
+          <header className="dvx-topbar">
+            <GlobalSearch />
+
+            <div className="dvx-topbar-actions">
+              {session.memberships.length > 1 ? (
+                <form
+                  action={async (formData) => {
+                    "use server";
+                    await switchCompanyAction(String(formData.get("companyId")));
+                  }}
+                  style={{ display: "flex", gap: "0.35rem" }}
+                >
+                  <select
+                    name="companyId"
+                    defaultValue={session.activeCompanyId}
+                    className="dvx-input"
+                    style={{ fontSize: "0.8rem", width: "auto" }}
+                    aria-label="Switch company"
+                  >
+                    {session.memberships.map((m) => (
+                      <option key={m.companyId} value={m.companyId}>
+                        {m.companyName || m.companySlug}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="dvx-button dvx-button--secondary"
+                    type="submit"
+                    style={{ fontSize: "0.8rem" }}
+                  >
+                    Switch
+                  </button>
+                </form>
+              ) : null}
+
+              <NotificationBell
+                totalUnreadCustomerMessages={notificationSummary.totalUnreadCustomerMessages}
+                unreadConversations={notificationSummary.unreadConversations}
+                pendingHandoverRequests={pendingHandoverRequests}
+                unassignedHandovers={unassignedHandovers}
+              />
+
+              <details className="dvx-user-menu">
+                <summary>
+                  <Avatar label={session.email ?? "?"} size={32} />
+                  <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
+                    <span style={{ fontSize: "0.85rem", fontWeight: 600 }}>{roleLabel}</span>
+                    <span className="dvx-muted" style={{ fontSize: "0.72rem" }}>
+                      {activeCompanyName}
+                    </span>
+                  </span>
+                  <ChevronDownIcon />
+                </summary>
+                <div className="dvx-user-menu-panel">
+                  <div
+                    className="dvx-muted"
+                    style={{
+                      fontSize: "0.78rem",
+                      marginBottom: "0.6rem",
+                      overflowWrap: "break-word",
+                    }}
+                  >
+                    {session.email}
+                  </div>
+                  <form action={logoutAction}>
+                    <button
+                      className="dvx-button"
+                      type="submit"
+                      style={{ width: "100%", fontSize: "0.85rem" }}
+                    >
+                      Sign out
+                    </button>
+                  </form>
+                </div>
+              </details>
+            </div>
+          </header>
+
+          <main
+            id="dvx-main-content"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              padding: "1.5rem",
+              display: "flex",
+              flexDirection: "column",
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
+          >
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </NotificationPanelProvider>
   );
 }

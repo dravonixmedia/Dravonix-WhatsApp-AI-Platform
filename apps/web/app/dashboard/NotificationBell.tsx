@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { formatBadgeCount } from "../../lib/notificationBadge.js";
 import { BellIcon } from "./Icons.js";
+import { useNotificationPanel } from "./NotificationPanelContext.js";
 
 export interface AttentionHandoverItem {
   conversationId: string;
@@ -29,6 +30,10 @@ export interface AttentionUnreadItem {
  * exists for a single conversation (called when its detail page loads,
  * per final plan section 16) but there is no supported bulk/dismiss RPC,
  * so opening this panel intentionally does NOT change any of these counts.
+ *
+ * Open/closed state lives in NotificationPanelContext (not local useState)
+ * so the sidebar's "Notifications" entry can open this same panel without
+ * a second, duplicate notification UI -- see NotificationPanelContext.tsx.
  */
 export function NotificationBell({
   totalUnreadCustomerMessages,
@@ -41,18 +46,18 @@ export function NotificationBell({
   pendingHandoverRequests: AttentionHandoverItem[];
   unassignedHandovers: AttentionHandoverItem[];
 }) {
-  const [open, setOpen] = useState(false);
+  const { open, toggle, close } = useNotificationPanel();
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
+        close();
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [close]);
 
   const hasAnything =
     unreadConversations.length > 0 ||
@@ -67,7 +72,7 @@ export function NotificationBell({
         aria-label={`Notifications: ${totalUnreadCustomerMessages} unread customer message${totalUnreadCustomerMessages === 1 ? "" : "s"}`}
         aria-expanded={open}
         aria-controls="dvx-notification-panel"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
       >
         <BellIcon />
         {totalUnreadCustomerMessages > 0 ? (
@@ -91,7 +96,7 @@ export function NotificationBell({
                       key={item.conversationId}
                       href={`/dashboard/conversations/${item.conversationId}`}
                       className="dvx-search-result"
-                      onClick={() => setOpen(false)}
+                      onClick={close}
                     >
                       <span style={{ fontWeight: 600 }}>{item.displayName}</span>
                       <span className="dvx-muted" style={{ fontSize: "0.78rem" }}>
@@ -110,7 +115,7 @@ export function NotificationBell({
                       key={item.conversationId}
                       href={`/dashboard/handover/${item.conversationId}`}
                       className="dvx-search-result"
-                      onClick={() => setOpen(false)}
+                      onClick={close}
                     >
                       <span style={{ fontWeight: 600 }}>{item.maskedPhoneNumber}</span>
                       <span className="dvx-muted" style={{ fontSize: "0.78rem" }}>
@@ -129,7 +134,7 @@ export function NotificationBell({
                       key={item.conversationId}
                       href={`/dashboard/handover/${item.conversationId}`}
                       className="dvx-search-result"
-                      onClick={() => setOpen(false)}
+                      onClick={close}
                     >
                       <span style={{ fontWeight: 600 }}>{item.maskedPhoneNumber}</span>
                       <span className="dvx-muted" style={{ fontSize: "0.78rem" }}>
@@ -145,7 +150,7 @@ export function NotificationBell({
                   href="/dashboard/handover"
                   className="dvx-muted"
                   style={{ fontSize: "0.8rem", display: "inline-block", padding: "0.4rem" }}
-                  onClick={() => setOpen(false)}
+                  onClick={close}
                 >
                   Open Human Handover Inbox →
                 </Link>

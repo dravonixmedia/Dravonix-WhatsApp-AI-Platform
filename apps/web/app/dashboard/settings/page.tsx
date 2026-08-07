@@ -34,9 +34,17 @@ function SettingsRow({ label, value }: { label: string; value: string | null }) 
   );
 }
 
-function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+function SectionCard({
+  id,
+  title,
+  children,
+}: {
+  id?: string;
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="dvx-card">
+    <div id={id} className="dvx-card" style={{ scrollMarginTop: "1.5rem" }}>
       <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>{title}</div>
       {children}
     </div>
@@ -132,7 +140,7 @@ export default async function SettingsPage() {
         }}
       >
         {capabilities.canManageSettings ? (
-          <SectionCard title="Company details">
+          <SectionCard id="company-details" title="Company details">
             <SettingsRow label="Company name" value={company?.name ?? null} />
             <SettingsRow
               label="Account status"
@@ -149,7 +157,7 @@ export default async function SettingsPage() {
         ) : null}
 
         {capabilities.canManageTeam ? (
-          <SectionCard title="Team members">
+          <SectionCard id="team-members" title="Team members">
             {members.length === 0 ? (
               <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
                 No team members found.
