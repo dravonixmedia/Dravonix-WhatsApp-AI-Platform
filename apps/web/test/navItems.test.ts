@@ -99,7 +99,7 @@ describe("dashboard sidebar navigation", () => {
     const block = layoutSource.match(/if \(capabilities\.canManageTeam\) \{[\s\S]*?\}/);
     expect(block).not.toBeNull();
     expect(block?.[0]).toContain('label: "Team Settings"');
-    expect(block?.[0]).toContain("/dashboard/settings");
+    expect(block?.[0]).toContain('href: "/dashboard/team"');
   });
 
   it("gates Company Settings so its union with Team Settings reproduces the original combined Settings gate (canManageSettings || canManageTeam || canManageBilling) -- no role loses sidebar access", () => {
@@ -109,7 +109,27 @@ describe("dashboard sidebar navigation", () => {
     expect(block).not.toBeNull();
     expect(block?.[0]).toContain("capabilities.canManageBilling");
     expect(block?.[0]).toContain('label: "Company Settings"');
-    expect(block?.[0]).toContain("/dashboard/settings");
+    expect(block?.[0]).toContain('href: "/dashboard/settings"');
+  });
+
+  it("Team Settings and Company Settings point at two genuinely distinct routes, not the same route with different anchors", () => {
+    const teamBlock = layoutSource.match(/if \(capabilities\.canManageTeam\) \{[\s\S]*?\}/)?.[0];
+    const companyBlock = layoutSource.match(
+      /if \(\s*capabilities\.canManageSettings[\s\S]*?\) \{[\s\S]*?\}/,
+    )?.[0];
+    expect(teamBlock).not.toContain("#");
+    expect(companyBlock).not.toContain("#");
+    const teamHrefMatch = teamBlock?.match(/href:\s*"([^"]+)"/);
+    const companyHrefMatch = companyBlock?.match(/href:\s*"([^"]+)"/);
+    expect(teamHrefMatch?.[1]).not.toBe(companyHrefMatch?.[1]);
+  });
+
+  it("marks Company Settings exact-match only, so it never highlights while viewing the nested WhatsApp Connection sub-route", () => {
+    const companyBlock = layoutSource.match(
+      /if \(\s*capabilities\.canManageSettings[\s\S]*?\) \{[\s\S]*?\}/,
+    );
+    expect(companyBlock).not.toBeNull();
+    expect(companyBlock?.[0]).toContain("exact: true");
   });
 
   it("the Billing route itself redirects rather than rendering a fabricated placeholder plan", () => {

@@ -1,3 +1,5 @@
+import type { ConversationTemporalContext } from "@dravonix/core";
+
 export interface CompanyAiContext {
   companyId: string;
   companyName: string;
@@ -41,6 +43,13 @@ export interface AiGenerationInput {
   memory: ConversationMemoryContext;
   knowledge: RetrievedKnowledgeSnippet[];
   customerMessage: string;
+  /**
+   * Server-side-resolved company/customer local date, time, and daypart for
+   * this exact request (Global Timezone + Daypart Awareness). Computed once
+   * per request from the caller's real stored timezones -- never inferred
+   * from phone number, never a module-scope `new Date()`.
+   */
+  temporal: ConversationTemporalContext;
   /**
    * The language actually detected for THIS turn's inbound message (e.g. a
    * voice note's STT-detected language), when known -- takes priority over

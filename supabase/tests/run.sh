@@ -71,6 +71,12 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_handover.sql"
 echo "Running dashboard Realtime (migration 13) assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_realtime.sql"
 
+echo "Running Global Timezone + Daypart Awareness (migration 14) RLS/RPC hardening assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_timezone.sql"
+
+echo "Running Business Currency (migration 15) RLS/RPC hardening + timezone independence assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_currency.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
@@ -133,5 +139,8 @@ psql "$LEGACY_DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_handov
 
 echo "[legacy-upgrade] Re-running dashboard Realtime (migration 13) assertions against the upgraded database..."
 psql "$LEGACY_DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_realtime.sql"
+
+echo "[legacy-upgrade] Re-running Global Timezone + Daypart Awareness (migration 14) assertions against the upgraded database..."
+psql "$LEGACY_DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_timezone.sql"
 
 echo "All legacy-upgrade regression tests passed."

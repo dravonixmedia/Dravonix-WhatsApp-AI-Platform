@@ -1,4 +1,4 @@
-import type { AiMode, ConversationState } from "@dravonix/core";
+import type { AiMode, ConversationState, ConversationTemporalContext } from "@dravonix/core";
 import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
 
 export interface ConversationContext {
@@ -8,6 +8,8 @@ export interface ConversationContext {
   aiMode: AiMode;
   aiContext: CompanyAiContext;
   memory: ConversationMemoryContext;
+  /** Resolved from the company's and contact's stored timezones at load time (Global Timezone + Daypart Awareness). */
+  temporal: ConversationTemporalContext;
   waId: string;
   phoneNumberId: string;
 }

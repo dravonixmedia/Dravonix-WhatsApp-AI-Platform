@@ -296,14 +296,7 @@ export default async function DashboardOverviewPage() {
         </div>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-          gap: "1rem",
-          marginTop: "1.5rem",
-        }}
-      >
+      <div className="dvx-card-grid" style={{ marginTop: "1.5rem" }}>
         <div className="dvx-card" style={{ padding: 0 }}>
           <div className="dvx-panel-header">
             <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Recent conversations</span>

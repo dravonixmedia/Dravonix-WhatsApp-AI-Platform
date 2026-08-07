@@ -1,3 +1,7 @@
+import {
+  renderTemporalContextBlock,
+  TEMPORAL_PROMPT_RULES,
+} from "../prompt/temporalPromptBlock.js";
 import type { ChatAgentInput } from "./types.js";
 
 const SENDER_LABELS: Record<string, string> = {
@@ -94,6 +98,14 @@ export function buildChatAgentSystemPrompt(input: ChatAgentInput): string {
     company.restrictedTopics.length > 0
       ? `Restricted topics (never discuss or promise anything about these): ${company.restrictedTopics.join(", ")}`
       : "No company-specific restricted topics configured.",
+    "",
+    renderTemporalContextBlock(input.temporal),
+    "",
+    ["TEMPORAL RULES:", ...TEMPORAL_PROMPT_RULES].join("\n"),
+    'This has two distinct uses here: interpret phrases the CUSTOMER said in the transcript (e.g. "tomorrow ' +
+      'morning", "tonight") using the CUSTOMER local time above; interpret a STAFF MEMBER\'s own question to ' +
+      'you (e.g. "what should we do this afternoon?") using the BUSINESS local time above, unless their ' +
+      "question clearly refers to the customer's timing instead.",
     "",
     "=== CONVERSATION STATE ===",
     `Conversation lifecycle state: ${conversation.state}`,

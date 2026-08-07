@@ -16,10 +16,33 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, "..");
 const source = readFileSync(join(webRoot, "app/dashboard/settings/page.tsx"), "utf8");
+const timezoneComboboxSource = readFileSync(
+  join(webRoot, "app/dashboard/settings/TimezoneCombobox.tsx"),
+  "utf8",
+);
+const currencySelectSource = readFileSync(
+  join(webRoot, "app/dashboard/settings/CurrencySelect.tsx"),
+  "utf8",
+);
 
 function withoutComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
+
+describe("Settings page: Company Settings identity", () => {
+  it("has the exact required heading and supporting text", () => {
+    expect(source).toContain(">Company Settings<");
+    expect(source).toContain(
+      "Manage your company profile, business preferences and workspace configuration.",
+    );
+  });
+
+  it("never renders Team Settings content -- no member list, role, or team-member badges", () => {
+    for (const forbidden of ["Team members", "Team Settings", "maskMemberId", "ROLE_LABELS"]) {
+      expect(source).not.toContain(forbidden);
+    }
+  });
+});
 
 describe("Settings page: tenant scoping", () => {
   it("resolves the company via the server-derived session, never a client-supplied companyId", () => {
@@ -34,12 +57,6 @@ describe("Settings page: tenant scoping", () => {
     for (const arg of idFilters) {
       expect(arg).toBe("session.activeCompanyId");
     }
-  });
-
-  it("scopes the team-members query to the caller's own company_id", () => {
-    expect(source).toMatch(
-      /from\("company_members"\)[\s\S]{0,150}?\.eq\("company_id",\s*session\.activeCompanyId\)/,
-    );
   });
 
   it("never accepts a companyId parameter on the page's own exported function", () => {
@@ -57,15 +74,9 @@ describe("Settings page: permission gating", () => {
     expect(source).toContain("capabilities.canManageSettings ? (");
   });
 
-  it("gates the team-members query and card behind capabilities.canManageTeam", () => {
-    expect(source).toMatch(
-      /capabilities\.canManageTeam\s*\?\s*supabase\s*\.from\("company_members"\)/,
-    );
-    expect(source).toContain("capabilities.canManageTeam ? (");
-  });
-
-  it("never fetches company_members data when the caller lacks canManageTeam -- not just a hidden UI element", () => {
-    expect(source).toContain("const members = capabilities.canManageTeam ? (membersResult.data");
+  it("never queries company_members -- team management moved to its own /dashboard/team route", () => {
+    expect(source).not.toContain('.from("company_members")');
+    expect(source).not.toContain("canManageTeam");
   });
 
   it("gates the subscription-status card behind capabilities.canManageBilling", () => {
@@ -102,7 +113,16 @@ describe("Settings page: honest subscription placeholder", () => {
     ]) {
       expect(source).not.toContain(forbidden);
     }
-    expect(source).not.toContain("<form");
+    // Scoped to the subscription-status card specifically -- the Company
+    // Details card legitimately gained a real Business Timezone form
+    // (Global Timezone + Daypart Awareness), so a whole-file "no <form>"
+    // check would no longer distinguish "no fake subscription UI" from
+    // "no forms anywhere on the page" at all.
+    const subscriptionCardMatch = source.match(
+      /<SectionCard title="Subscription status">[\s\S]*?<\/SectionCard>/,
+    );
+    expect(subscriptionCardMatch).not.toBeNull();
+    expect(subscriptionCardMatch?.[0]).not.toContain("<form");
   });
 
   it("never queries a subscriptions/plans/entitlements table", () => {
@@ -115,6 +135,95 @@ describe("Settings page: honest subscription placeholder", () => {
     ]) {
       expect(source).not.toContain(`.from("${table}")`);
     }
+  });
+});
+
+describe("Settings page: Business Timezone selector", () => {
+  it("renders TimezoneCombobox with the exact required label and supporting text", () => {
+    expect(source).toContain('label="Business Timezone"');
+    expect(source).toContain(
+      'helpText="Used for business hours, operational dates and company-local scheduling context."',
+    );
+    expect(source).toContain('saveLabel="Save Timezone"');
+  });
+
+  it("sources its options from listSupportedTimezones(), never a hardcoded list", () => {
+    expect(source).toContain("options={listSupportedTimezones()}");
+  });
+
+  it("pre-fills the current company timezone from the server-resolved company row", () => {
+    expect(source).toContain('initialValue={company?.timezone ?? ""}');
+  });
+
+  it("saves through the existing updateCompanyTimezoneAction Server Action, not a new duplicate one", () => {
+    // The Server Action is imported directly inside TimezoneCombobox.tsx
+    // itself (not passed down as a prop from page.tsx) -- passing it as a
+    // prop from a Server Component was the confirmed cause of the
+    // deployed "Failed to fetch" bug; see timezoneCombobox.test.ts.
+    expect(source).not.toContain("updateCompanyTimezoneAction");
+    expect(timezoneComboboxSource).toContain(
+      'import { updateCompanyTimezoneAction } from "../../../lib/actions/timezone.js";',
+    );
+  });
+
+  it("no longer uses the native <input list>+<datalist> pattern", () => {
+    expect(source).not.toContain("<datalist");
+    expect(source).not.toContain('list="timezone-options"');
+  });
+});
+
+describe("Settings page: Business Currency selector", () => {
+  it("renders CurrencySelect with the exact required label and supporting text", () => {
+    expect(source).toContain('label="Business Currency"');
+    expect(source).toContain(
+      'helpText="Used for financial values, billing displays and business-level monetary settings."',
+    );
+    expect(source).toContain('saveLabel="Save Currency"');
+  });
+
+  it("sources its options from listSupportedCurrencies(), never a hardcoded inline list", () => {
+    expect(source).toContain("currencies={listSupportedCurrencies()}");
+  });
+
+  it("pre-fills the current company currency from the server-resolved company row", () => {
+    expect(source).toMatch(/initialValue=\{company\?\.default_currency\s*\?\?\s*"INR"\}/);
+  });
+
+  it("saves through a dedicated updateCompanyCurrencyAction Server Action, reusing the existing default_currency column", () => {
+    // Imported directly inside CurrencySelect.tsx, not passed as a prop --
+    // see the identical note above for TimezoneCombobox.
+    expect(source).not.toContain("updateCompanyCurrencyAction");
+    expect(currencySelectSource).toContain(
+      'import { updateCompanyCurrencyAction } from "../../../lib/actions/currency.js";',
+    );
+  });
+
+  it("is no longer a read-only SettingsRow", () => {
+    expect(source).not.toContain('SettingsRow label="Currency"');
+  });
+});
+
+describe("Settings page: Business Timezone and Business Currency are independent", () => {
+  it("the two selectors are wired to two distinct Server Actions, never a shared handler", () => {
+    expect(timezoneComboboxSource).toContain("updateCompanyTimezoneAction");
+    expect(currencySelectSource).toContain("updateCompanyCurrencyAction");
+    expect(timezoneComboboxSource).not.toContain("updateCompanyCurrencyAction");
+    expect(currencySelectSource).not.toContain("updateCompanyTimezoneAction");
+  });
+
+  it("the currency selector's initialValue never derives from the timezone field, and vice versa", () => {
+    function extractSelfClosingTag(tag: string): string {
+      const start = source.indexOf(`<${tag}`);
+      expect(start).toBeGreaterThan(-1);
+      const end = source.indexOf("/>", start);
+      expect(end).toBeGreaterThan(start);
+      return source.slice(start, end);
+    }
+
+    const timezoneBlock = extractSelfClosingTag("TimezoneCombobox");
+    const currencyBlock = extractSelfClosingTag("CurrencySelect");
+    expect(timezoneBlock).not.toContain("default_currency");
+    expect(currencyBlock).not.toContain("company?.timezone");
   });
 });
 

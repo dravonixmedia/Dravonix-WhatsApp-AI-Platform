@@ -349,6 +349,7 @@ export async function processVoiceJob(
       knowledge,
       customerMessage: normalizedTranscript,
       currentDetectedLanguage: transcription.detectedLanguageCode,
+      temporal: context.temporal,
     },
   );
 

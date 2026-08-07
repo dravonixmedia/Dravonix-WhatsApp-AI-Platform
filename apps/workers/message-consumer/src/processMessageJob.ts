@@ -106,6 +106,7 @@ export async function processMessageJob(
         memory: context.memory,
         knowledge,
         customerMessage: payload.body,
+        temporal: context.temporal,
       },
     ));
   } catch (error) {

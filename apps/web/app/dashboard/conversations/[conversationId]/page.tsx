@@ -21,6 +21,7 @@ import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { Avatar } from "../../Avatar.js";
 import { AiModeBadge, ConversationStateBadge } from "../../badges.js";
+import { CustomerTimezoneField } from "../../CustomerTimezoneField.js";
 import { WhatsAppIcon } from "../../Icons.js";
 import { loadContactSummary } from "../../loadContactSummary.js";
 import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
@@ -306,6 +307,13 @@ export default async function ConversationDetailPage({
                       {new Date(contact.contactCreatedAt).toLocaleDateString()}
                     </dd>
                   </div>
+                ) : null}
+                {contact ? (
+                  <CustomerTimezoneField
+                    contactId={contact.contactId}
+                    timezone={contact.timezone}
+                    canEdit={capabilities.canReplyToConversations}
+                  />
                 ) : null}
               </dl>
             </div>

@@ -142,6 +142,42 @@ a {
   border-radius: var(--radius-large);
   padding: 1.5rem;
   box-shadow: var(--shadow-soft);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* ---------------------------------------------------------------------
+ * Shared responsive card grid -- Overview, Company Settings, WhatsApp
+ * Connection, lead detail. The desktop/tablet per-card minimum differs
+ * slightly by page (280px base, 300px for pages with denser content via
+ * the --wide modifier); every consumer collapses to a single column at
+ * <= 430px regardless of that minimum, so a two-column layout is never
+ * forced onto a narrow phone (Settings responsiveness, card
+ * responsiveness).
+ * ------------------------------------------------------------------- */
+.dvx-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.dvx-card-grid--wide {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.dvx-card-grid--narrow {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+@media (max-width: 430px) {
+  .dvx-card-grid,
+  .dvx-card-grid--wide,
+  .dvx-card-grid--narrow {
+    grid-template-columns: 1fr;
+  }
 }
 
 .dvx-card--elevated {
@@ -267,6 +303,48 @@ a {
   border: 1px solid var(--border-default);
 }
 
+/* ---------------------------------------------------------------------
+ * Team Settings member list. Not a <table> (no horizontal-scroll risk to
+ * begin with), but the desktop single-row layout (name left, role+status
+ * badges right) gets cramped once role/status badges no longer fit beside
+ * a long masked-id/email on narrow phones -- wraps to a stacked two-line
+ * row there instead of ever clipping or forcing horizontal scroll.
+ * ------------------------------------------------------------------- */
+
+.dvx-team-member-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.dvx-team-member-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.dvx-team-member-name {
+  font-size: 0.85rem;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.dvx-team-member-badges {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+@media (max-width: 390px) {
+  .dvx-team-member-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 .dvx-skeleton {
   background: linear-gradient(
     90deg,
@@ -390,6 +468,10 @@ a {
   .dvx-sidebar {
     position: fixed;
     inset: 0 auto 0 0;
+    /* Never lets the drawer feel edge-to-edge or exceed the viewport on the
+       narrowest phones (360/390px) -- still the full 312px on anything
+       roomier. */
+    max-width: min(312px, 88vw);
     transform: translateX(-100%);
     transition: transform 200ms ease;
     z-index: 55;
@@ -828,6 +910,96 @@ a {
   box-shadow: var(--shadow-soft);
   padding: 0.75rem;
   z-index: 30;
+}
+
+.dvx-company-switcher {
+  display: flex;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------------
+ * Compact mobile header: below the collapse breakpoint, the full search
+ * bar is hidden and replaced by a small icon-button toggle (same pure-CSS
+ * checkbox pattern as the sidebar drawer's #dvx-nav-toggle) that reveals
+ * the search bar as its own full-width row instead of letting it overlap
+ * the notification bell / profile area. The profile's name+company text is
+ * dropped at the narrowest widths, leaving just the avatar circle (the
+ * dropdown panel still shows the full name/company) -- expected mobile
+ * header structure: [drawer trigger] ... [search toggle] [bell] [avatar].
+ * ------------------------------------------------------------------- */
+
+.dvx-topbar-search-toggle-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.dvx-topbar-search-toggle-label {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .dvx-topbar {
+    flex-wrap: wrap;
+    row-gap: 0.6rem;
+  }
+
+  .dvx-topbar-search-toggle-label {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    border: 1px solid var(--border-default);
+    background: var(--surface-elevated);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .dvx-topbar-search-toggle-input:focus-visible + .dvx-topbar-search-toggle-label {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .dvx-topbar-search {
+    display: none;
+  }
+
+  .dvx-topbar-search-toggle-input:checked ~ .dvx-topbar-search {
+    display: flex;
+    order: 10;
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .dvx-topbar-actions {
+    margin-left: auto;
+    gap: 0.5rem;
+  }
+
+  .dvx-company-switcher {
+    max-width: 140px;
+  }
+
+  .dvx-company-switcher select {
+    min-width: 0;
+    max-width: 90px;
+  }
+
+  .dvx-company-switcher button {
+    padding: 0.5rem 0.6rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .dvx-user-menu-label {
+    display: none;
+  }
 }
 
 /* ---------------------------------------------------------------------

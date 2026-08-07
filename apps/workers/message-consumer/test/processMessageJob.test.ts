@@ -1,6 +1,6 @@
 import { MockAiProvider } from "@dravonix/ai";
 import type { EntitlementRepository, EntitlementSnapshot } from "@dravonix/billing";
-import type { ConversationState } from "@dravonix/core";
+import { resolveConversationTemporalContext, type ConversationState } from "@dravonix/core";
 import type {
   HandoverWorkerRepository,
   MessageChannelType,
@@ -56,6 +56,11 @@ function baseConversationContext(
       customerReplyPreference: null,
       lastDetectedLanguage: null,
     },
+    temporal: resolveConversationTemporalContext({
+      companyTimezone: "Asia/Kolkata",
+      customerTimezone: null,
+      now: new Date("2026-01-15T09:00:00.000Z"),
+    }),
     waId: "919820000001",
     phoneNumberId: "TEST_PHONE_NUMBER_ID",
     ...overrides,
@@ -214,6 +219,25 @@ describe("processMessageJob", () => {
     expect(aiProvider.calls).toHaveLength(1);
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentText[0]?.toWaId).toBe("919820000001");
+  });
+
+  it("passes the conversation's resolved temporal context through to the AI generation input unchanged (Global Timezone + Daypart Awareness)", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    repo.context = baseConversationContext({
+      temporal: resolveConversationTemporalContext({
+        companyTimezone: "Asia/Dubai",
+        customerTimezone: "Europe/London",
+        now: new Date("2026-06-10T10:00:00.000Z"),
+      }),
+    });
+
+    await processMessageJob(deps, makePayload());
+
+    expect(aiProvider.calls).toHaveLength(1);
+    const temporal = aiProvider.calls[0]?.input.temporal;
+    expect(temporal?.company.timezone).toBe("Asia/Dubai");
+    expect(temporal?.customer.timezone).toBe("Europe/London");
+    expect(temporal?.customer.timezoneKnown).toBe(true);
   });
 
   it("retrieves knowledge scoped to the company before generating a response", async () => {

@@ -1,5 +1,5 @@
 import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
-import type { AiMode, ConversationState } from "@dravonix/core";
+import type { AiMode, ConversationState, ConversationTemporalContext } from "@dravonix/core";
 import type { ReplyModeSetting } from "@dravonix/speech";
 
 export interface VoiceSettings {
@@ -20,6 +20,8 @@ export interface VoiceConversationContext {
   aiMode: AiMode;
   aiContext: CompanyAiContext;
   memory: ConversationMemoryContext;
+  /** Resolved from the company's and contact's stored timezones at load time -- same shape/source as message-consumer's, so text and transcribed voice never see different temporal behaviour. */
+  temporal: ConversationTemporalContext;
   waId: string;
   phoneNumberId: string;
   voiceSettings: VoiceSettings;

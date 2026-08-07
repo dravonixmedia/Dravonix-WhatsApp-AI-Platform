@@ -1,3 +1,5 @@
+import type { ConversationTemporalContext } from "@dravonix/core";
+
 /**
  * Dashboard Chat Agent (internal staff copilot -- NOT the customer-facing
  * WhatsApp AI, which remains entirely unchanged). Every type here describes
@@ -97,6 +99,8 @@ export interface ChatAgentInput {
   conversation: ChatAgentConversationState;
   contact: ChatAgentContactContext | null;
   lead: ChatAgentLeadContext | null;
+  /** Same resolver/shape as the automatic WhatsApp reply pipeline's -- see @dravonix/core's resolveConversationTemporalContext. */
+  temporal: ConversationTemporalContext;
   /** Required for rewrite_draft; optional context for suggest_reply. */
   staffDraft?: string;
   /** Required for translate. */

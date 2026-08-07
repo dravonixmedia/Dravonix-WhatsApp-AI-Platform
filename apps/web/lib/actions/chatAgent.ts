@@ -220,6 +220,7 @@ export async function chatAgentAction(
         conversation: { state: conversationState, aiMode },
         contact: context.contact,
         lead: context.lead,
+        temporal: context.temporal,
         staffDraft: input.draft,
         targetLanguage: input.targetLanguage,
         tone: input.tone,

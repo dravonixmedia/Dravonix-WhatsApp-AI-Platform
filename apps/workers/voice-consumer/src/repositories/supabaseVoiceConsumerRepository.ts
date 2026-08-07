@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
-import type { AiMode, ConversationState } from "@dravonix/core";
+import {
+  resolveConversationTemporalContext,
+  type AiMode,
+  type ConversationState,
+} from "@dravonix/core";
 import type { VoiceConsumerRepository, VoiceConversationContext } from "../repository.js";
 
 const RECENT_MESSAGE_LIMIT = 10;
@@ -19,7 +23,7 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
     const { data: conversation, error: conversationError } = await this.client
       .from("conversations")
       .select(
-        "company_id, contact_id, state, ai_mode, unresolved_questions, whatsapp_phone_number_id, contacts (whatsapp_wa_id, last_detected_language)",
+        "company_id, contact_id, state, ai_mode, unresolved_questions, whatsapp_phone_number_id, contacts (whatsapp_wa_id, last_detected_language, timezone)",
       )
       .eq("id", conversationId)
       .single();
@@ -29,6 +33,7 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
     const contact = conversation.contacts as unknown as {
       whatsapp_wa_id: string;
       last_detected_language: string | null;
+      timezone: string | null;
     };
 
     const [
@@ -41,7 +46,7 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
       leadResult,
       messagesResult,
     ] = await Promise.all([
-      this.client.from("companies").select("name").eq("id", companyId).single(),
+      this.client.from("companies").select("name, timezone").eq("id", companyId).single(),
       this.client.from("company_settings").select("*").eq("company_id", companyId).single(),
       this.client
         .from("ai_settings")
@@ -137,12 +142,23 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
       lastDetectedLanguage: contact?.last_detected_language ?? null,
     };
 
+    // Computed here, at request execution time -- never at module scope --
+    // so it can't go stale in a long-lived Cloudflare isolate. Same source
+    // and shape as SupabaseMessageConsumerRepository's, so a transcribed
+    // voice message and a text message get identical temporal behaviour.
+    const temporal = resolveConversationTemporalContext({
+      companyTimezone: companyResult.data.timezone,
+      customerTimezone: contact.timezone,
+      now: new Date(),
+    });
+
     return {
       companyId,
       conversationState: conversation.state as ConversationState,
       aiMode: conversation.ai_mode as AiMode,
       aiContext,
       memory,
+      temporal,
       waId: contact.whatsapp_wa_id,
       phoneNumberId,
       voiceSettings: {

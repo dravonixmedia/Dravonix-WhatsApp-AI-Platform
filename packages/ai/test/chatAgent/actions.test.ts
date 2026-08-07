@@ -131,7 +131,11 @@ describe("buildActionInstruction", () => {
     expect(instruction).toContain("Call us at +911234567890");
     expect(instruction).toMatch(/Hindi/);
     expect(instruction).toMatch(
-      /preserve names, prices, currencies, dates, times, phone numbers, urls/i,
+      /preserve names, prices, currencies, dates, times, timezone names, utc offsets, phone numbers, urls/i,
+    );
+    expect(instruction).toMatch(/translate relative temporal phrases/i);
+    expect(instruction).toMatch(
+      /never reinterpret them into a different or more specific date\/time/i,
     );
     expect(instruction).toMatch(/product names, and brand names/i);
     expect(instruction).toMatch(/preserve emojis where they appear/i);

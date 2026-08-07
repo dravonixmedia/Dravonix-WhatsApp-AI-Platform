@@ -28,7 +28,7 @@ export class AnthropicProvider implements AiProvider {
     input: AiGenerationInput,
     repairInstruction?: string,
   ): Promise<AiGenerationResult> {
-    const system = buildSystemPrompt(input.company, input.memory, input.knowledge);
+    const system = buildSystemPrompt(input.company, input.memory, input.knowledge, input.temporal);
 
     const messages: Anthropic.MessageParam[] = [
       ...input.memory.recentMessages.map((m) => ({
