@@ -1,5 +1,6 @@
 import { sanitizeKeyterms } from "../keytermSanitizer.js";
 import type { SpeechToTextInput, SpeechToTextProvider, SpeechToTextResult } from "../provider.js";
+import { elevenLabsErrorFromStatus, elevenLabsNetworkError } from "./elevenLabsError.js";
 
 export interface ElevenLabsSttConfig {
   apiKey: string;
@@ -58,17 +59,25 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
       formData.append("keyterms", term);
     }
 
-    const response = await fetch(this.baseUrl, {
-      method: "POST",
-      headers: { "xi-api-key": this.config.apiKey },
-      body: formData,
-    });
+    let response: Response;
+    try {
+      response = await fetch(this.baseUrl, {
+        method: "POST",
+        headers: { "xi-api-key": this.config.apiKey },
+        body: formData,
+      });
+    } catch (error) {
+      // Network-level failure (timeout, connection reset, DNS) -- no
+      // response to classify, always retryable. Never logs `error` itself
+      // upstream of this point since it may embed request detail.
+      throw elevenLabsNetworkError("speech-to-text", error);
+    }
 
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new Error(
-        `ElevenLabs speech-to-text request failed with status ${response.status}: ${body}`,
-      );
+      // The raw response body is deliberately never read here -- it may
+      // contain verbose account/request detail (voice pipeline reliability
+      // phase 7). Classification is status-code-only.
+      throw elevenLabsErrorFromStatus("speech-to-text", response.status);
     }
 
     const data = (await response.json()) as {

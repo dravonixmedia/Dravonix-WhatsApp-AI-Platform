@@ -1,4 +1,5 @@
 import type { TextToSpeechInput, TextToSpeechProvider, TextToSpeechResult } from "../provider.js";
+import { elevenLabsErrorFromStatus, elevenLabsNetworkError } from "./elevenLabsError.js";
 
 export interface ElevenLabsTtsConfig {
   apiKey: string;
@@ -89,20 +90,24 @@ export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
       }
     }
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "xi-api-key": this.config.apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "xi-api-key": this.config.apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      throw elevenLabsNetworkError("text-to-speech", error);
+    }
 
     if (!response.ok) {
-      const responseBody = await response.text().catch(() => "");
-      throw new Error(
-        `ElevenLabs text-to-speech request failed with status ${response.status}: ${responseBody}`,
-      );
+      // The raw response body is deliberately never read here -- see the
+      // identical note in elevenLabsSttProvider.ts.
+      throw elevenLabsErrorFromStatus("text-to-speech", response.status);
     }
 
     const audio = await response.arrayBuffer();

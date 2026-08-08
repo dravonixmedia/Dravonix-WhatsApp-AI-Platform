@@ -60,6 +60,15 @@ max_batch_size = 5
 max_retries = 3
 dead_letter_queue = "dravonix-voice-queue-staging-dlq"
 
+# Intentionally NOT bound as its own [[env.staging.queues.consumers]] entry
+# yet. src/worker.ts already has a triage-only handler for it
+# (handleVoiceDlqBatch, routed via batch.queue ending in "-dlq") and it is
+# unit-tested, but binding a consumer here would start draining
+# dravonix-voice-queue-staging-dlq's existing backlog on the next deploy.
+# Do not add a `[[queues.consumers]]` entry for the "-dlq" queue without
+# explicit approval -- see the voice pipeline reliability phase's DLQ
+# safety report.
+
 # ---------------------------------------------------------------------------
 # Production -- the long-lived live Worker (already deployed and serving real
 # WhatsApp traffic; see TASKS.md). Mirrors the top-level config so that
@@ -80,3 +89,6 @@ queue = "dravonix-voice-queue"
 max_batch_size = 5
 max_retries = 3
 dead_letter_queue = "dravonix-voice-queue-dlq"
+
+# Same note as env.staging above: dravonix-voice-queue-dlq intentionally has
+# no consumer binding of its own yet.

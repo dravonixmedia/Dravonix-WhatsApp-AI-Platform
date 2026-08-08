@@ -14,12 +14,14 @@ import {
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
 import type { Logger } from "@dravonix/observability";
 import {
+  ElevenLabsProviderError,
   isDominantlyMalayalam,
   normalizeTranscript,
   prepareMalayalamSpeechText,
   resolveReplyMode,
   sanitizeKeyterms,
   type SpeechToTextProvider,
+  type SpeechToTextResult,
   type TextToSpeechProvider,
 } from "@dravonix/speech";
 import { buildStorageKey, computeRetentionExpiry, type StorageProvider } from "@dravonix/storage";
@@ -55,6 +57,16 @@ export interface VoiceJobPayload {
   waId: string;
   mediaId: string;
   mimeType: string | null;
+  /**
+   * Queue envelope fields (apps/api/src/queuePayloads.ts's JobEnvelope) --
+   * always present on the wire, previously unused by this Worker. Recorded
+   * on job_failures rows (PHASE 8): jobId is stable across every
+   * redelivery/retry of the same logical job, so it doubles as a
+   * best-effort dedup key there.
+   */
+  jobId: string;
+  correlationId: string;
+  attempt: number;
 }
 
 /**
@@ -79,6 +91,8 @@ export interface VoiceConsumerDeps {
   storageProvider: StorageProvider;
   logger: Logger;
   voiceReplyMode: VoiceReplyMode;
+  /** Logical queue name recorded on job_failures rows (PHASE 8) -- the real Cloudflare queue this batch was delivered from, e.g. "dravonix-voice-queue-staging". */
+  queueName: string;
 }
 
 /** Maps our simple enabled-language codes to BCP-47 codes Google STT/TTS expect. */
@@ -172,86 +186,206 @@ export async function processVoiceJob(
     throw error;
   }
 
-  const media = await deps.whatsappProvider.getMediaMetadata(payload.mediaId);
-  const audioBytes = await deps.whatsappProvider.downloadMedia(media.url);
-  const mimeType = payload.mimeType ?? media.mimeType ?? "audio/ogg";
-  log.info("Stage: media_download", { mimeType, sizeBytes: audioBytes.byteLength });
-
   const inboundStorageKey = buildStorageKey(payload.companyId, "audio/inbound", payload.messageId);
-  await deps.storageProvider.put(inboundStorageKey, audioBytes, { contentType: mimeType });
-  const inboundRetentionExpiresAt = computeRetentionExpiry(
-    new Date(),
-    context.voiceSettings.retentionDays,
-  );
-  const { mediaFileId } = await deps.repo.recordInboundAudio({
-    companyId: payload.companyId,
-    messageId: payload.messageId,
-    storageKey: inboundStorageKey,
-    mimeType,
-    sizeBytes: audioBytes.byteLength,
-    providerMediaId: payload.mediaId,
-    retentionExpiresAt: inboundRetentionExpiresAt,
-  });
-
   const primaryLanguage =
     context.aiContext.enabledLanguages[0] ?? context.aiContext.fallbackLanguage;
-  // "Confidently Malayalam" means the company has no other enabled language
-  // to be mixed with -- there's no ambiguity to auto-detect. Any company
-  // with more than one enabled language (e.g. Malayalam-English) is treated
-  // as potentially mixed: auto-detect plus keyterms gives better accuracy
-  // there than forcing a single language would.
-  const isConfidentlyMalayalam =
-    context.aiContext.enabledLanguages.length === 1 &&
-    context.aiContext.enabledLanguages[0] === "ml";
-  // Sanitized at assembly time (not just relying on the provider's own
-  // defensive re-check) so a future edit to MALAYALAM_STT_KEYTERMS -- or any
-  // other future source of keyterms -- can never reintroduce the
-  // 2026-08-04 incident (an oversized/malformed term making the entire STT
-  // request fail). Only safe counts are logged, never the terms themselves.
-  const keytermCandidates = isConfidentlyMalayalam ? [] : MALAYALAM_STT_KEYTERMS;
-  const { keyterms: sanitizedKeyterms, summary: keytermSummary } =
-    sanitizeKeyterms(keytermCandidates);
-  if (keytermSummary.rejectedCount > 0) {
-    log.warn("Dropped invalid STT keyterms before request", {
-      inputCount: keytermSummary.inputCount,
-      acceptedCount: keytermSummary.acceptedCount,
-      rejectedCount: keytermSummary.rejectedCount,
-      rejectionReasons: keytermSummary.rejectionReasons,
+
+  // Retry safety (voice pipeline reliability phase 4/5): payload.messageId
+  // is the inbound `messages.id` row already created by the WhatsApp
+  // webhook handler before this job was ever enqueued -- stable across
+  // every Cloudflare Queue redelivery/retry of this same logical job (see
+  // apps/api/src/whatsappWebhookHandler.ts). Checking for an
+  // already-completed transcription FIRST, before touching WhatsApp media
+  // download, R2 storage, or the paid STT provider at all, means a retried
+  // job reuses prior progress instead of repeating it or creating a second
+  // media_files row -- the exact duplicate-row bug this phase fixes.
+  const existingTranscription = await deps.repo.findExistingTranscription({
+    messageId: payload.messageId,
+  });
+
+  let transcription: SpeechToTextResult;
+  let transcriptionReused: boolean;
+  let sttDiagnostics: {
+    mimeType: string;
+    sizeBytes: number;
+    requestedLanguageCode: string;
+  } | null = null;
+
+  if (existingTranscription) {
+    transcription = {
+      text: existingTranscription.rawText,
+      detectedLanguageCode: existingTranscription.detectedLanguage,
+      confidence: existingTranscription.languageConfidence,
+    };
+    transcriptionReused = true;
+    log.info("Stage: stt_transcription", {
+      reused: true,
+      detectedLanguage: transcription.detectedLanguageCode,
+      transcriptCharCount: transcription.text.length,
+      confidence: transcription.confidence,
+    });
+  } else {
+    const existingMedia = await deps.repo.findExistingInboundAudio({
+      companyId: payload.companyId,
+      messageId: payload.messageId,
+    });
+
+    let audioBytes: ArrayBuffer;
+    let mimeType: string;
+    let mediaFileId: string;
+    let mediaReused = false;
+
+    if (existingMedia) {
+      const stored = await deps.storageProvider.get(inboundStorageKey);
+      if (stored) {
+        audioBytes = stored;
+        mimeType = existingMedia.mimeType ?? payload.mimeType ?? "audio/ogg";
+        mediaFileId = existingMedia.mediaFileId;
+        mediaReused = true;
+      } else {
+        // Defensive fallback only -- the media_files row exists but the R2
+        // object it points at is unexpectedly missing (retention deletion
+        // runs on a much longer horizon than any queue retry window, so
+        // this should not happen under normal operation).
+        log.warn(
+          "media_files row exists but the stored object is missing; re-downloading from WhatsApp",
+          { mediaFileId: existingMedia.mediaFileId },
+        );
+        const media = await deps.whatsappProvider.getMediaMetadata(payload.mediaId);
+        audioBytes = await deps.whatsappProvider.downloadMedia(media.url);
+        mimeType = payload.mimeType ?? media.mimeType ?? "audio/ogg";
+        await deps.storageProvider.put(inboundStorageKey, audioBytes, { contentType: mimeType });
+        mediaFileId = existingMedia.mediaFileId;
+      }
+    } else {
+      const media = await deps.whatsappProvider.getMediaMetadata(payload.mediaId);
+      audioBytes = await deps.whatsappProvider.downloadMedia(media.url);
+      mimeType = payload.mimeType ?? media.mimeType ?? "audio/ogg";
+
+      await deps.storageProvider.put(inboundStorageKey, audioBytes, { contentType: mimeType });
+      const inboundRetentionExpiresAt = computeRetentionExpiry(
+        new Date(),
+        context.voiceSettings.retentionDays,
+      );
+      const created = await deps.repo.recordInboundAudio({
+        companyId: payload.companyId,
+        messageId: payload.messageId,
+        storageKey: inboundStorageKey,
+        mimeType,
+        sizeBytes: audioBytes.byteLength,
+        providerMediaId: payload.mediaId,
+        retentionExpiresAt: inboundRetentionExpiresAt,
+      });
+      mediaFileId = created.mediaFileId;
+    }
+
+    log.info("Stage: media_download", {
+      reused: mediaReused,
+      mimeType,
+      sizeBytes: audioBytes.byteLength,
+    });
+
+    // "Confidently Malayalam" means the company has no other enabled
+    // language to be mixed with -- there's no ambiguity to auto-detect. Any
+    // company with more than one enabled language (e.g. Malayalam-English)
+    // is treated as potentially mixed: auto-detect plus keyterms gives
+    // better accuracy there than forcing a single language would.
+    const isConfidentlyMalayalam =
+      context.aiContext.enabledLanguages.length === 1 &&
+      context.aiContext.enabledLanguages[0] === "ml";
+    // Sanitized at assembly time (not just relying on the provider's own
+    // defensive re-check) so a future edit to MALAYALAM_STT_KEYTERMS -- or
+    // any other future source of keyterms -- can never reintroduce the
+    // 2026-08-04 incident (an oversized/malformed term making the entire
+    // STT request fail). Only safe counts are logged, never the terms
+    // themselves.
+    const keytermCandidates = isConfidentlyMalayalam ? [] : MALAYALAM_STT_KEYTERMS;
+    const { keyterms: sanitizedKeyterms, summary: keytermSummary } =
+      sanitizeKeyterms(keytermCandidates);
+    if (keytermSummary.rejectedCount > 0) {
+      log.warn("Dropped invalid STT keyterms before request", {
+        inputCount: keytermSummary.inputCount,
+        acceptedCount: keytermSummary.acceptedCount,
+        rejectedCount: keytermSummary.rejectedCount,
+        rejectionReasons: keytermSummary.rejectionReasons,
+      });
+    }
+
+    const sttInput = {
+      audio: audioBytes,
+      mimeType,
+      languageCode: toSttLanguageCode(primaryLanguage),
+      alternativeLanguageCodes: context.aiContext.enabledLanguages
+        .slice(1)
+        .map((code) => toSttLanguageCode(code)),
+      forceLanguageCode: isConfidentlyMalayalam ? "ml" : undefined,
+      keyterms: sanitizedKeyterms.length > 0 ? sanitizedKeyterms : undefined,
+    };
+    sttDiagnostics = {
+      mimeType,
+      sizeBytes: audioBytes.byteLength,
+      requestedLanguageCode: sttInput.languageCode,
+    };
+
+    let freshTranscription: SpeechToTextResult;
+    try {
+      freshTranscription = await deps.sttProvider.transcribe(sttInput);
+      if (
+        !freshTranscription.text.trim() &&
+        context.voiceSettings.fallbackBehavior === "retry_once"
+      ) {
+        freshTranscription = await deps.sttProvider.transcribe(sttInput);
+      }
+    } catch (error) {
+      // Non-retryable provider/configuration failures (bad credential,
+      // malformed request) will fail identically on every future retry --
+      // recording a durable failure and returning normally (so the caller
+      // acks rather than retries) avoids burning the queue's remaining
+      // retry budget on calls guaranteed to fail again (PHASE 5/12).
+      // Retryable failures (timeout, 429, 5xx, network) are rethrown so the
+      // existing Cloudflare Queue retry mechanism handles them -- no new
+      // retry loop is introduced here.
+      if (error instanceof ElevenLabsProviderError && !error.retryable) {
+        await deps.repo.recordJobFailure({
+          companyId: payload.companyId,
+          queueName: deps.queueName,
+          jobId: payload.jobId,
+          correlationId: payload.correlationId,
+          messageId: payload.messageId,
+          stage: "stt_transcription",
+          attempt: payload.attempt,
+          category: error.category,
+          retryable: false,
+          errorSummary: `ElevenLabs speech-to-text failed: ${error.category} (status ${error.status})`,
+        });
+        log.error("Non-retryable speech-to-text failure; recorded and stopping", {
+          category: error.category,
+          status: error.status,
+        });
+        return;
+      }
+      throw error;
+    }
+
+    transcription = freshTranscription;
+    transcriptionReused = false;
+    log.info("Stage: stt_transcription", {
+      reused: false,
+      detectedLanguage: transcription.detectedLanguageCode,
+      transcriptCharCount: transcription.text.length,
+      confidence: transcription.confidence,
+    });
+
+    await deps.repo.recordTranscription({
+      companyId: payload.companyId,
+      messageId: payload.messageId,
+      mediaFileId,
+      provider: deps.sttProvider.providerName,
+      rawText: transcription.text,
+      detectedLanguage: transcription.detectedLanguageCode,
+      languageConfidence: transcription.confidence,
     });
   }
-
-  const sttInput = {
-    audio: audioBytes,
-    mimeType,
-    languageCode: toSttLanguageCode(primaryLanguage),
-    alternativeLanguageCodes: context.aiContext.enabledLanguages
-      .slice(1)
-      .map((code) => toSttLanguageCode(code)),
-    forceLanguageCode: isConfidentlyMalayalam ? "ml" : undefined,
-    keyterms: sanitizedKeyterms.length > 0 ? sanitizedKeyterms : undefined,
-  };
-
-  let transcription = await deps.sttProvider.transcribe(sttInput);
-
-  if (!transcription.text.trim() && context.voiceSettings.fallbackBehavior === "retry_once") {
-    transcription = await deps.sttProvider.transcribe(sttInput);
-  }
-
-  log.info("Stage: stt_transcription", {
-    detectedLanguage: transcription.detectedLanguageCode,
-    transcriptCharCount: transcription.text.length,
-    confidence: transcription.confidence,
-  });
-
-  await deps.repo.recordTranscription({
-    companyId: payload.companyId,
-    messageId: payload.messageId,
-    mediaFileId,
-    provider: deps.sttProvider.providerName,
-    rawText: transcription.text,
-    detectedLanguage: transcription.detectedLanguageCode,
-    languageConfidence: transcription.confidence,
-  });
 
   // Media download, storage, and transcription above always run, regardless
   // of ai_mode -- a human agent must be able to see what the customer said
@@ -278,9 +412,8 @@ export async function processVoiceJob(
     const diagnostics = {
       detectedLanguageCode: transcription.detectedLanguageCode,
       confidence: transcription.confidence,
-      requestedLanguageCode: sttInput.languageCode,
-      mimeType,
-      sizeBytes: audioBytes.byteLength,
+      transcriptionReused,
+      ...(sttDiagnostics ?? {}),
     };
     if (context.voiceSettings.fallbackBehavior === "escalate") {
       await triggerHandoverAtomic(deps.handoverRepo, {

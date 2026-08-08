@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ElevenLabsSpeechToTextProvider } from "../src/providers/elevenLabsSttProvider.js";
+import { ElevenLabsProviderError } from "../src/providers/elevenLabsError.js";
 
 describe("ElevenLabsSpeechToTextProvider", () => {
   afterEach(() => {
@@ -59,26 +60,159 @@ describe("ElevenLabsSpeechToTextProvider", () => {
     expect(result).toEqual({ text: "padded text", detectedLanguageCode: null, confidence: null });
   });
 
-  it("throws with the response body when the request fails", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: false,
-      status: 401,
-      text: async () => "invalid api key",
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+  describe("error sanitization and classification (voice pipeline reliability phase 7)", () => {
+    it("never includes the raw response body in the thrown error, even when the body contains verbose/sensitive detail", async () => {
+      const sensitiveBody = JSON.stringify({
+        detail: {
+          status: "invalid_api_key",
+          message:
+            "The API key you provided (sk_live_abcdef1234567890) is invalid or has been revoked.",
+        },
+      });
+      const fetchMock = vi.fn(async () => ({
+        ok: false,
+        status: 401,
+        text: async () => sensitiveBody,
+      }));
+      vi.stubGlobal("fetch", fetchMock);
 
-    const provider = new ElevenLabsSpeechToTextProvider({
-      apiKey: "bad-key",
-      modelId: "scribe_v1",
+      const provider = new ElevenLabsSpeechToTextProvider({
+        apiKey: "bad-key",
+        modelId: "scribe_v1",
+      });
+
+      let caught: unknown;
+      try {
+        await provider.transcribe({
+          audio: new ArrayBuffer(4),
+          mimeType: "audio/ogg",
+          languageCode: "en-US",
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(ElevenLabsProviderError);
+      const error = caught as ElevenLabsProviderError;
+      expect(error.message).not.toContain("sk_live_abcdef1234567890");
+      expect(error.message).not.toContain("invalid_api_key");
+      expect(error.message).not.toContain(sensitiveBody);
+      // The raw body must never even be read on the error path -- .text()
+      // is deliberately not called by the provider for a failed response.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    await expect(
-      provider.transcribe({
-        audio: new ArrayBuffer(4),
-        mimeType: "audio/ogg",
-        languageCode: "en-US",
-      }),
-    ).rejects.toThrow("ElevenLabs speech-to-text request failed with status 401: invalid api key");
+    it("classifies 401 as authentication_error, non-retryable", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ ok: false, status: 401 })),
+      );
+      const provider = new ElevenLabsSpeechToTextProvider({ apiKey: "k", modelId: "scribe_v2" });
+      let caught: unknown;
+      try {
+        await provider.transcribe({
+          audio: new ArrayBuffer(4),
+          mimeType: "audio/ogg",
+          languageCode: "en-US",
+        });
+      } catch (error) {
+        caught = error;
+      }
+      const error = caught as ElevenLabsProviderError;
+      expect(error.category).toBe("authentication_error");
+      expect(error.retryable).toBe(false);
+      expect(error.status).toBe(401);
+    });
+
+    it("classifies 429 as rate_limited, retryable", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ ok: false, status: 429 })),
+      );
+      const provider = new ElevenLabsSpeechToTextProvider({ apiKey: "k", modelId: "scribe_v2" });
+      let caught: unknown;
+      try {
+        await provider.transcribe({
+          audio: new ArrayBuffer(4),
+          mimeType: "audio/ogg",
+          languageCode: "en-US",
+        });
+      } catch (error) {
+        caught = error;
+      }
+      const error = caught as ElevenLabsProviderError;
+      expect(error.category).toBe("rate_limited");
+      expect(error.retryable).toBe(true);
+    });
+
+    it("classifies 500/503 as server_error, retryable", async () => {
+      for (const status of [500, 503]) {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => ({ ok: false, status })),
+        );
+        const provider = new ElevenLabsSpeechToTextProvider({ apiKey: "k", modelId: "scribe_v2" });
+        let caught: unknown;
+        try {
+          await provider.transcribe({
+            audio: new ArrayBuffer(4),
+            mimeType: "audio/ogg",
+            languageCode: "en-US",
+          });
+        } catch (error) {
+          caught = error;
+        }
+        const error = caught as ElevenLabsProviderError;
+        expect(error.category).toBe("server_error");
+        expect(error.retryable).toBe(true);
+      }
+    });
+
+    it("classifies 400 (malformed/rejected request) as invalid_request, non-retryable", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ ok: false, status: 400 })),
+      );
+      const provider = new ElevenLabsSpeechToTextProvider({ apiKey: "k", modelId: "scribe_v2" });
+      let caught: unknown;
+      try {
+        await provider.transcribe({
+          audio: new ArrayBuffer(4),
+          mimeType: "audio/ogg",
+          languageCode: "en-US",
+        });
+      } catch (error) {
+        caught = error;
+      }
+      const error = caught as ElevenLabsProviderError;
+      expect(error.category).toBe("invalid_request");
+      expect(error.retryable).toBe(false);
+    });
+
+    it("wraps a network-level failure (fetch rejecting) as retryable network_error, never leaking the underlying error object's detail", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw new TypeError("fetch failed: getaddrinfo ENOTFOUND api.elevenlabs.io");
+        }),
+      );
+      const provider = new ElevenLabsSpeechToTextProvider({ apiKey: "k", modelId: "scribe_v2" });
+      let caught: unknown;
+      try {
+        await provider.transcribe({
+          audio: new ArrayBuffer(4),
+          mimeType: "audio/ogg",
+          languageCode: "en-US",
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ElevenLabsProviderError);
+      const error = caught as ElevenLabsProviderError;
+      expect(error.category).toBe("network_error");
+      expect(error.retryable).toBe(true);
+      expect(error.message).not.toContain("ENOTFOUND");
+    });
   });
 
   it("sends language_code only when forceLanguageCode is set (confidently Malayalam)", async () => {
