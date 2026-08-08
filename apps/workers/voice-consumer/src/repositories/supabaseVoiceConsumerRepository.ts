@@ -272,33 +272,63 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
   }): Promise<void> {
     const { data: existing, error: existingError } = await this.client
       .from("transcriptions")
-      .select("id")
+      .select("raw_text, detected_language")
       .eq("media_file_id", input.mediaFileId)
       .maybeSingle();
     if (existingError) throw existingError;
 
-    if (!existing) {
-      const { error: transcriptionError } = await this.client.from("transcriptions").insert({
-        company_id: input.companyId,
-        media_file_id: input.mediaFileId,
-        message_id: input.messageId,
-        provider: input.provider,
-        raw_text: input.rawText,
-        detected_language: input.detectedLanguage,
-        language_confidence: input.languageConfidence,
-      });
-      // A unique-violation race loss here just means another attempt won
-      // the insert for this media file first -- its transcript is already
-      // durable, so this attempt falls through to the idempotent message-
-      // body update below rather than treating it as a failure.
-      if (transcriptionError && !isUniqueViolation(transcriptionError)) {
-        throw transcriptionError;
+    // messages.body must always converge to the canonical PERSISTED
+    // transcription row's own raw_text -- never the caller's local
+    // (possibly non-canonical) rawText -- so that two concurrent
+    // transcription attempts for the same media file, however they race,
+    // deterministically agree on the same final message body. See the
+    // three branches below: an already-existing row, a winning insert, and
+    // a losing insert all resolve `canonical` from what's actually durable
+    // in `transcriptions`, never from `input.rawText` directly.
+    let canonical: { rawText: string; detectedLanguage: string | null };
+
+    if (existing) {
+      canonical = { rawText: existing.raw_text, detectedLanguage: existing.detected_language };
+    } else {
+      const { data: inserted, error: transcriptionError } = await this.client
+        .from("transcriptions")
+        .insert({
+          company_id: input.companyId,
+          media_file_id: input.mediaFileId,
+          message_id: input.messageId,
+          provider: input.provider,
+          raw_text: input.rawText,
+          detected_language: input.detectedLanguage,
+          language_confidence: input.languageConfidence,
+        })
+        .select("raw_text, detected_language")
+        .single();
+
+      if (transcriptionError) {
+        // Only an actual Postgres unique violation (23505) is treated as a
+        // race loss -- any other error (constraint failure, connectivity,
+        // etc.) still fails normally rather than being silently absorbed.
+        if (!isUniqueViolation(transcriptionError)) throw transcriptionError;
+        const { data: winner, error: winnerError } = await this.client
+          .from("transcriptions")
+          .select("raw_text, detected_language")
+          .eq("media_file_id", input.mediaFileId)
+          .single();
+        if (winnerError) throw winnerError;
+        canonical = { rawText: winner.raw_text, detectedLanguage: winner.detected_language };
+      } else {
+        canonical = { rawText: inserted.raw_text, detectedLanguage: inserted.detected_language };
       }
     }
 
+    // Never touches corrected_text -- that column is updated only through
+    // the dashboard's separate correction workflow (see
+    // supabase/migrations/00000000000004_conversations.sql), and
+    // messages.body intentionally continues to reflect raw_text here,
+    // matching this repository's existing, unchanged semantics.
     const { error: messageUpdateError } = await this.client
       .from("messages")
-      .update({ body: input.rawText, detected_language: input.detectedLanguage })
+      .update({ body: canonical.rawText, detected_language: canonical.detectedLanguage })
       .eq("id", input.messageId);
     if (messageUpdateError) throw messageUpdateError;
   }
