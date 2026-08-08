@@ -4,9 +4,15 @@ import { createServiceRoleClient } from "@dravonix/database";
 import { SupabaseHandoverWorkerRepository } from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
 import { PostgresKnowledgeRetriever } from "@dravonix/knowledge";
-import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider } from "@dravonix/speech";
+import {
+  ElevenLabsConfigurationError,
+  ElevenLabsSpeechToTextProvider,
+  ElevenLabsTextToSpeechProvider,
+  validateElevenLabsApiKeyFormat,
+} from "@dravonix/speech";
 import { R2StorageProvider, type R2BucketLike } from "@dravonix/storage";
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
+import { handleVoiceDlqBatch } from "./handleDlqBatch.js";
 import {
   processVoiceJob,
   type VoiceConsumerDeps,
@@ -28,6 +34,8 @@ interface QueueMessage<T> {
 }
 
 interface QueueBatch<T> {
+  /** The real Cloudflare Queues queue name this batch was delivered from -- distinguishes the main voice queue from its dead-letter queue when both are bound to this same Worker script. */
+  readonly queue: string;
   readonly messages: readonly QueueMessage<T>[];
 }
 
@@ -61,6 +69,35 @@ export default {
       retryEntireBatch(batch);
       return;
     }
+
+    // Dead-letter queue triage path (PHASE 9/10). Cloudflare Queues routes
+    // ALL consumer bindings for this Worker script to this same exported
+    // `queue()` function, so a DLQ batch is distinguished only by its
+    // `batch.queue` name (ending in "-dlq" for both the staging and
+    // production dead-letter queues configured in wrangler.toml). This
+    // branch only needs Supabase credentials -- it never touches
+    // Anthropic/Meta/ElevenLabs/R2, matching handleVoiceDlqBatch's "record
+    // and ack, never replay" contract. NOT CURRENTLY REACHABLE: no
+    // `[[queues.consumers]]` entry binds a "-dlq" queue to this Worker yet
+    // (see wrangler.toml) -- this code exists and is tested, but is
+    // intentionally not wired to a live binding pending explicit approval.
+    if (batch.queue.endsWith("-dlq")) {
+      const supabase = createServiceRoleClient({
+        url: env.SUPABASE_URL,
+        anonKey: env.SUPABASE_ANON_KEY,
+        serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+      });
+      await handleVoiceDlqBatch(
+        {
+          repo: new SupabaseVoiceConsumerRepository(supabase),
+          logger,
+          queueName: batch.queue,
+        },
+        batch,
+      );
+      return;
+    }
+
     if (!env.ANTHROPIC_API_KEY) {
       logger.error("Voice consumer misconfigured: ANTHROPIC_API_KEY missing");
       retryEntireBatch(batch);
@@ -75,6 +112,20 @@ export default {
       logger.error("Voice consumer misconfigured: ELEVENLABS_API_KEY missing");
       retryEntireBatch(batch);
       return;
+    }
+    // Shape-only check (PHASE 6) -- catches an obviously malformed
+    // credential before any ElevenLabs request is attempted. Never logs the
+    // key itself; the caught error's message is already the safe
+    // "voice_provider_configuration_error: ..." form.
+    try {
+      validateElevenLabsApiKeyFormat(env.ELEVENLABS_API_KEY);
+    } catch (error) {
+      if (error instanceof ElevenLabsConfigurationError) {
+        logger.error("Voice consumer misconfigured", { reason: error.message });
+        retryEntireBatch(batch);
+        return;
+      }
+      throw error;
     }
     if (!env.AUDIO_BUCKET) {
       logger.error("Voice consumer misconfigured: AUDIO_BUCKET R2 binding missing");
@@ -123,6 +174,7 @@ export default {
       storageProvider: new R2StorageProvider(env.AUDIO_BUCKET),
       logger,
       voiceReplyMode: platformEnv.VOICE_REPLY_MODE,
+      queueName: batch.queue,
     };
 
     for (const message of batch.messages) {

@@ -14,6 +14,8 @@ set -euo pipefail
 ADMIN_URL="${TEST_DATABASE_ADMIN_URL:-postgresql://postgres@localhost:5432/postgres}"
 DB_NAME="dravonix_rls_test_$$"
 LEGACY_DB_NAME="dravonix_legacy_upgrade_test_$$"
+MEDIA_DUP_SAFE_DB_NAME="dravonix_media_dup_safe_test_$$"
+MEDIA_DUP_UNSAFE_DB_NAME="dravonix_media_dup_unsafe_test_$$"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MIGRATIONS_DIR="$ROOT_DIR/supabase/migrations"
 
@@ -24,6 +26,8 @@ psql_admin() {
 cleanup() {
   psql_admin -c "drop database if exists ${DB_NAME};" >/dev/null 2>&1 || true
   psql_admin -c "drop database if exists ${LEGACY_DB_NAME};" >/dev/null 2>&1 || true
+  psql_admin -c "drop database if exists ${MEDIA_DUP_SAFE_DB_NAME};" >/dev/null 2>&1 || true
+  psql_admin -c "drop database if exists ${MEDIA_DUP_UNSAFE_DB_NAME};" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -76,6 +80,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_timezone.sql"
 
 echo "Running Business Currency (migration 15) RLS/RPC hardening + timezone independence assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_currency.sql"
+
+echo "Running voice pipeline media/transcription idempotency (migration 16) constraint assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_media_idempotency.sql"
 
 echo "All RLS tests passed."
 
@@ -144,3 +151,103 @@ echo "[legacy-upgrade] Re-running Global Timezone + Daypart Awareness (migration
 psql "$LEGACY_DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_timezone.sql"
 
 echo "All legacy-upgrade regression tests passed."
+
+# ---------------------------------------------------------------------------
+# Migration 16 legacy-duplicate consolidation regression (voice pipeline
+# reliability phase): applies migrations 1-15, seeds pre-migration-16 shaped
+# duplicate media_files/transcriptions rows (the exact patterns found during
+# the real staging audit), then applies migration 16 and proves its
+# ambiguity guard, canonical-row ranking, and cleanup all behave correctly
+# against real legacy duplicate data -- not just a from-empty database. Runs
+# in its own scratch database so it never interferes with the flows above.
+#
+# Two sub-cases, each in its own database: SAFE (every duplicate group is
+# deterministically resolvable -- migration 16 must succeed and consolidate)
+# and UNSAFE (a divergent-transcript group matches neither's live body --
+# migration 16 must abort atomically, deleting nothing).
+# ---------------------------------------------------------------------------
+
+echo "Creating media-duplicate-safe scratch database ${MEDIA_DUP_SAFE_DB_NAME}..."
+psql_admin -c "create database ${MEDIA_DUP_SAFE_DB_NAME};"
+MEDIA_DUP_SAFE_DB_URL="${ADMIN_URL%/*}/${MEDIA_DUP_SAFE_DB_NAME}"
+
+echo "[media-dup-safe] Applying extensions..."
+run_file "$MEDIA_DUP_SAFE_DB_URL" "$MIGRATIONS_DIR/00000000000001_extensions.sql"
+echo "[media-dup-safe] Applying local auth shim..."
+run_file "$MEDIA_DUP_SAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/supabase_local_shim.sql"
+echo "[media-dup-safe] Applying local Realtime publication shim..."
+run_file "$MEDIA_DUP_SAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/realtime_publication_shim.sql"
+echo "[media-dup-safe] Creating restricted authenticated/anon/service_role roles..."
+run_file "$MEDIA_DUP_SAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/roles_create.sql"
+
+echo "[media-dup-safe] Applying migrations 1-15 (pre-migration-16 schema only)..."
+for f in "$MIGRATIONS_DIR"/*.sql; do
+  base="$(basename "$f")"
+  [[ "$base" == "00000000000001_extensions.sql" ]] && continue
+  [[ "$base" == "00000000000016_voice_media_idempotency.sql" ]] && continue
+  run_file "$MEDIA_DUP_SAFE_DB_URL" "$f"
+done
+
+echo "[media-dup-safe] Seeding representative legacy duplicate rows..."
+run_file "$MEDIA_DUP_SAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/media_duplicate_safe_seed.sql"
+
+echo "[media-dup-safe] Applying migration 16 against the duplicate-seeded database..."
+run_file "$MEDIA_DUP_SAFE_DB_URL" "$MIGRATIONS_DIR/00000000000016_voice_media_idempotency.sql"
+
+echo "[media-dup-safe] Granting table privileges to authenticated/anon/service_role..."
+run_file "$MEDIA_DUP_SAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/roles.sql"
+
+echo "[media-dup-safe] Running post-consolidation assertions..."
+psql "$MEDIA_DUP_SAFE_DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/media_idempotency_consolidation.sql"
+
+echo "Media-duplicate-safe consolidation regression passed."
+
+echo "Creating media-duplicate-unsafe scratch database ${MEDIA_DUP_UNSAFE_DB_NAME}..."
+psql_admin -c "create database ${MEDIA_DUP_UNSAFE_DB_NAME};"
+MEDIA_DUP_UNSAFE_DB_URL="${ADMIN_URL%/*}/${MEDIA_DUP_UNSAFE_DB_NAME}"
+
+echo "[media-dup-unsafe] Applying extensions..."
+run_file "$MEDIA_DUP_UNSAFE_DB_URL" "$MIGRATIONS_DIR/00000000000001_extensions.sql"
+echo "[media-dup-unsafe] Applying local auth shim..."
+run_file "$MEDIA_DUP_UNSAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/supabase_local_shim.sql"
+echo "[media-dup-unsafe] Applying local Realtime publication shim..."
+run_file "$MEDIA_DUP_UNSAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/realtime_publication_shim.sql"
+echo "[media-dup-unsafe] Creating restricted authenticated/anon/service_role roles..."
+run_file "$MEDIA_DUP_UNSAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/roles_create.sql"
+
+echo "[media-dup-unsafe] Applying migrations 1-15 (pre-migration-16 schema only)..."
+for f in "$MIGRATIONS_DIR"/*.sql; do
+  base="$(basename "$f")"
+  [[ "$base" == "00000000000001_extensions.sql" ]] && continue
+  [[ "$base" == "00000000000016_voice_media_idempotency.sql" ]] && continue
+  run_file "$MEDIA_DUP_UNSAFE_DB_URL" "$f"
+done
+
+echo "[media-dup-unsafe] Seeding an unresolvable divergent-transcript duplicate group..."
+run_file "$MEDIA_DUP_UNSAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/media_duplicate_unsafe_seed.sql"
+
+echo "[media-dup-unsafe] Applying migration 16 -- this MUST fail (CASE J: unresolved divergent transcripts)..."
+if psql "$MEDIA_DUP_UNSAFE_DB_URL" -v ON_ERROR_STOP=1 -f "$MIGRATIONS_DIR/00000000000016_voice_media_idempotency.sql" >/tmp/dravonix_media_dup_unsafe_output.log 2>&1; then
+  echo "FAILED: migration 16 succeeded against unresolvable divergent-transcript data -- it must abort instead."
+  cat /tmp/dravonix_media_dup_unsafe_output.log
+  exit 1
+fi
+if ! grep -q "unresolved divergent transcripts" /tmp/dravonix_media_dup_unsafe_output.log; then
+  echo "FAILED: migration 16 failed for the wrong reason (expected the divergent-transcripts ambiguity exception):"
+  cat /tmp/dravonix_media_dup_unsafe_output.log
+  exit 1
+fi
+echo "CASE J: migration 16 correctly aborted on the unresolvable divergent-transcript group."
+
+echo "[media-dup-unsafe] Verifying the atomic abort deleted nothing and added no constraints..."
+UNSAFE_ROW_COUNT="$(psql "$MEDIA_DUP_UNSAFE_DB_URL" -tAc "select count(*) from media_files where message_id = '7e000001-0000-0000-0000-000000000001';")"
+if [[ "$UNSAFE_ROW_COUNT" != "2" ]]; then
+  echo "FAILED: expected both duplicate rows to still exist after the aborted migration (found ${UNSAFE_ROW_COUNT})."
+  exit 1
+fi
+UNSAFE_CONSTRAINT_COUNT="$(psql "$MEDIA_DUP_UNSAFE_DB_URL" -tAc "select count(*) from pg_constraint where conname in ('media_files_company_message_kind_key','transcriptions_media_file_id_key');")"
+if [[ "$UNSAFE_CONSTRAINT_COUNT" != "0" ]]; then
+  echo "FAILED: expected neither new constraint to exist after the aborted migration (found ${UNSAFE_CONSTRAINT_COUNT})."
+  exit 1
+fi
+echo "Media-duplicate-unsafe atomic-abort regression passed."

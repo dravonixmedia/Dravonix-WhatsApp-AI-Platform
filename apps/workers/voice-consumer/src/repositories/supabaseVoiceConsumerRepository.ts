@@ -10,6 +10,20 @@ import type { VoiceConsumerRepository, VoiceConversationContext } from "../repos
 const RECENT_MESSAGE_LIMIT = 10;
 
 /**
+ * True for a Postgres unique-violation (SQLSTATE 23505). Used by the
+ * select-or-create methods below as a race-loss fallback: until MIGRATION
+ * 16 adds the unique constraint this pattern is designed for, no code path
+ * can actually raise 23505 here, so this branch is presently unreachable --
+ * it's forward-safe scaffolding, not a claim of full concurrency protection
+ * today (see the MIGRATION 16 report).
+ */
+function isUniqueViolation(error: unknown): boolean {
+  return Boolean(
+    error && typeof error === "object" && (error as { code?: string }).code === "23505",
+  );
+}
+
+/**
  * Production implementation of VoiceConsumerRepository against the Supabase
  * schema in supabase/migrations/*.sql. Uses the service-role client (bypasses
  * RLS) since this runs entirely server-side in the queue consumer. Mirrors
@@ -174,6 +188,41 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
     };
   }
 
+  async findExistingTranscription(input: { messageId: string }): Promise<{
+    rawText: string;
+    detectedLanguage: string | null;
+    languageConfidence: number | null;
+  } | null> {
+    const { data, error } = await this.client
+      .from("transcriptions")
+      .select("raw_text, detected_language, language_confidence")
+      .eq("message_id", input.messageId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      rawText: data.raw_text,
+      detectedLanguage: data.detected_language,
+      languageConfidence: data.language_confidence,
+    };
+  }
+
+  async findExistingInboundAudio(input: {
+    companyId: string;
+    messageId: string;
+  }): Promise<{ mediaFileId: string; mimeType: string | null } | null> {
+    const { data, error } = await this.client
+      .from("media_files")
+      .select("id, mime_type")
+      .eq("company_id", input.companyId)
+      .eq("message_id", input.messageId)
+      .eq("kind", "inbound_audio")
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return { mediaFileId: data.id, mimeType: data.mime_type };
+  }
+
   async recordInboundAudio(input: {
     companyId: string;
     messageId: string;
@@ -197,7 +246,18 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
       })
       .select("id")
       .single();
-    if (error) throw error;
+    if (error) {
+      // Race-loss fallback -- see isUniqueViolation()'s comment. Only takes
+      // effect once MIGRATION 16 adds the unique constraint this depends on.
+      if (isUniqueViolation(error)) {
+        const existing = await this.findExistingInboundAudio({
+          companyId: input.companyId,
+          messageId: input.messageId,
+        });
+        if (existing) return { mediaFileId: existing.mediaFileId };
+      }
+      throw error;
+    }
     return { mediaFileId: data.id };
   }
 
@@ -210,22 +270,112 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
     detectedLanguage: string | null;
     languageConfidence: number | null;
   }): Promise<void> {
-    const { error: transcriptionError } = await this.client.from("transcriptions").insert({
-      company_id: input.companyId,
-      media_file_id: input.mediaFileId,
-      message_id: input.messageId,
-      provider: input.provider,
-      raw_text: input.rawText,
-      detected_language: input.detectedLanguage,
-      language_confidence: input.languageConfidence,
-    });
-    if (transcriptionError) throw transcriptionError;
+    const { data: existing, error: existingError } = await this.client
+      .from("transcriptions")
+      .select("raw_text, detected_language")
+      .eq("media_file_id", input.mediaFileId)
+      .maybeSingle();
+    if (existingError) throw existingError;
 
+    // messages.body must always converge to the canonical PERSISTED
+    // transcription row's own raw_text -- never the caller's local
+    // (possibly non-canonical) rawText -- so that two concurrent
+    // transcription attempts for the same media file, however they race,
+    // deterministically agree on the same final message body. See the
+    // three branches below: an already-existing row, a winning insert, and
+    // a losing insert all resolve `canonical` from what's actually durable
+    // in `transcriptions`, never from `input.rawText` directly.
+    let canonical: { rawText: string; detectedLanguage: string | null };
+
+    if (existing) {
+      canonical = { rawText: existing.raw_text, detectedLanguage: existing.detected_language };
+    } else {
+      const { data: inserted, error: transcriptionError } = await this.client
+        .from("transcriptions")
+        .insert({
+          company_id: input.companyId,
+          media_file_id: input.mediaFileId,
+          message_id: input.messageId,
+          provider: input.provider,
+          raw_text: input.rawText,
+          detected_language: input.detectedLanguage,
+          language_confidence: input.languageConfidence,
+        })
+        .select("raw_text, detected_language")
+        .single();
+
+      if (transcriptionError) {
+        // Only an actual Postgres unique violation (23505) is treated as a
+        // race loss -- any other error (constraint failure, connectivity,
+        // etc.) still fails normally rather than being silently absorbed.
+        if (!isUniqueViolation(transcriptionError)) throw transcriptionError;
+        const { data: winner, error: winnerError } = await this.client
+          .from("transcriptions")
+          .select("raw_text, detected_language")
+          .eq("media_file_id", input.mediaFileId)
+          .single();
+        if (winnerError) throw winnerError;
+        canonical = { rawText: winner.raw_text, detectedLanguage: winner.detected_language };
+      } else {
+        canonical = { rawText: inserted.raw_text, detectedLanguage: inserted.detected_language };
+      }
+    }
+
+    // Never touches corrected_text -- that column is updated only through
+    // the dashboard's separate correction workflow (see
+    // supabase/migrations/00000000000004_conversations.sql), and
+    // messages.body intentionally continues to reflect raw_text here,
+    // matching this repository's existing, unchanged semantics.
     const { error: messageUpdateError } = await this.client
       .from("messages")
-      .update({ body: input.rawText, detected_language: input.detectedLanguage })
+      .update({ body: canonical.rawText, detected_language: canonical.detectedLanguage })
       .eq("id", input.messageId);
     if (messageUpdateError) throw messageUpdateError;
+  }
+
+  async recordJobFailure(input: {
+    companyId: string | null;
+    queueName: string;
+    jobId: string;
+    correlationId: string;
+    messageId: string;
+    stage: string;
+    attempt: number;
+    category: string;
+    retryable: boolean;
+    errorSummary: string;
+  }): Promise<void> {
+    // Best-effort dedup by jobId (stable across retries of the same
+    // logical job -- see JobEnvelope). job_failures has no unique
+    // constraint to enforce this at the database level (see the MIGRATION
+    // 16 report's secondary note), so this is a same-request guard only,
+    // not a concurrency guarantee.
+    const { data: existing, error: existingError } = await this.client
+      .from("job_failures")
+      .select("id")
+      .eq("job_id", input.jobId)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (existing) return;
+
+    const { error } = await this.client.from("job_failures").insert({
+      company_id: input.companyId,
+      queue_name: input.queueName,
+      job_id: input.jobId,
+      correlation_id: input.correlationId,
+      attempt: input.attempt,
+      status: "dead_letter",
+      // Sanitized, human-readable summary only -- never a raw provider
+      // body, API key, header, WhatsApp payload, or media binary (PHASE 8).
+      error: input.errorSummary,
+      payload: {
+        messageId: input.messageId,
+        stage: input.stage,
+        category: input.category,
+        retryable: input.retryable,
+      },
+    });
+    if (error && !isUniqueViolation(error)) throw error;
   }
 
   async recordGeneratedAudioMetadata(input: {

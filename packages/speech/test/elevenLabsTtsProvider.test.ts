@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ElevenLabsTextToSpeechProvider } from "../src/providers/elevenLabsTtsProvider.js";
+import { ElevenLabsProviderError } from "../src/providers/elevenLabsError.js";
 
 describe("ElevenLabsTextToSpeechProvider", () => {
   afterEach(() => {
@@ -71,23 +72,78 @@ describe("ElevenLabsTextToSpeechProvider", () => {
     expect(body.voice_settings).toEqual({ speed: 1.2 });
   });
 
-  it("throws with the response body when the request fails", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: false,
-      status: 401,
-      text: async () => "invalid api key",
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+  describe("error sanitization and classification (voice pipeline reliability phase 7)", () => {
+    it("never includes the raw response body in the thrown error", async () => {
+      const sensitiveBody = "Authorization failed for key sk_live_abcdef1234567890";
+      const fetchMock = vi.fn(async () => ({
+        ok: false,
+        status: 401,
+        text: async () => sensitiveBody,
+      }));
+      vi.stubGlobal("fetch", fetchMock);
 
-    const provider = new ElevenLabsTextToSpeechProvider({
-      apiKey: "bad-key",
-      defaultVoiceId: "default-voice",
-      modelId: "eleven_multilingual_v2",
+      const provider = new ElevenLabsTextToSpeechProvider({
+        apiKey: "bad-key",
+        defaultVoiceId: "default-voice",
+        modelId: "eleven_multilingual_v2",
+      });
+
+      let caught: unknown;
+      try {
+        await provider.synthesize({ text: "hello", languageCode: "en" });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(ElevenLabsProviderError);
+      const error = caught as ElevenLabsProviderError;
+      expect(error.message).not.toContain("sk_live_abcdef1234567890");
+      expect(error.category).toBe("authentication_error");
+      expect(error.retryable).toBe(false);
     });
 
-    await expect(provider.synthesize({ text: "hello", languageCode: "en" })).rejects.toThrow(
-      "ElevenLabs text-to-speech request failed with status 401: invalid api key",
-    );
+    it("classifies 429 as rate_limited, retryable", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ ok: false, status: 429 })),
+      );
+      const provider = new ElevenLabsTextToSpeechProvider({
+        apiKey: "k",
+        defaultVoiceId: "default-voice",
+        modelId: "eleven_multilingual_v2",
+      });
+      let caught: unknown;
+      try {
+        await provider.synthesize({ text: "hello", languageCode: "en" });
+      } catch (error) {
+        caught = error;
+      }
+      const error = caught as ElevenLabsProviderError;
+      expect(error.category).toBe("rate_limited");
+      expect(error.retryable).toBe(true);
+    });
+
+    it("wraps a network-level failure as retryable network_error", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw new TypeError("network down");
+        }),
+      );
+      const provider = new ElevenLabsTextToSpeechProvider({
+        apiKey: "k",
+        defaultVoiceId: "default-voice",
+        modelId: "eleven_multilingual_v2",
+      });
+      let caught: unknown;
+      try {
+        await provider.synthesize({ text: "hello", languageCode: "en" });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ElevenLabsProviderError);
+      expect((caught as ElevenLabsProviderError).retryable).toBe(true);
+    });
   });
 
   describe("Malayalam-specific voice/model selection", () => {

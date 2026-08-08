@@ -9,4 +9,5 @@ export * from "./providers/googleTtsProvider.js";
 export * from "./providers/whisperSttProvider.js";
 export * from "./providers/elevenLabsSttProvider.js";
 export * from "./providers/elevenLabsTtsProvider.js";
+export * from "./providers/elevenLabsError.js";
 export * from "./providers/mockProvider.js";

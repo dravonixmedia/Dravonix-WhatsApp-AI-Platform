@@ -7,7 +7,12 @@ import type {
   OutboundDeliveryStatus,
 } from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
-import { MockSpeechToTextProvider, MockTextToSpeechProvider } from "@dravonix/speech";
+import {
+  ElevenLabsProviderError,
+  MockSpeechToTextProvider,
+  MockTextToSpeechProvider,
+  type SpeechToTextProvider,
+} from "@dravonix/speech";
 import { MockStorageProvider } from "@dravonix/storage";
 import { MockWhatsAppProvider } from "@dravonix/whatsapp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,24 +101,93 @@ class FakeEntitlementRepository implements EntitlementRepository {
   getSnapshot = vi.fn(async (_companyId: string) => this.snapshot);
 }
 
+/**
+ * In-memory double that actually implements the select-or-create contract
+ * documented on VoiceConsumerRepository (voice pipeline reliability phase),
+ * keyed by messageId -- so tests exercise the real retry-safety behavior
+ * (reuse existing media/transcript, skip re-downloading/re-transcribing),
+ * not just record every call unconditionally like the pre-fix version of
+ * this fake did.
+ */
 class FakeVoiceConsumerRepository implements VoiceConsumerRepository {
   context: VoiceConversationContext = baseConversationContext();
   recordedInboundAudio: unknown[] = [];
   recordedTranscriptions: unknown[] = [];
   recordedGeneratedAudio: unknown[] = [];
   appliedLeadUpdates: unknown[] = [];
+  recordedJobFailures: Array<{
+    companyId: string | null;
+    queueName: string;
+    jobId: string;
+    correlationId: string;
+    messageId: string;
+    stage: string;
+    attempt: number;
+    category: string;
+    retryable: boolean;
+    errorSummary: string;
+  }> = [];
+
+  // Composite-keyed by companyId+messageId -- mirrors
+  // SupabaseVoiceConsumerRepository's actual `.eq("company_id", ...).eq("message_id", ...)`
+  // filter, which is the real (application-level, since this repository
+  // uses the RLS-bypassing service-role client) tenant-isolation boundary
+  // for these lookups. Keying only by messageId here would silently pass
+  // over that boundary and make this fake unfaithful to production.
+  private mediaByKey = new Map<string, { mediaFileId: string; mimeType: string | null }>();
+  private transcriptionByMessageId = new Map<
+    string,
+    { rawText: string; detectedLanguage: string | null; languageConfidence: number | null }
+  >();
+  private mediaCounter = 0;
+
+  private mediaKey(companyId: string, messageId: string): string {
+    return `${companyId}:${messageId}`;
+  }
 
   async loadConversationContext(_conversationId: string): Promise<VoiceConversationContext> {
     return this.context;
   }
 
-  async recordInboundAudio(input: unknown): Promise<{ mediaFileId: string }> {
-    this.recordedInboundAudio.push(input);
-    return { mediaFileId: "media-file-1" };
+  async findExistingTranscription(input: { messageId: string }) {
+    // Not company-scoped in the real repository either -- message_id is a
+    // globally unique UUID FK-bound to exactly one company's messages row,
+    // so a cross-company collision here is structurally impossible without
+    // violating that FK (see repository.ts's comment).
+    return this.transcriptionByMessageId.get(input.messageId) ?? null;
   }
 
-  async recordTranscription(input: unknown): Promise<void> {
+  async findExistingInboundAudio(input: { companyId: string; messageId: string }) {
+    return this.mediaByKey.get(this.mediaKey(input.companyId, input.messageId)) ?? null;
+  }
+
+  async recordInboundAudio(input: {
+    companyId: string;
+    messageId: string;
+    mimeType: string | null;
+  }): Promise<{ mediaFileId: string }> {
+    this.recordedInboundAudio.push(input);
+    this.mediaCounter += 1;
+    const mediaFileId = `media-file-${this.mediaCounter}`;
+    this.mediaByKey.set(this.mediaKey(input.companyId, input.messageId), {
+      mediaFileId,
+      mimeType: input.mimeType,
+    });
+    return { mediaFileId };
+  }
+
+  async recordTranscription(input: {
+    messageId: string;
+    rawText: string;
+    detectedLanguage: string | null;
+    languageConfidence: number | null;
+  }): Promise<void> {
     this.recordedTranscriptions.push(input);
+    this.transcriptionByMessageId.set(input.messageId, {
+      rawText: input.rawText,
+      detectedLanguage: input.detectedLanguage,
+      languageConfidence: input.languageConfidence,
+    });
   }
 
   async recordGeneratedAudioMetadata(input: unknown): Promise<void> {
@@ -122,6 +196,21 @@ class FakeVoiceConsumerRepository implements VoiceConsumerRepository {
 
   async applyLeadUpdates(input: { leadUpdates: unknown }): Promise<void> {
     this.appliedLeadUpdates.push(input.leadUpdates);
+  }
+
+  async recordJobFailure(input: {
+    companyId: string | null;
+    queueName: string;
+    jobId: string;
+    correlationId: string;
+    messageId: string;
+    stage: string;
+    attempt: number;
+    category: string;
+    retryable: boolean;
+    errorSummary: string;
+  }): Promise<void> {
+    this.recordedJobFailures.push(input);
   }
 }
 
@@ -222,6 +311,9 @@ function makePayload(overrides: Partial<VoiceJobPayload> = {}): VoiceJobPayload 
     waId: "919820000001",
     mediaId: "MEDIA1",
     mimeType: "audio/ogg",
+    jobId: "job-1",
+    correlationId: "corr-1",
+    attempt: 1,
     ...overrides,
   };
 }
@@ -263,6 +355,7 @@ describe("processVoiceJob", () => {
       storageProvider,
       logger: silentLogger,
       voiceReplyMode,
+      queueName: "dravonix-voice-queue-staging",
     };
   }
 
@@ -312,6 +405,245 @@ describe("processVoiceJob", () => {
     expect(whatsappProvider.sentAudio).toHaveLength(1);
     // TTS synthesis itself must not be re-attempted on redelivery, not just the send.
     expect(synthesizeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  describe("retry safety: media_files/transcriptions idempotency (voice pipeline reliability phases 3-5)", () => {
+    it("CASE A: a duplicate queue delivery before any processing produces a single logical media record", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+      await processVoiceJob(deps, makePayload());
+
+      expect(repo.recordedInboundAudio).toHaveLength(1);
+      expect(repo.recordedTranscriptions).toHaveLength(1);
+    });
+
+    it("CASE B/C: a retry after the media row (and stored object) already exist reuses the same media record and never re-downloads from WhatsApp", async () => {
+      const getMediaMetadataSpy = vi.spyOn(whatsappProvider, "getMediaMetadata");
+      const downloadMediaSpy = vi.spyOn(whatsappProvider, "downloadMedia");
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+      expect(getMediaMetadataSpy).toHaveBeenCalledTimes(1);
+      expect(downloadMediaSpy).toHaveBeenCalledTimes(1);
+
+      await processVoiceJob(deps, makePayload()); // simulated retry
+
+      // No second WhatsApp media fetch -- the retry found the media_files
+      // row (and its stored R2 object) already present and reused both.
+      expect(getMediaMetadataSpy).toHaveBeenCalledTimes(1);
+      expect(downloadMediaSpy).toHaveBeenCalledTimes(1);
+      expect(repo.recordedInboundAudio).toHaveLength(1);
+    });
+
+    it("CASE D: a retry after transcription already succeeded/persisted does not call the STT provider again", async () => {
+      const transcribeSpy = vi.spyOn(sttProvider, "transcribe");
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+      expect(transcribeSpy).toHaveBeenCalledTimes(1);
+
+      await processVoiceJob(deps, makePayload()); // simulated retry
+
+      expect(transcribeSpy).toHaveBeenCalledTimes(1);
+      expect(repo.recordedTranscriptions).toHaveLength(1);
+    });
+
+    it("reuses the persisted transcript's own detected language/confidence on a retry, not the fresh-request defaults", async () => {
+      sttProvider.fixedDetectedLanguageCode = "ml";
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+      const firstDetected = repo.recordedTranscriptions[0] as { detectedLanguage: string | null };
+      expect(firstDetected.detectedLanguage).toBe("ml");
+
+      // A second delivery must reuse the already-persisted transcript
+      // (including its detected language) rather than calling STT again --
+      // asserted indirectly via CASE D's transcribeSpy above and directly
+      // here via the AI call actually seeing the reused language.
+      aiProvider.calls.length = 0;
+      await processVoiceJob(deps, makePayload());
+      expect(aiProvider.calls[0]?.input.currentDetectedLanguage).toBe("ml");
+    });
+  });
+
+  describe("ElevenLabs failure classification and safe recording (voice pipeline reliability phases 5-8)", () => {
+    function throwingSttProvider(error: unknown): SpeechToTextProvider {
+      return {
+        providerName: "elevenlabs",
+        transcribe: async () => {
+          throw error;
+        },
+      };
+    }
+
+    it("CASE E: a retryable ElevenLabs failure (5xx/timeout) is rethrown so the existing queue retry mechanism handles it, and records no job failure", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      deps.sttProvider = throwingSttProvider(
+        new ElevenLabsProviderError(
+          "ElevenLabs speech-to-text request failed with status 503",
+          503,
+          "server_error",
+          true,
+        ),
+      );
+
+      await expect(processVoiceJob(deps, makePayload())).rejects.toThrow(ElevenLabsProviderError);
+      expect(repo.recordedJobFailures).toHaveLength(0);
+      expect(repo.recordedInboundAudio).toHaveLength(1); // media was already durably recorded before the STT call
+    });
+
+    it("CASE F: a 429 rate-limit failure is classified retryable and rethrown, not swallowed", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      deps.sttProvider = throwingSttProvider(
+        new ElevenLabsProviderError(
+          "ElevenLabs speech-to-text request failed with status 429",
+          429,
+          "rate_limited",
+          true,
+        ),
+      );
+
+      await expect(processVoiceJob(deps, makePayload())).rejects.toThrow(ElevenLabsProviderError);
+      expect(repo.recordedJobFailures).toHaveLength(0);
+    });
+
+    it("CASE G/I: a non-retryable configuration/authentication failure is recorded as exactly one durable job_failure and the job stops without throwing (no wasted retries)", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      deps.sttProvider = throwingSttProvider(
+        new ElevenLabsProviderError(
+          "ElevenLabs speech-to-text request failed with status 401 (category: authentication_error)",
+          401,
+          "authentication_error",
+          false,
+        ),
+      );
+
+      await expect(processVoiceJob(deps, makePayload())).resolves.toBeUndefined();
+
+      expect(repo.recordedJobFailures).toHaveLength(1);
+      expect(repo.recordedJobFailures[0]).toMatchObject({
+        stage: "stt_transcription",
+        category: "authentication_error",
+        retryable: false,
+        messageId: "msg-1",
+        jobId: "job-1",
+        queueName: "dravonix-voice-queue-staging",
+      });
+      // No customer-visible reply is fabricated for a config failure --
+      // this is a platform-side problem, not something re-sending fixes.
+      expect(whatsappProvider.sentText).toHaveLength(0);
+      expect(aiProvider.calls).toHaveLength(0);
+    });
+
+    it("CASE H: the sanitized job_failure summary never contains raw provider response detail", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      const sensitiveDetail = "sk_live_leaked_key_should_never_appear_1234567890";
+      // Simulates what the real elevenLabsSttProvider would throw -- already
+      // sanitized at the provider boundary (see elevenLabsError.ts), so this
+      // is really asserting the whole pipeline never reintroduces a leak
+      // downstream even if a future provider change forgot to sanitize.
+      deps.sttProvider = throwingSttProvider(
+        new ElevenLabsProviderError(
+          "ElevenLabs speech-to-text request failed with status 401 (category: authentication_error)",
+          401,
+          "authentication_error",
+          false,
+        ),
+      );
+
+      await processVoiceJob(deps, makePayload());
+
+      const failure = repo.recordedJobFailures[0];
+      expect(failure).toBeDefined();
+      expect(failure!.errorSummary).not.toContain("sk_");
+      expect(failure!.errorSummary).not.toContain(sensitiveDetail);
+    });
+
+    it("CASE I: a second retry of the same job after a recorded terminal failure does not record a duplicate failure or re-attempt STT once the underlying config is fixed", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      deps.sttProvider = throwingSttProvider(
+        new ElevenLabsProviderError("auth failed", 401, "authentication_error", false),
+      );
+
+      await processVoiceJob(deps, makePayload());
+      expect(repo.recordedJobFailures).toHaveLength(1);
+
+      // Operator fixes the credential; a fresh retry of the same logical
+      // job (no transcription was ever persisted, since the failure was
+      // before recordTranscription) proceeds normally and succeeds.
+      deps.sttProvider = sttProvider;
+      await processVoiceJob(deps, makePayload());
+
+      expect(repo.recordedTranscriptions).toHaveLength(1);
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+  });
+
+  describe("tenant isolation (PHASE 16)", () => {
+    it("scopes the media_files select-or-create lookup by companyId, not messageId alone", async () => {
+      // message_id is a globally unique UUID FK-bound to exactly one
+      // company's `messages` row (see repository.ts), so a real
+      // cross-company collision on messageId alone can't occur without
+      // violating that FK. The company_id filter in
+      // findExistingInboundAudio is still the actual (application-level,
+      // since this repository uses the RLS-bypassing service-role client)
+      // isolation boundary -- this test locks in that every lookup passes
+      // the caller's own companyId, not a hardcoded/wrong one.
+      const COMPANY_B = "bbbbbbbb-0000-0000-0000-000000000002";
+      const findSpy = vi.spyOn(repo, "findExistingInboundAudio");
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload({ messageId: "msg-company-a" }));
+
+      repo.context = baseConversationContext({ companyId: COMPANY_B });
+      await processVoiceJob(
+        deps,
+        makePayload({ companyId: COMPANY_B, conversationId: "conv-b", messageId: "msg-company-b" }),
+      );
+
+      expect(findSpy).toHaveBeenNthCalledWith(1, {
+        companyId: COMPANY_ID,
+        messageId: "msg-company-a",
+      });
+      expect(findSpy).toHaveBeenNthCalledWith(2, {
+        companyId: COMPANY_B,
+        messageId: "msg-company-b",
+      });
+      expect(repo.recordedInboundAudio).toHaveLength(2);
+      expect(repo.recordedInboundAudio[0]).toMatchObject({ companyId: COMPANY_ID });
+      expect(repo.recordedInboundAudio[1]).toMatchObject({ companyId: COMPANY_B });
+    });
+
+    it("never cross-resolves two companies' job_failures under an authentication failure", async () => {
+      const COMPANY_B = "bbbbbbbb-0000-0000-0000-000000000002";
+      const failingStt: SpeechToTextProvider = {
+        providerName: "elevenlabs",
+        transcribe: async () => {
+          throw new ElevenLabsProviderError("auth failed", 401, "authentication_error", false);
+        },
+      };
+      const deps = makeDeps(activeEntitlementSnapshot());
+      deps.sttProvider = failingStt;
+
+      await processVoiceJob(deps, makePayload({ messageId: "msg-company-a" }));
+
+      repo.context = baseConversationContext({ companyId: COMPANY_B });
+      await processVoiceJob(
+        deps,
+        makePayload({ companyId: COMPANY_B, conversationId: "conv-b", messageId: "msg-company-b" }),
+      );
+
+      expect(repo.recordedJobFailures).toHaveLength(2);
+      expect(repo.recordedJobFailures[0]).toMatchObject({
+        companyId: COMPANY_ID,
+        messageId: "msg-company-a",
+      });
+      expect(repo.recordedJobFailures[1]).toMatchObject({
+        companyId: COMPANY_B,
+        messageId: "msg-company-b",
+      });
+    });
   });
 
   it("finalizes the voice reply as delivery_unknown (never throws) when TTS/upload/send fails ambiguously", async () => {
@@ -383,7 +715,11 @@ describe("processVoiceJob", () => {
       expect(handoverRepo.handoverCalls).toHaveLength(0);
     });
 
-    it("does not re-run transcription or generate an AI reply on a redelivery received while ai_mode is paused", async () => {
+    it("does not re-run media download, transcription, or generate an AI reply on a redelivery received while ai_mode is paused", async () => {
+      // Voice pipeline reliability phase: payload.messageId-keyed
+      // select-or-create dedup applies regardless of ai_mode/conversation
+      // state -- a redelivered job reuses the already-persisted media and
+      // transcript exactly as it would for an active conversation.
       repo.context = baseConversationContext({
         conversationState: "human_active",
         aiMode: "paused",
@@ -393,15 +729,8 @@ describe("processVoiceJob", () => {
       await processVoiceJob(deps, makePayload());
       await processVoiceJob(deps, makePayload()); // redelivery of the same queue message
 
-      // Message-ID deduplication is a property of the queue/repository layer,
-      // not this pipeline (recordInboundAudio/recordTranscription are called
-      // once per delivery) -- this test documents and locks in that current
-      // contract for the paused-AI path specifically, so a future regression
-      // here is caught even though the underlying dedup guarantee lives
-      // elsewhere (see supabaseVoiceConsumerRepository for the persistence
-      // layer's own idempotency behaviour).
-      expect(repo.recordedInboundAudio).toHaveLength(2);
-      expect(repo.recordedTranscriptions).toHaveLength(2);
+      expect(repo.recordedInboundAudio).toHaveLength(1);
+      expect(repo.recordedTranscriptions).toHaveLength(1);
       expect(aiProvider.calls).toHaveLength(0);
       expect(whatsappProvider.sentText).toHaveLength(0);
       expect(whatsappProvider.sentAudio).toHaveLength(0);
