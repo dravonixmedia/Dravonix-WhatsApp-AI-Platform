@@ -199,7 +199,10 @@ describe("processMessageJob", () => {
     knowledgeRetriever = { retrieve: vi.fn(async () => []) };
   });
 
-  function makeDeps(entitlementSnapshot: EntitlementSnapshot): MessageConsumerDeps {
+  function makeDeps(
+    entitlementSnapshot: EntitlementSnapshot,
+    overrides: Partial<MessageConsumerDeps> = {},
+  ): MessageConsumerDeps {
     return {
       repo,
       handoverRepo,
@@ -208,6 +211,7 @@ describe("processMessageJob", () => {
       aiProvider,
       whatsappProvider,
       logger: silentLogger,
+      ...overrides,
     };
   }
 
@@ -519,5 +523,181 @@ describe("processMessageJob", () => {
     await processMessageJob(deps, makePayload());
 
     expect(repo.appliedLeadUpdates).toEqual([{ budget: "50000", service: "Website Development" }]);
+  });
+
+  describe("DRAIVA Research staging pilot (double gate: env AND companies.is_demo)", () => {
+    function capturingLogger(): {
+      logger: ReturnType<typeof createLogger>;
+      lines: Record<string, unknown>[];
+    } {
+      const lines: Record<string, unknown>[] = [];
+      const logger = createLogger(
+        { environment: "test" },
+        { write: (line) => lines.push(JSON.parse(line)) },
+      );
+      return { logger, lines };
+    }
+
+    it("stays disabled by default when researchStagingEnabled is omitted, even for a demo company", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload());
+
+      expect(aiProvider.calls[0]?.input.researchEnabled).toBeFalsy();
+    });
+
+    it("stays disabled when the Worker env allows research but the company is not the demo company", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: false },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), { researchStagingEnabled: true });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(aiProvider.calls[0]?.input.researchEnabled).toBeFalsy();
+    });
+
+    it("stays disabled when the company is the demo company but the Worker env does not allow research", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), { researchStagingEnabled: false });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(aiProvider.calls[0]?.input.researchEnabled).toBeFalsy();
+    });
+
+    it("activates research only when BOTH the Worker env flag and companies.is_demo are true", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), { researchStagingEnabled: true });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(aiProvider.calls[0]?.input.researchEnabled).toBe(true);
+    });
+
+    it("logs a research query privacy violation when the model's search query contained this turn's phone number, without altering the reply", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const { logger, lines } = capturingLogger();
+      const leakyAiProvider = new MockAiProvider();
+      const originalGenerate = leakyAiProvider.generate.bind(leakyAiProvider);
+      leakyAiProvider.generate = async (input, repairInstruction) => {
+        const result = await originalGenerate(input, repairInstruction);
+        return {
+          ...result,
+          research: {
+            searchesPerformed: 1,
+            searchQueries: ["interior trends for customer 919820000001"],
+            findings: [],
+            failureReason: null,
+          },
+        };
+      };
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        aiProvider: leakyAiProvider,
+        researchStagingEnabled: true,
+        logger,
+      });
+
+      await processMessageJob(deps, makePayload({ waId: "919820000001" }));
+
+      const violationLine = lines.find(
+        (l) => l.message === "Research query privacy violation detected",
+      );
+      expect(violationLine).toBeDefined();
+      expect((violationLine?.violationTypes as string[]) ?? []).toContain("phone_number");
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+
+    it("does not log a privacy violation for a clean, public research query", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const { logger, lines } = capturingLogger();
+      const cleanAiProvider = new MockAiProvider();
+      const originalGenerate = cleanAiProvider.generate.bind(cleanAiProvider);
+      cleanAiProvider.generate = async (input, repairInstruction) => {
+        const result = await originalGenerate(input, repairInstruction);
+        return {
+          ...result,
+          research: {
+            searchesPerformed: 1,
+            searchQueries: ["Kerala interior fit-out market competitors"],
+            findings: [],
+            failureReason: null,
+          },
+        };
+      };
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        aiProvider: cleanAiProvider,
+        researchStagingEnabled: true,
+        logger,
+      });
+
+      await processMessageJob(deps, makePayload());
+
+      const violationLine = lines.find(
+        (l) => l.message === "Research query privacy violation detected",
+      );
+      expect(violationLine).toBeUndefined();
+    });
+
+    it("logs research execution diagnostics (research_started/completed/source_count) without leaking the search query text", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const { logger, lines } = capturingLogger();
+      const researchingAiProvider = new MockAiProvider();
+      const originalGenerate = researchingAiProvider.generate.bind(researchingAiProvider);
+      researchingAiProvider.generate = async (input, repairInstruction) => {
+        const result = await originalGenerate(input, repairInstruction);
+        return {
+          ...result,
+          research: {
+            searchesPerformed: 1,
+            searchQueries: ["Kerala interior fit-out market competitors"],
+            findings: [
+              {
+                sourceUrl: "https://example.test/a",
+                sourceTitle: "A",
+                sourceDomain: "example.test",
+                publishedAt: null,
+                retrievedAt: "2026-08-12T09:00:00.000Z",
+                relevance: 1,
+                authorityTier: "general_web" as const,
+                keyFindings: "finding text",
+                origin: "external_research" as const,
+              },
+            ],
+            failureReason: null,
+          },
+        };
+      };
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        aiProvider: researchingAiProvider,
+        researchStagingEnabled: true,
+        logger,
+      });
+
+      await processMessageJob(deps, makePayload());
+
+      const diagnosticsLine = lines.find((l) => l.message === "Research execution diagnostics");
+      expect(diagnosticsLine).toMatchObject({
+        researchStarted: true,
+        researchCompleted: true,
+        sourceCount: 1,
+      });
+      expect(JSON.stringify(diagnosticsLine)).not.toContain(
+        "Kerala interior fit-out market competitors",
+      );
+    });
   });
 });

@@ -1,6 +1,11 @@
 import { resolveFallbackMessage } from "./fallbackMessage.js";
 import { applySafetyRules } from "./safety.js";
 import { aiStructuredResponseSchema, type AiStructuredResponse } from "./schema.js";
+import { evaluateResearchEligibility, type ResearchEligibility } from "./research/eligibility.js";
+import type {
+  LiveResearchExecutionMetadata,
+  ResearchExecutionDiagnostics,
+} from "./research/types.js";
 import type { AiGenerationInput, AiProvider, AiUsage } from "./provider.js";
 
 export interface OrchestrationResult {
@@ -10,6 +15,8 @@ export interface OrchestrationResult {
   repaired: boolean;
   /** true if both the original and repair attempts failed and a safe fallback was used. */
   usedFallback: boolean;
+  /** Present only when input.researchEnabled was true for the first attempt (research never runs on a repair attempt -- see providers/anthropicProvider.ts). */
+  research?: LiveResearchExecutionMetadata;
 }
 
 /**
@@ -51,6 +58,30 @@ export interface OrchestrationDependencies {
   onValidationFailure?: (details: { rawFirstAttempt: string; rawRepairAttempt: string }) => void;
   /** Called after each parse/validate/safety step with sanitized, logging-safe diagnostics. */
   onDiagnostics?: (event: ValidationDiagnosticEvent) => void;
+  /**
+   * DRAIVA Research Phase 1 integration seam ONLY (see packages/ai/src/research).
+   * When present and `enabled`, the orchestrator evaluates whether already-
+   * retrieved company knowledge is sufficient on its own (see
+   * research/eligibility.ts) and reports the decision via `onDecision`, for
+   * observability. No tool is attached to the Claude call and no external
+   * research executes in this phase -- the model call, parse/repair loop,
+   * and safety check below are completely unaffected either way. Omitting
+   * this field (the default for every current caller: message-consumer and
+   * voice-consumer do not pass it) leaves this function's behavior
+   * byte-for-byte identical to before this seam existed.
+   */
+  research?: {
+    enabled: boolean;
+    onDecision?: (decision: ResearchEligibility) => void;
+    /**
+     * DRAIVA Research Phase 2: called once after the first attempt returns
+     * (never after a repair attempt, since research never runs there),
+     * with sanitized diagnostics about Anthropic's native web-search tool
+     * use this turn -- see research/types.ts's ResearchExecutionDiagnostics
+     * for exactly what is/isn't included. Only invoked when `enabled`.
+     */
+    onExecuted?: (diagnostics: ResearchExecutionDiagnostics) => void;
+  };
 }
 
 /**
@@ -205,10 +236,19 @@ export async function generateValidatedResponse(
     input.memory.lastDetectedLanguage ??
     input.company.fallbackLanguage;
 
+  // Phase 1 research seam: observation only, see OrchestrationDependencies.research above.
+  const eligibility = deps.research?.enabled
+    ? evaluateResearchEligibility({ knowledge: input.knowledge, researchEnabled: true })
+    : null;
+  if (eligibility) {
+    deps.research?.onDecision?.(eligibility);
+  }
+
   function finalizeWithSafetyCheck(
     data: AiStructuredResponse,
     usage: AiUsage,
     repaired: boolean,
+    research?: LiveResearchExecutionMetadata,
   ): OrchestrationResult {
     const safetyChecked = applySafetyRules(data, { voiceEnabled: input.company.voiceEnabled });
     // A safety-rule-forced escalation (Claude itself did not set requiresHuman,
@@ -226,10 +266,23 @@ export async function generateValidatedResponse(
         repairSucceeded: repaired ? true : null,
       });
     }
-    return { response: safetyChecked, usage, repaired, usedFallback: false };
+    return { response: safetyChecked, usage, repaired, usedFallback: false, research };
   }
 
+  const researchStartedAt = eligibility ? Date.now() : null;
   const first = await deps.provider.generate(input);
+  if (eligibility) {
+    const diagnostics: ResearchExecutionDiagnostics = {
+      researchStarted: (first.research?.searchesPerformed ?? 0) > 0,
+      researchCompleted:
+        (first.research?.searchesPerformed ?? 0) > 0 && !first.research?.failureReason,
+      researchReason: eligibility.reason,
+      sourceCount: first.research?.findings.length ?? 0,
+      researchLatencyMs: researchStartedAt !== null ? Date.now() - researchStartedAt : 0,
+      failureCategory: first.research?.failureReason ?? null,
+    };
+    deps.research?.onExecuted?.(diagnostics);
+  }
   const firstAttempt = tryParse(first.rawText);
   emitDiagnostics(deps, input, {
     stage: "claude_response_parse",
@@ -242,7 +295,7 @@ export async function generateValidatedResponse(
   });
 
   if (firstAttempt.data) {
-    return finalizeWithSafetyCheck(firstAttempt.data, first.usage, false);
+    return finalizeWithSafetyCheck(firstAttempt.data, first.usage, false, first.research);
   }
 
   const repair = await deps.provider.generate(
@@ -267,7 +320,7 @@ export async function generateValidatedResponse(
   };
 
   if (repairAttempt.data) {
-    return finalizeWithSafetyCheck(repairAttempt.data, combinedUsage, true);
+    return finalizeWithSafetyCheck(repairAttempt.data, combinedUsage, true, first.research);
   }
 
   // The repair effort as a whole (not just this one attempt) failed to save
@@ -291,5 +344,6 @@ export async function generateValidatedResponse(
     usage: combinedUsage,
     repaired: true,
     usedFallback: true,
+    research: first.research,
   };
 }

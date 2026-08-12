@@ -2,12 +2,13 @@ import Anthropic from "@anthropic-ai/sdk";
 
 /**
  * Mirrors the pinned dependency version (packages/ai/package.json's
- * "@anthropic-ai/sdk": "^0.32.1", resolved to exactly 0.32.1 in the
- * lockfile). The installed SDK doesn't re-export its own VERSION constant
- * from the main entrypoint, so this is a plain literal -- safe to log,
- * update it if the pin changes.
+ * "@anthropic-ai/sdk": "^0.55.0", resolved to exactly 0.55.0 in the
+ * lockfile -- bumped from 0.32.1 to add native Web Search tool type support,
+ * see research/anthropicWebSearch.ts). The installed SDK doesn't re-export
+ * its own VERSION constant from the main entrypoint, so this is a plain
+ * literal -- safe to log, update it if the pin changes.
  */
-export const ANTHROPIC_SDK_VERSION = "0.32.1";
+export const ANTHROPIC_SDK_VERSION = "0.55.0";
 
 /**
  * Stable, serializable discriminant carried on every classified Chat Agent

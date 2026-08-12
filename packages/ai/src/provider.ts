@@ -1,4 +1,5 @@
 import type { ConversationTemporalContext } from "@dravonix/core";
+import type { LiveResearchExecutionMetadata } from "./research/types.js";
 
 export interface CompanyAiContext {
   companyId: string;
@@ -20,6 +21,14 @@ export interface CompanyAiContext {
   staticFallbackMessage: string;
   /** Whether this company has speech-to-text/text-to-speech enabled (voice_settings.is_enabled). */
   voiceEnabled: boolean;
+  /**
+   * companies.is_demo -- part of the DRAIVA Research staging-pilot gate
+   * (packages/config's RESEARCH_STAGING_ENABLED AND this flag must both be
+   * true; see processMessageJob.ts). Optional and defaults to falsy so every
+   * existing CompanyAiContext object literal (test fixtures, the internal
+   * Chat Agent, which never reads this field at all) stays valid unchanged.
+   */
+  isDemo?: boolean;
 }
 
 export interface ConversationMemoryContext {
@@ -58,6 +67,15 @@ export interface AiGenerationInput {
    * Omitted for text messages, which have no separate detection step.
    */
   currentDetectedLanguage?: string | null;
+  /**
+   * DRAIVA Research: when true, AnthropicProvider attaches Anthropic's
+   * native web_search tool to this call (never on a repair attempt -- see
+   * providers/anthropicProvider.ts) and buildSystemPrompt adds the
+   * company-knowledge-first / company-fact-vs-research-separation
+   * instructions. Omitted/false (the default for every current caller)
+   * preserves today's exact single-shot, tool-free behavior byte for byte.
+   */
+  researchEnabled?: boolean;
 }
 
 export interface AiUsage {
@@ -69,6 +87,8 @@ export interface AiUsage {
 export interface AiGenerationResult {
   rawText: string;
   usage: AiUsage;
+  /** Present only when input.researchEnabled was true for this call. Sanitized, structural metadata about Anthropic's native web-search tool use during this turn -- never raw provider payloads. */
+  research?: LiveResearchExecutionMetadata;
 }
 
 /**

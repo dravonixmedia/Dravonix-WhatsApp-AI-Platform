@@ -1,4 +1,4 @@
-import { generateValidatedResponse, type AiProvider } from "@dravonix/ai";
+import { generateValidatedResponse, sanitizeResearchQuery, type AiProvider } from "@dravonix/ai";
 import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravonix/billing";
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
 import {
@@ -38,6 +38,16 @@ export interface MessageConsumerDeps {
   aiProvider: AiProvider;
   whatsappProvider: WhatsAppProvider;
   logger: Logger;
+  /**
+   * DRAIVA Research staging pilot: the Worker environment's half of the
+   * double gate (packages/config's RESEARCH_STAGING_ENABLED, which cannot
+   * ever be true in production -- see packages/config/src/env.ts). Research
+   * only actually activates for a given conversation when this is true AND
+   * the company's own `companies.is_demo` flag is also true (see below) --
+   * omitting this field (every current test/caller that predates this
+   * feature) defaults to false, leaving behavior unchanged.
+   */
+  researchStagingEnabled?: boolean;
 }
 
 /**
@@ -92,14 +102,38 @@ export async function processMessageJob(
   const knowledge = await deps.knowledgeRetriever.retrieve(payload.companyId, payload.body);
   log.debug("Retrieved knowledge chunks", { chunkCount: knowledge.length });
 
+  // DRAIVA Research staging pilot: a double gate, neither half sufficient on
+  // its own -- the Worker environment (RESEARCH_STAGING_ENABLED, never true
+  // in production) AND this specific company's own companies.is_demo flag.
+  // See packages/config/src/env.ts and CompanyAiContext.isDemo.
+  const researchEnabled = Boolean(deps.researchStagingEnabled) && context.aiContext.isDemo === true;
+
   let response: Awaited<ReturnType<typeof generateValidatedResponse>>["response"];
   let usedFallback: boolean;
+  let research: Awaited<ReturnType<typeof generateValidatedResponse>>["research"];
   try {
-    ({ response, usedFallback } = await generateValidatedResponse(
+    ({ response, usedFallback, research } = await generateValidatedResponse(
       {
         provider: deps.aiProvider,
         onValidationFailure: (details) =>
           log.error("AI structured response failed validation twice", details),
+        research: {
+          enabled: researchEnabled,
+          onDecision: (decision) =>
+            log.debug("Research eligibility evaluated", {
+              decision: decision.decision,
+              bestKnowledgeRelevance: decision.bestKnowledgeRelevance,
+            }),
+          onExecuted: (diagnostics) =>
+            log.info("Research execution diagnostics", {
+              researchStarted: diagnostics.researchStarted,
+              researchCompleted: diagnostics.researchCompleted,
+              researchReason: diagnostics.researchReason,
+              sourceCount: diagnostics.sourceCount,
+              researchLatencyMs: diagnostics.researchLatencyMs,
+              failureCategory: diagnostics.failureCategory,
+            }),
+        },
       },
       {
         company: context.aiContext,
@@ -107,11 +141,35 @@ export async function processMessageJob(
         knowledge,
         customerMessage: payload.body,
         temporal: context.temporal,
+        researchEnabled,
       },
     ));
   } catch (error) {
     log.error("Claude request failed", safeErrorDetails(error));
     throw error;
+  }
+
+  // Post-hoc query-privacy check (Phase 2 design report section 10): the
+  // query Claude actually sent to Anthropic's server-executed web_search
+  // tool cannot be intercepted before it fires (unlike a client-executed
+  // tool), so this is a detective, not preventive, control -- the
+  // preventive control is the WEB RESEARCH prompt instructions
+  // (buildSystemPrompt.ts). A violation here means the prompt-level
+  // instruction was not followed; it is logged for monitoring, never used
+  // to retroactively unsend the search.
+  if (research?.searchQueries.length) {
+    for (const query of research.searchQueries) {
+      const sanitized = sanitizeResearchQuery(query, {
+        phoneNumber: payload.waId,
+        conversationId: payload.conversationId,
+        companyId: payload.companyId,
+      });
+      if (!sanitized.safe) {
+        log.error("Research query privacy violation detected", {
+          violationTypes: sanitized.violations.map((v) => v.type),
+        });
+      }
+    }
   }
 
   if (usedFallback) {

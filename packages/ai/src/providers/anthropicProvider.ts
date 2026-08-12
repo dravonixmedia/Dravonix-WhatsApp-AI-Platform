@@ -1,5 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildSystemPrompt } from "../prompt/buildSystemPrompt.js";
+import {
+  ANTHROPIC_WEB_SEARCH_MAX_USES,
+  buildAnthropicWebSearchTool,
+  extractResearchExecutionMetadata,
+} from "../research/anthropicWebSearch.js";
 import type { AiGenerationInput, AiGenerationResult, AiProvider } from "../provider.js";
 
 export interface AnthropicProviderConfig {
@@ -7,6 +12,8 @@ export interface AnthropicProviderConfig {
   /** Read from ANTHROPIC_MODEL -- never hard-code a "latest" alias (ADR-0004). */
   model: string;
   maxTokens: number;
+  /** DRAIVA Research: max web_search invocations per call. Defaults to ANTHROPIC_WEB_SEARCH_MAX_USES (3) -- the conservative staging-pilot ceiling. */
+  webSearchMaxUses?: number;
 }
 
 /**
@@ -16,6 +23,18 @@ export interface AnthropicProviderConfig {
  * message form the message list. A repair instruction, when present, is
  * appended as an additional user turn within the same call rather than a new
  * customer-visible message.
+ *
+ * DRAIVA Research: when `input.researchEnabled` is true AND this is not a
+ * repair attempt, Anthropic's native, server-executed web_search tool
+ * (`web_search_20250305`) is attached to the call -- Anthropic runs the
+ * search itself within this single request and returns citations/results
+ * embedded in the response; there is no separate client-side tool_use round
+ * trip to orchestrate. The tool is deliberately NEVER attached to a repair
+ * call: a repair's message list does not carry the first attempt's own
+ * response forward (see the `messages` construction below), so a second
+ * search there would be an independent, uncounted-against-the-turn search --
+ * dropping it caps total searches for one customer turn at
+ * config.webSearchMaxUses regardless of whether a repair happens.
  */
 export class AnthropicProvider implements AiProvider {
   private readonly client: Anthropic;
@@ -28,7 +47,14 @@ export class AnthropicProvider implements AiProvider {
     input: AiGenerationInput,
     repairInstruction?: string,
   ): Promise<AiGenerationResult> {
-    const system = buildSystemPrompt(input.company, input.memory, input.knowledge, input.temporal);
+    const researchEnabled = Boolean(input.researchEnabled) && !repairInstruction;
+    const system = buildSystemPrompt(
+      input.company,
+      input.memory,
+      input.knowledge,
+      input.temporal,
+      researchEnabled,
+    );
 
     const messages: Anthropic.MessageParam[] = [
       ...input.memory.recentMessages.map((m) => ({
@@ -62,6 +88,15 @@ export class AnthropicProvider implements AiProvider {
       max_tokens: maxTokens,
       system,
       messages,
+      ...(researchEnabled
+        ? {
+            tools: [
+              buildAnthropicWebSearchTool({
+                maxUses: this.config.webSearchMaxUses ?? ANTHROPIC_WEB_SEARCH_MAX_USES,
+              }),
+            ],
+          }
+        : {}),
     });
 
     const rawText = response.content
@@ -79,6 +114,9 @@ export class AnthropicProvider implements AiProvider {
         // outside the beta prompt-caching resource. Wire this up when upgrading.
         cachedInputTokens: 0,
       },
+      ...(researchEnabled
+        ? { research: extractResearchExecutionMetadata(response.content, new Date()) }
+        : {}),
     };
   }
 }

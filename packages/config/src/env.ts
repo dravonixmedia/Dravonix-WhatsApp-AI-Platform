@@ -29,6 +29,17 @@ const rawEnvSchema = z.object({
     .optional()
     .transform((v) => v === "true"),
 
+  // DRAIVA Research staging pilot (see apps/workers/message-consumer's
+  // processMessageJob.ts): must ALSO be paired with the target company's own
+  // companies.is_demo flag before research actually activates for a given
+  // conversation -- this alone only permits the Worker environment to try.
+  // Hard-blocked from ever being true in production below, identical to
+  // DEV_TENANT_SELECTOR_ENABLED's own guard.
+  RESEARCH_STAGING_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
+
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
@@ -108,6 +119,7 @@ export type RawEnv = z.infer<typeof rawEnvSchema>;
 export interface PlatformEnv extends RawEnv {
   isProduction: boolean;
   devTenantSelectorEnabled: boolean;
+  researchStagingEnabled: boolean;
   whatsappConfigured: boolean;
   anthropicConfigured: boolean;
   googleSpeechConfigured: boolean;
@@ -150,6 +162,16 @@ export function loadEnv(source: Record<string, string | undefined>): PlatformEnv
     );
   }
 
+  if (isProduction && raw.RESEARCH_STAGING_ENABLED) {
+    // DRAIVA Research staging pilot: must be impossible to activate in
+    // production, not merely computed as disabled -- a misconfigured deploy
+    // that sets this flag should fail loudly at startup, exactly like
+    // DEV_TENANT_SELECTOR_ENABLED above.
+    throw new EnvValidationError(
+      "  - RESEARCH_STAGING_ENABLED must not be true when APP_ENV=production",
+    );
+  }
+
   if (isProduction && raw.RAZORPAY_MODE === "live" && !raw.RAZORPAY_KEY_SECRET) {
     throw new EnvValidationError(
       "  - RAZORPAY_MODE=live requires RAZORPAY_KEY_SECRET to be configured",
@@ -160,6 +182,7 @@ export function loadEnv(source: Record<string, string | undefined>): PlatformEnv
     ...raw,
     isProduction,
     devTenantSelectorEnabled: raw.APP_ENV === "development" && raw.DEV_TENANT_SELECTOR_ENABLED,
+    researchStagingEnabled: Boolean(raw.RESEARCH_STAGING_ENABLED),
     whatsappConfigured: Boolean(
       raw.META_ACCESS_TOKEN && raw.META_TEST_PHONE_NUMBER_ID && raw.META_APP_SECRET,
     ),

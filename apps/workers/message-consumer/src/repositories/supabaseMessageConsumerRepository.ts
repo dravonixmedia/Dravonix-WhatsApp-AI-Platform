@@ -44,7 +44,7 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
       leadResult,
       messagesResult,
     ] = await Promise.all([
-      this.client.from("companies").select("name, timezone").eq("id", companyId).single(),
+      this.client.from("companies").select("name, timezone, is_demo").eq("id", companyId).single(),
       this.client.from("company_settings").select("*").eq("company_id", companyId).single(),
       this.client
         .from("ai_settings")
@@ -126,6 +126,7 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
       confidenceThreshold: Number(settings.confidence_threshold),
       staticFallbackMessage: settings.static_fallback_message,
       voiceEnabled: voiceSettingsResult.data?.is_enabled ?? false,
+      isDemo: companyResult.data.is_demo ?? false,
     };
 
     const memory: ConversationMemoryContext = {

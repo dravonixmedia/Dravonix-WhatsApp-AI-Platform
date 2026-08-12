@@ -6,6 +6,8 @@ import type {
 } from "../provider.js";
 import { renderTemporalContextBlock, TEMPORAL_PROMPT_RULES } from "./temporalPromptBlock.js";
 import { DRAIVA_LANGUAGE_POLICY } from "./languagePolicy.js";
+import { RESEARCH_COMPANY_FACT_SEPARATION_POLICY } from "../research/attribution.js";
+import { RESEARCH_LANGUAGE_SYNTHESIS_POLICY } from "../research/languagePolicy.js";
 
 /**
  * Assembles the system prompt for a single Claude call: company identity, tone,
@@ -13,12 +15,18 @@ import { DRAIVA_LANGUAGE_POLICY } from "./languagePolicy.js";
  * Prompt section 13), conversation memory, and the hard safety rules from
  * section 12. Kept as a pure function so prompt construction is independently
  * testable and reviewable without a live API key.
+ *
+ * `researchEnabled` (default false) adds the DRAIVA Research staging-pilot
+ * WEB RESEARCH section -- omitting it (every call site before this feature
+ * existed, and every repair-attempt call) leaves the prompt byte-for-byte
+ * identical to before this parameter existed.
  */
 export function buildSystemPrompt(
   company: CompanyAiContext,
   memory: ConversationMemoryContext,
   knowledge: RetrievedKnowledgeSnippet[],
   temporal: ConversationTemporalContext,
+  researchEnabled = false,
 ): string {
   const sections: string[] = [];
 
@@ -83,6 +91,63 @@ export function buildSystemPrompt(
       .join("\n"),
   );
 
+  if (researchEnabled) {
+    sections.push(
+      [
+        "WEB RESEARCH (staging pilot -- the web_search tool is available for this conversation):",
+        "- First rely on APPROVED COMPANY KNOWLEDGE below and the retrieved knowledge for this question.",
+        "  Only use web_search when the customer's question genuinely needs CURRENT or PUBLIC information",
+        "  that company knowledge cannot answer -- for example: explicit research requests, competitor",
+        "  research, market research, latest/current trends, current pricing or ranges, current public",
+        "  regulations, current product information, or current industry information.",
+        "- Do NOT use web_search for simple questions company knowledge already answers, such as business",
+        "  hours, which services or products you offer, or your office address -- answer those directly.",
+        "",
+        "RESEARCH ACTION REQUEST vs SERVICE CAPABILITY QUESTION -- this distinction is critical and a common",
+        "source of mistakes, so read it carefully:",
+        '- A RESEARCH ACTION REQUEST asks YOU to go and perform research right now. Examples: "Can you ' +
+          'research the Kerala market?", "Can you do some research on our competitors?", "Research the ' +
+          'latest interior trends in Dubai.", "Can you find the main competitors in Kerala?", "Please ' +
+          'research the current market.", "Do a competitor analysis for us.", "Can you look into the Kerala ' +
+          'interior fit-out market?". Treat every one of these as an instruction to use web_search yourself',
+        "  -- never as a question about what the company sells.",
+        "- A SERVICE CAPABILITY QUESTION asks whether THE COMPANY offers research as one of its own services.",
+        '  Examples: "Do you offer market research as a service?", "Is competitive research included in ' +
+          'your package?", "Do you provide research services?". These ask about the company\'s service',
+        "  catalog and must NOT automatically trigger web_search -- answer them from company knowledge",
+        "  instead, the same as any other services question.",
+        "- Explicit action language is a strong signal of a RESEARCH ACTION REQUEST (this is guidance, not a",
+        "  rigid keyword list -- always weigh the whole message and conversation, not just these words):",
+        "  research, do a research, research this, research the market, look into, investigate, analyze the",
+        "  market, find competitors, compare competitors, competitor analysis, market analysis, look up, find",
+        "  out, check the latest, what are the latest, what is currently happening, current trends, current",
+        "  market, latest trends, recent developments.",
+        "- CRITICAL: When the customer explicitly asks you to research, investigate, analyze, compare, look",
+        "  up, or find current public information, treat this as a request to perform the research yourself",
+        "  using web search. Do NOT interpret the request as a question about whether the company sells or",
+        "  offers research as a service unless the customer explicitly asks whether research is a company",
+        "  service.",
+        '  * Customer: "Can you research the Kerala market for competitors?" -> PERFORM RESEARCH.',
+        '  * Customer: "Do you offer market research?" -> answer whether the COMPANY offers that service.',
+        '  * Customer: "Can you research competitors for my project?" -> PERFORM RESEARCH.',
+        "- A RESEARCH ACTION REQUEST overrides the usual \"no matching company knowledge -> say you're not",
+        '  certain and set requiresHuman=true" fallback described elsewhere in this prompt: if the customer',
+        "  explicitly asked you to research, investigate, analyze, compare, or look something up, and company",
+        "  knowledge does not cover it, use web_search rather than escalating to a human immediately. Only",
+        "  escalate afterward if web_search itself fails or cannot answer the request (see below).",
+        "",
+        "- Use web_search AT MOST ONCE for this turn.",
+        RESEARCH_COMPANY_FACT_SEPARATION_POLICY,
+        RESEARCH_LANGUAGE_SYNTHESIS_POLICY,
+        "- Keep your answer concise and WhatsApp-appropriate: summarize useful findings in your own words --",
+        "  do not paste multiple raw URLs or a long source list into the reply.",
+        "- If web_search fails, is unavailable, or returns nothing useful, say so honestly and do not",
+        "  fabricate information -- fall back to company knowledge, or set requiresHuman=true if the",
+        "  question cannot be answered without it.",
+      ].join("\n"),
+    );
+  }
+
   if (company.enabledLanguages.includes("ml")) {
     sections.push(
       [
@@ -135,6 +200,14 @@ export function buildSystemPrompt(
       "Retrieved knowledge for this question (cite sourceId in knowledgeSourceIds when you use one):\n" +
         knowledge.map((k) => `[sourceId=${k.sourceId}] ${k.title}: ${k.content}`).join("\n"),
     );
+  } else if (researchEnabled) {
+    sections.push(
+      "No company knowledge was retrieved for this question. Do not invent facts. If the customer " +
+        "explicitly asked you to research, investigate, analyze, compare, or look something up, or the " +
+        "question needs current or public information, use web_search per the WEB RESEARCH rules above " +
+        "instead of escalating immediately. Otherwise, if the question requires company-specific " +
+        "information you don't have, say you are not certain and set requiresHuman=true.",
+    );
   } else {
     sections.push(
       "No company knowledge was retrieved for this question. Do not invent facts -- if the question " +
@@ -163,7 +236,12 @@ export function buildSystemPrompt(
   sections.push(
     `Escalate (requiresHuman=true) when your confidence is below ${company.confidenceThreshold}, ` +
       "when the customer asks for a human, when the topic is restricted, or when you lack approved " +
-      "knowledge for a pricing/policy/availability question.",
+      "knowledge for a pricing/policy/availability question." +
+      (researchEnabled
+        ? " Exception: if the customer explicitly asked you to research, investigate, analyze, compare, " +
+          "or look something up, use web_search first per the WEB RESEARCH rules above rather than " +
+          "escalating immediately -- only escalate afterward if web_search itself cannot answer it."
+        : ""),
   );
 
   sections.push(
