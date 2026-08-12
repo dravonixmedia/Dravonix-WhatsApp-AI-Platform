@@ -76,7 +76,12 @@ export interface ResearchFinding {
 }
 
 export type ResearchFailureReason =
-  "provider_error" | "provider_timeout" | "no_relevant_sources" | "call_limit_exceeded";
+  | "provider_error"
+  | "provider_timeout"
+  | "no_relevant_sources"
+  | "call_limit_exceeded"
+  | "rate_limited"
+  | "invalid_configuration";
 
 /**
  * The outcome of one bounded research round trip (see boundedExecution.ts).
@@ -90,4 +95,52 @@ export interface ResearchToolResult {
   success: boolean;
   failureReason: ResearchFailureReason | null;
   executedAt: string;
+}
+
+/**
+ * Sanitized, structural metadata about Anthropic's native web_search tool
+ * use during one Claude call (see research/anthropicWebSearch.ts). Distinct
+ * from ResearchToolResult (the Phase 1 mock-provider round-trip shape):
+ * Anthropic's web search is a SERVER-side tool -- there is no client-executed
+ * `search(query)` call to wrap, so this metadata is extracted from the
+ * completed Claude response instead. `searchQueries` carries the literal
+ * query text Claude sent to the tool (itself public, non-sensitive by
+ * construction -- see the web_research tool description's privacy
+ * instructions) so a caller with access to this turn's private identifiers
+ * (phone number, conversation id) can run a post-hoc sanitizeResearchQuery
+ * check without this module ever needing to receive those identifiers
+ * itself.
+ */
+export interface LiveResearchExecutionMetadata {
+  /** How many times Claude actually invoked the web_search tool this call (0 if it judged research unnecessary). */
+  searchesPerformed: number;
+  /** The literal query text/strings Claude sent to web_search, in call order. */
+  searchQueries: string[];
+  findings: ResearchFinding[];
+  /** Set when at least one search failed server-side (e.g. rate limited); does not necessarily mean the whole turn failed if other searches or company knowledge still produced a usable answer. */
+  failureReason: ResearchFailureReason | null;
+}
+
+/**
+ * Sanitized diagnostics for one turn's research usage (Phase 2 design
+ * report, section 18 / observability). Never logs raw query text, source
+ * content, or provider payloads -- only counts, a short reason string, and
+ * a bounded latency measurement.
+ */
+export interface ResearchExecutionDiagnostics {
+  /** True when Claude actually invoked web_search at least once this turn. */
+  researchStarted: boolean;
+  /** True when research started AND completed without an unrecoverable failure. */
+  researchCompleted: boolean;
+  /** Why research was or wasn't eligible for this turn (see eligibility.ts). */
+  researchReason: string;
+  sourceCount: number;
+  /**
+   * Wall-clock duration of the whole provider call that had research
+   * enabled, in milliseconds. Anthropic does not expose a per-tool-call
+   * timestamp, so this is an upper bound on search-plus-synthesis time
+   * combined, not an isolated search-only measurement.
+   */
+  researchLatencyMs: number;
+  failureCategory: ResearchFailureReason | null;
 }

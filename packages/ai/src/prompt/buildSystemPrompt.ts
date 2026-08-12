@@ -6,6 +6,8 @@ import type {
 } from "../provider.js";
 import { renderTemporalContextBlock, TEMPORAL_PROMPT_RULES } from "./temporalPromptBlock.js";
 import { DRAIVA_LANGUAGE_POLICY } from "./languagePolicy.js";
+import { RESEARCH_COMPANY_FACT_SEPARATION_POLICY } from "../research/attribution.js";
+import { RESEARCH_LANGUAGE_SYNTHESIS_POLICY } from "../research/languagePolicy.js";
 
 /**
  * Assembles the system prompt for a single Claude call: company identity, tone,
@@ -13,12 +15,18 @@ import { DRAIVA_LANGUAGE_POLICY } from "./languagePolicy.js";
  * Prompt section 13), conversation memory, and the hard safety rules from
  * section 12. Kept as a pure function so prompt construction is independently
  * testable and reviewable without a live API key.
+ *
+ * `researchEnabled` (default false) adds the DRAIVA Research staging-pilot
+ * WEB RESEARCH section -- omitting it (every call site before this feature
+ * existed, and every repair-attempt call) leaves the prompt byte-for-byte
+ * identical to before this parameter existed.
  */
 export function buildSystemPrompt(
   company: CompanyAiContext,
   memory: ConversationMemoryContext,
   knowledge: RetrievedKnowledgeSnippet[],
   temporal: ConversationTemporalContext,
+  researchEnabled = false,
 ): string {
   const sections: string[] = [];
 
@@ -83,6 +91,29 @@ export function buildSystemPrompt(
       .join("\n"),
   );
 
+  if (researchEnabled) {
+    sections.push(
+      [
+        "WEB RESEARCH (staging pilot -- the web_search tool is available for this conversation):",
+        "- First rely on APPROVED COMPANY KNOWLEDGE below and the retrieved knowledge for this question.",
+        "  Only use web_search when the customer's question genuinely needs CURRENT or PUBLIC information",
+        "  that company knowledge cannot answer -- for example: explicit research requests, competitor",
+        "  research, market research, latest/current trends, current pricing or ranges, current public",
+        "  regulations, current product information, or current industry information.",
+        "- Do NOT use web_search for simple questions company knowledge already answers, such as business",
+        "  hours, which services or products you offer, or your office address -- answer those directly.",
+        "- Use web_search AT MOST ONCE for this turn.",
+        RESEARCH_COMPANY_FACT_SEPARATION_POLICY,
+        RESEARCH_LANGUAGE_SYNTHESIS_POLICY,
+        "- Keep your answer concise and WhatsApp-appropriate: summarize useful findings in your own words --",
+        "  do not paste multiple raw URLs or a long source list into the reply.",
+        "- If web_search fails, is unavailable, or returns nothing useful, say so honestly and do not",
+        "  fabricate information -- fall back to company knowledge, or set requiresHuman=true if the",
+        "  question cannot be answered without it.",
+      ].join("\n"),
+    );
+  }
+
   if (company.enabledLanguages.includes("ml")) {
     sections.push(
       [
@@ -134,6 +165,13 @@ export function buildSystemPrompt(
     sections.push(
       "Retrieved knowledge for this question (cite sourceId in knowledgeSourceIds when you use one):\n" +
         knowledge.map((k) => `[sourceId=${k.sourceId}] ${k.title}: ${k.content}`).join("\n"),
+    );
+  } else if (researchEnabled) {
+    sections.push(
+      "No company knowledge was retrieved for this question. Do not invent facts. If the question " +
+        "requires company-specific information, say you are not certain and set requiresHuman=true. If " +
+        "instead it needs current or public information, consider using web_search per the WEB RESEARCH " +
+        "rules above.",
     );
   } else {
     sections.push(

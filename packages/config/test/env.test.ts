@@ -40,6 +40,22 @@ describe("loadEnv", () => {
     expect(env.devTenantSelectorEnabled).toBe(false);
   });
 
+  it("rejects RESEARCH_STAGING_ENABLED=true in production (DRAIVA Research staging pilot must never activate in production)", () => {
+    expect(() => loadEnv({ APP_ENV: "production", RESEARCH_STAGING_ENABLED: "true" })).toThrow(
+      /RESEARCH_STAGING_ENABLED/,
+    );
+  });
+
+  it("allows RESEARCH_STAGING_ENABLED=true in staging and computes researchStagingEnabled=true", () => {
+    const env = loadEnv({ APP_ENV: "staging", RESEARCH_STAGING_ENABLED: "true" });
+    expect(env.researchStagingEnabled).toBe(true);
+  });
+
+  it("defaults researchStagingEnabled to false when unset", () => {
+    const env = loadEnv(base);
+    expect(env.researchStagingEnabled).toBe(false);
+  });
+
   it("requires RAZORPAY_KEY_SECRET when running live in production", () => {
     expect(() => loadEnv({ APP_ENV: "production", RAZORPAY_MODE: "live" })).toThrow(
       /RAZORPAY_KEY_SECRET/,

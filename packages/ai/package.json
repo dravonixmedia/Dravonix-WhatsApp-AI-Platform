@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
+    "@anthropic-ai/sdk": "^0.55.0",
     "@dravonix/core": "workspace:*",
     "zod": "^3.24.1"
   },

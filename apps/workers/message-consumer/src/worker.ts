@@ -36,6 +36,8 @@ export interface WorkerEnv {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   META_ACCESS_TOKEN?: string;
+  /** DRAIVA Research staging pilot -- see packages/config/src/env.ts (hard-blocked in production). */
+  RESEARCH_STAGING_ENABLED?: string;
 }
 
 function retryEntireBatch(batch: QueueBatch<MessageJobPayload>): void {
@@ -99,6 +101,7 @@ export default {
         graphApiVersion: platformEnv.META_GRAPH_API_VERSION,
       }),
       logger,
+      researchStagingEnabled: platformEnv.researchStagingEnabled,
     };
 
     for (const message of batch.messages) {

@@ -26,11 +26,18 @@ function apiError(
   message = "raw provider message that must never leak",
   errorType?: string,
 ): Anthropic.APIError {
+  // SDK 0.55+'s APIError.generate() treats a falsy `headers` argument as "no
+  // HTTP response was ever received" and always produces an
+  // APIConnectionError regardless of `status` -- a real (even if empty)
+  // Headers instance is required to fabricate a genuine HTTP-status error
+  // for this test double (see APIError.generate in
+  // @anthropic-ai/sdk/core/error.js: `if (!status || !headers) return new
+  // APIConnectionError(...)`).
   return Anthropic.APIError.generate(
     status,
     errorType ? { error: { type: errorType, message } } : { error: { message } },
     message,
-    undefined,
+    new Headers(),
   );
 }
 

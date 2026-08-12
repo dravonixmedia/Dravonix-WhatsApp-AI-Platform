@@ -6,6 +6,7 @@ export * from "./sourceRanker.js";
 export * from "./researchSynthesizer.js";
 export * from "./querySanitizer.js";
 export * from "./webResearchTool.js";
+export * from "./anthropicWebSearch.js";
 export * from "./boundedExecution.js";
 export * from "./eligibility.js";
 export * from "./attribution.js";

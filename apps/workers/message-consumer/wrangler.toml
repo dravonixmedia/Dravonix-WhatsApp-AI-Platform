@@ -39,6 +39,13 @@ name = "dravonix-whatsapp-ai-platform-staging"
 
 [env.staging.vars]
 APP_ENV = "staging"
+# DRAIVA Research staging pilot: this half of the double gate (see
+# packages/config/src/env.ts and CompanyAiContext.isDemo) only ever exists in
+# this staging vars block -- never in [env.production.vars] below -- and
+# loadEnv() additionally hard-fails at startup if APP_ENV=production and this
+# is somehow true. Research still only activates per-conversation for the
+# company with companies.is_demo = true, not for every staging tenant.
+RESEARCH_STAGING_ENABLED = "true"
 
 [[env.staging.queues.consumers]]
 queue = "dravonix-message-queue-staging"
