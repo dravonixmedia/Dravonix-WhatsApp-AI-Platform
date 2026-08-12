@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { buildSystemPrompt } from "../prompt/buildSystemPrompt.js";
 import {
   ANTHROPIC_WEB_SEARCH_MAX_USES,
+  RESEARCH_MAX_TOKENS_MULTIPLIER,
   buildAnthropicWebSearchTool,
   extractResearchExecutionMetadata,
 } from "../research/anthropicWebSearch.js";
@@ -14,6 +15,8 @@ export interface AnthropicProviderConfig {
   maxTokens: number;
   /** DRAIVA Research: max web_search invocations per call. Defaults to ANTHROPIC_WEB_SEARCH_MAX_USES (3) -- the conservative staging-pilot ceiling. */
   webSearchMaxUses?: number;
+  /** DRAIVA Research: max_tokens for a research-enabled first attempt only. Defaults to maxTokens * RESEARCH_MAX_TOKENS_MULTIPLIER -- see that constant's doc comment for why research needs more headroom than a plain answer. Never applied to a repair attempt. */
+  researchMaxTokens?: number;
 }
 
 /**
@@ -79,9 +82,23 @@ export class AnthropicProvider implements AiProvider {
     // (e.g. Malayalam) used up the base budget before finishing the
     // structured response. Give the repair call real extra headroom rather
     // than repeating the same ceiling and risking a second truncation.
+    //
+    // A research-enabled FIRST attempt gets its own, larger budget for the
+    // same underlying reason (see RESEARCH_MAX_TOKENS_MULTIPLIER's doc
+    // comment): search-result/citation overhead competes with the
+    // structured JSON answer for the same max_tokens ceiling, and a
+    // truncated first attempt here is worse than the general case -- it
+    // falls through to the repair attempt, which never has the web_search
+    // tool attached, silently discarding the search that was actually
+    // performed. Checked before the plain researchEnabled branch so a
+    // repair attempt (where researchEnabled is already forced false above)
+    // can never receive the research budget.
     const maxTokens = repairInstruction
       ? Math.round(this.config.maxTokens * 1.5)
-      : this.config.maxTokens;
+      : researchEnabled
+        ? (this.config.researchMaxTokens ??
+          Math.round(this.config.maxTokens * RESEARCH_MAX_TOKENS_MULTIPLIER))
+        : this.config.maxTokens;
 
     const response = await this.client.messages.create({
       model: this.config.model,

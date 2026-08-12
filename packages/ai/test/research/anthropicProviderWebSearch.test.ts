@@ -204,3 +204,140 @@ describe("AnthropicProvider -- DRAIVA Research web_search integration", () => {
     );
   });
 });
+
+describe("AnthropicProvider -- research max_tokens budget (truncation/repair bug fix)", () => {
+  beforeEach(() => {
+    createMock.mockReset();
+  });
+
+  it("1. normal request (research disabled): max_tokens is unchanged from config.maxTokens", async () => {
+    createMock.mockResolvedValue({
+      content: [{ type: "text", text: "{}" }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+    });
+
+    await provider.generate(makeInput());
+
+    expect(createMock.mock.calls[0]![0].max_tokens).toBe(2048);
+  });
+
+  it("2. research request (first attempt): max_tokens is boosted by RESEARCH_MAX_TOKENS_MULTIPLIER over config.maxTokens", async () => {
+    createMock.mockResolvedValue({
+      content: [{ type: "text", text: "{}" }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+    });
+
+    await provider.generate(makeInput({ researchEnabled: true }));
+
+    expect(createMock.mock.calls[0]![0].max_tokens).toBe(4096);
+  });
+
+  it("2b. an explicit researchMaxTokens config override takes priority over the default multiplier", async () => {
+    createMock.mockResolvedValue({
+      content: [{ type: "text", text: "{}" }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+      researchMaxTokens: 5000,
+    });
+
+    await provider.generate(makeInput({ researchEnabled: true }));
+
+    expect(createMock.mock.calls[0]![0].max_tokens).toBe(5000);
+  });
+
+  it("3. repair request (researchEnabled true at input level, but repairInstruction present): tool is not attached and max_tokens stays the existing repair budget (1.5x), never the research budget", async () => {
+    createMock.mockResolvedValue({
+      content: [{ type: "text", text: "{}" }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+    });
+
+    await provider.generate(makeInput({ researchEnabled: true }), "Respond again with valid JSON.");
+
+    const call = createMock.mock.calls[0]![0];
+    expect(call.tools).toBeUndefined();
+    // 2048 * 1.5 = 3072 (existing repair budget) -- NOT 2048 * 2 = 4096 (research budget).
+    expect(call.max_tokens).toBe(3072);
+  });
+
+  it("4. research request with simulated large search metadata: the final structured JSON remains parseable within the boosted budget", async () => {
+    const manyResults = Array.from({ length: 5 }, (_, i) => ({
+      type: "web_search_result" as const,
+      url: `https://example-industry.test/source-${i}`,
+      title: `Kerala digital marketing source ${i}`,
+      encrypted_content: "x".repeat(400), // simulates a nontrivial opaque payload per result
+      page_age: "2 days ago",
+    }));
+    const longAnswer = {
+      answer:
+        "Based on recent research, several digital marketing agencies compete in the Kerala market. " +
+        "Key players include regional and national firms specializing in SEO, social media, and paid campaigns. " +
+        "Notable trends include increased focus on regional-language content and short-form video.",
+      language: "en",
+      intent: "market_research_question",
+      confidence: 0.75,
+      replyMode: "auto",
+      leadUpdates: null,
+      requiresHuman: false,
+      handoverReason: null,
+      knowledgeSourceIds: [],
+      internalNotes: null,
+    };
+
+    createMock.mockResolvedValue({
+      content: [
+        {
+          type: "server_tool_use",
+          id: "t1",
+          name: "web_search",
+          input: { query: "Kerala digital marketing agencies competitors" },
+        },
+        { type: "web_search_tool_result", tool_use_id: "t1", content: manyResults },
+        {
+          type: "text",
+          text: JSON.stringify(longAnswer),
+          citations: manyResults.map((r) => ({
+            type: "web_search_result_location",
+            url: r.url,
+            title: r.title,
+            cited_text: "digital marketing agencies compete in Kerala",
+            encrypted_index: "idx",
+          })),
+        },
+      ],
+      usage: { input_tokens: 500, output_tokens: 3800 },
+    });
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+    });
+
+    const result = await provider.generate(makeInput({ researchEnabled: true }));
+
+    expect(() => JSON.parse(result.rawText)).not.toThrow();
+    expect(JSON.parse(result.rawText)).toEqual(longAnswer);
+    expect(result.research?.searchesPerformed).toBe(1);
+    expect(result.research?.findings.length).toBeGreaterThan(0);
+    // The boosted budget was actually requested for this call.
+    expect(createMock.mock.calls[0]![0].max_tokens).toBe(4096);
+  });
+});
