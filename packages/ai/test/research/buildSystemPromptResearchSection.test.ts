@@ -74,8 +74,10 @@ describe("buildSystemPrompt -- WEB RESEARCH section (DRAIVA Research staging pil
     const { company, memory, temporal } = makeInput();
     const withoutResearch = buildSystemPrompt(company, memory, [], temporal, false);
     const withResearch = buildSystemPrompt(company, memory, [], temporal, true);
-    expect(withoutResearch).not.toMatch(/consider using web_search/i);
-    expect(withResearch).toMatch(/consider using web_search/i);
+    expect(withoutResearch).not.toMatch(/web_search/i);
+    expect(withResearch).toMatch(
+      /use web_search per the WEB RESEARCH rules above instead of escalating/i,
+    );
     // Both must still forbid fabrication and require requiresHuman for company-specific gaps.
     expect(withoutResearch).toMatch(/Do not invent facts/);
     expect(withResearch).toMatch(/Do not invent facts/);
