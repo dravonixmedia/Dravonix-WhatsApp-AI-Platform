@@ -2,6 +2,7 @@ import {
   renderTemporalContextBlock,
   TEMPORAL_PROMPT_RULES,
 } from "../prompt/temporalPromptBlock.js";
+import { DRAIVA_LANGUAGE_POLICY } from "../prompt/languagePolicy.js";
 import type { ChatAgentInput } from "./types.js";
 
 const SENDER_LABELS: Record<string, string> = {
@@ -93,8 +94,12 @@ export function buildChatAgentSystemPrompt(input: ChatAgentInput): string {
     "=== COMPANY CONTEXT ===",
     `Company: ${company.companyName}`,
     `Preferred tone: ${company.tone}`,
-    `Enabled customer languages: ${company.enabledLanguages.join(", ") || "en"}`,
-    `Fallback language: ${company.fallbackLanguage}`,
+    DRAIVA_LANGUAGE_POLICY,
+    `This company's most frequently used customer languages are: ${company.enabledLanguages.join(", ") || "en"} ` +
+      "-- a business/style hint for you, not a hard restriction: the customer-facing bot can and does " +
+      "respond in other languages too whenever it can determine them, so never advise staff that a customer " +
+      "language outside this list is unsupported.",
+    `Fallback language (used by the bot only when a customer's language cannot be determined at all): ${company.fallbackLanguage}`,
     company.restrictedTopics.length > 0
       ? `Restricted topics (never discuss or promise anything about these): ${company.restrictedTopics.join(", ")}`
       : "No company-specific restricted topics configured.",
