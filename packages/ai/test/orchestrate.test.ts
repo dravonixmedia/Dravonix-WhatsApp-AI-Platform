@@ -440,4 +440,136 @@ describe("generateValidatedResponse", () => {
       expect(repairInstruction).toContain("handoverReason");
     });
   });
+
+  describe("multilingual customer support beyond English/Malayalam (DRAIVA is not restricted to a fixed language list)", () => {
+    function schemaValidResponse(overrides: Record<string, unknown> = {}) {
+      return JSON.stringify({
+        answer: "placeholder",
+        language: "en",
+        intent: "general_enquiry",
+        confidence: 0.8,
+        replyMode: "auto",
+        leadUpdates: null,
+        requiresHuman: false,
+        handoverReason: null,
+        knowledgeSourceIds: [],
+        internalNotes: null,
+        ...overrides,
+      });
+    }
+
+    it("English input produces an English response, unchanged from prior behavior", async () => {
+      const provider = new MockAiProvider((input) =>
+        schemaValidResponse({ answer: `Reply matching: ${input.customerMessage}`, language: "en" }),
+      );
+
+      const result = await generateValidatedResponse(
+        { provider },
+        makeInput({ customerMessage: "Do you build e-commerce websites?" }),
+      );
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.response.language).toBe("en");
+      expect(result.response.answer).toContain("Do you build e-commerce websites?");
+    });
+
+    it("Malayalam input produces a Malayalam response, unchanged from prior behavior", async () => {
+      const malayalamQuestion = "നിങ്ങൾ വെബ്സൈറ്റ് ഉണ്ടാക്കുമോ?";
+      const malayalamReply = "അതെ, ഞങ്ങൾ വെബ്സൈറ്റ് ഡെവലപ്മെന്റ് ചെയ്യുന്നു.";
+      const provider = new MockAiProvider(() =>
+        schemaValidResponse({ answer: malayalamReply, language: "ml" }),
+      );
+
+      const result = await generateValidatedResponse(
+        { provider },
+        makeInput({ customerMessage: malayalamQuestion, currentDetectedLanguage: "ml" }),
+      );
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.response.language).toBe("ml");
+      expect(result.response.answer).toBe(malayalamReply);
+    });
+
+    it("Spanish input produces a Spanish response, accepted end to end with no language gate", async () => {
+      const spanishQuestion = "¿Pueden construir sitios web de comercio electrónico?";
+      const spanishReply = "Sí, ofrecemos desarrollo de sitios web y automatización con IA.";
+      const provider = new MockAiProvider((input) =>
+        schemaValidResponse({
+          answer: input.customerMessage === spanishQuestion ? spanishReply : "unexpected",
+          language: "es",
+        }),
+      );
+
+      const result = await generateValidatedResponse(
+        { provider },
+        makeInput({ customerMessage: spanishQuestion }),
+      );
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.repaired).toBe(false);
+      expect(result.response.language).toBe("es");
+      expect(result.response.answer).toBe(spanishReply);
+    });
+
+    it("Arabic input produces an Arabic response, accepted end to end with no language gate", async () => {
+      const arabicQuestion = "هل يمكنكم إنشاء مواقع تجارة إلكترونية؟";
+      const arabicReply = "نعم، نقدم خدمات تطوير المواقع والأتمتة بالذكاء الاصطناعي.";
+      const provider = new MockAiProvider((input) =>
+        schemaValidResponse({
+          answer: input.customerMessage === arabicQuestion ? arabicReply : "unexpected",
+          language: "ar",
+        }),
+      );
+
+      const result = await generateValidatedResponse(
+        { provider },
+        makeInput({ customerMessage: arabicQuestion }),
+      );
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.repaired).toBe(false);
+      expect(result.response.language).toBe("ar");
+      expect(result.response.answer).toBe(arabicReply);
+    });
+
+    it('accepts a positive response to an explicit "Can you speak Spanish?" request, continuing in Spanish', async () => {
+      const provider = new MockAiProvider(() =>
+        schemaValidResponse({
+          answer: "¡Sí, puedo hablar español! ¿En qué puedo ayudarte?",
+          language: "es",
+          intent: "language_capability_question",
+        }),
+      );
+
+      const result = await generateValidatedResponse(
+        { provider },
+        makeInput({ customerMessage: "Are you able to talk in Spanish?" }),
+      );
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.response.language).toBe("es");
+      expect(result.response.answer).toMatch(/sí/i);
+      expect(result.response.requiresHuman).toBe(false);
+    });
+
+    it("accepts a clarifying-question response, in the configured fallback language, when the language cannot be determined", async () => {
+      const provider = new MockAiProvider(() =>
+        schemaValidResponse({
+          answer: "I want to make sure I reply correctly -- which language would you prefer?",
+          language: "en",
+          intent: "language_clarification",
+          confidence: 0.4,
+        }),
+      );
+
+      const result = await generateValidatedResponse(
+        { provider },
+        makeInput({ customerMessage: "??? xyzzy plugh" }),
+      );
+
+      expect(result.usedFallback).toBe(false);
+      expect(result.response.answer).toMatch(/which language/i);
+      expect(result.response.answer).not.toMatch(/only.*english.*malayalam/i);
+    });
+  });
 });
