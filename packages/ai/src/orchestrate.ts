@@ -1,6 +1,7 @@
 import { resolveFallbackMessage } from "./fallbackMessage.js";
 import { applySafetyRules } from "./safety.js";
 import { aiStructuredResponseSchema, type AiStructuredResponse } from "./schema.js";
+import { evaluateResearchEligibility, type ResearchEligibility } from "./research/eligibility.js";
 import type { AiGenerationInput, AiProvider, AiUsage } from "./provider.js";
 
 export interface OrchestrationResult {
@@ -51,6 +52,22 @@ export interface OrchestrationDependencies {
   onValidationFailure?: (details: { rawFirstAttempt: string; rawRepairAttempt: string }) => void;
   /** Called after each parse/validate/safety step with sanitized, logging-safe diagnostics. */
   onDiagnostics?: (event: ValidationDiagnosticEvent) => void;
+  /**
+   * DRAIVA Research Phase 1 integration seam ONLY (see packages/ai/src/research).
+   * When present and `enabled`, the orchestrator evaluates whether already-
+   * retrieved company knowledge is sufficient on its own (see
+   * research/eligibility.ts) and reports the decision via `onDecision`, for
+   * observability. No tool is attached to the Claude call and no external
+   * research executes in this phase -- the model call, parse/repair loop,
+   * and safety check below are completely unaffected either way. Omitting
+   * this field (the default for every current caller: message-consumer and
+   * voice-consumer do not pass it) leaves this function's behavior
+   * byte-for-byte identical to before this seam existed.
+   */
+  research?: {
+    enabled: boolean;
+    onDecision?: (decision: ResearchEligibility) => void;
+  };
 }
 
 /**
@@ -204,6 +221,13 @@ export async function generateValidatedResponse(
     input.currentDetectedLanguage ??
     input.memory.lastDetectedLanguage ??
     input.company.fallbackLanguage;
+
+  // Phase 1 research seam: observation only, see OrchestrationDependencies.research above.
+  if (deps.research?.enabled) {
+    deps.research.onDecision?.(
+      evaluateResearchEligibility({ knowledge: input.knowledge, researchEnabled: true }),
+    );
+  }
 
   function finalizeWithSafetyCheck(
     data: AiStructuredResponse,

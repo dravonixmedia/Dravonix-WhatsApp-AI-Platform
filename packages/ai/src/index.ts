@@ -9,3 +9,4 @@ export * from "./prompt/buildSystemPrompt.js";
 export * from "./providers/mockProvider.js";
 export * from "./providers/anthropicProvider.js";
 export * from "./chatAgent/index.js";
+export * from "./research/index.js";
