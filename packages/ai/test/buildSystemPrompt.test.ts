@@ -3,12 +3,76 @@ import { buildSystemPrompt } from "../src/prompt/buildSystemPrompt.js";
 import { makeInput } from "./fixtures.js";
 
 describe("buildSystemPrompt", () => {
-  it("includes the company name, bot name, and enabled languages", () => {
+  it("includes the company name, bot name, and most-frequently-used languages", () => {
     const { company, memory, knowledge, temporal } = makeInput();
     const prompt = buildSystemPrompt(company, memory, knowledge, temporal);
     expect(prompt).toContain("Dravonix Media");
     expect(prompt).toContain("Dravonix Assistant");
     expect(prompt).toContain("en, ml");
+  });
+
+  describe("multilingual behavior", () => {
+    it("instructs the model to detect and reply in the customer's language, not just a fixed list", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge, temporal);
+      expect(prompt).toMatch(/detect the language of each customer message/i);
+      expect(prompt).toMatch(/reply\s+in that same language/i);
+      expect(prompt).toMatch(/not limited to that list/i);
+    });
+
+    it("lists the required minimum language set as examples, not an exhaustive restriction", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge, temporal);
+      for (const language of [
+        "English",
+        "Malayalam",
+        "Hindi",
+        "Tamil",
+        "Telugu",
+        "Kannada",
+        "Spanish",
+        "Arabic",
+        "French",
+        "German",
+        "Portuguese",
+      ]) {
+        expect(prompt).toContain(language);
+      }
+      expect(prompt).toMatch(/including but not limited to/i);
+    });
+
+    it("never instructs the model to claim it can only communicate in English or Malayalam", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge, temporal);
+      expect(prompt).not.toMatch(/only communicate in english or malayalam/i);
+      expect(prompt).not.toMatch(/is not enabled.*note the limitation/i);
+      expect(prompt).toMatch(
+        /never say your\s+supported languages are only english and malayalam/i,
+      );
+    });
+
+    it("instructs the model to answer positively when explicitly asked if it can speak a given language", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge, temporal);
+      expect(prompt).toMatch(/can you speak spanish/i);
+      expect(prompt).toMatch(/answer yes and continue the conversation in that language/i);
+    });
+
+    it("instructs the model to ask for a language preference only when it genuinely cannot determine the language", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge, temporal);
+      expect(prompt).toMatch(
+        /genuinely cannot determine which language[\s\S]*ask them which language they would prefer/i,
+      );
+      expect(prompt).not.toMatch(/only communicate in english or malayalam/i);
+    });
+
+    it("uses enabledLanguages as a usage hint and fallbackLanguage only as a last-resort default, never as a hard restriction", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge, temporal);
+      expect(prompt).toMatch(/most frequently used customer languages/i);
+      expect(prompt).toMatch(/only as the default when no language can be determined at all/i);
+    });
   });
 
   it("instructs the model to treat customer input and documents as untrusted (prompt-injection defense)", () => {
