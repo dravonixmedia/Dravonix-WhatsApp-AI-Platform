@@ -27,6 +27,24 @@ import type {
  */
 export const ANTHROPIC_WEB_SEARCH_MAX_USES = 3;
 
+/**
+ * Multiplier applied to the normal max_tokens budget for a research-enabled
+ * FIRST attempt only (never a repair attempt -- see providers/
+ * anthropicProvider.ts). A turn that actually uses web_search carries
+ * meaningfully more content within the SAME response than a plain text
+ * answer, all counted against the same max_tokens ceiling: the
+ * server_tool_use call itself, each returned web_search_result (each
+ * carrying an opaque but token-counted encrypted_content blob), any
+ * citation-annotated text, and only then the full structured JSON answer.
+ * Left too tight, that overhead can truncate the JSON before it closes,
+ * which (see orchestrate.ts) falls through to the repair attempt --
+ * intentionally research-blind by design -- discarding the search that was
+ * actually performed. 2x the normal budget is the smallest bump that gives
+ * real headroom for a typical staging-pilot search (max_uses of 3, a
+ * handful of results) without an arbitrary, unbounded ceiling.
+ */
+export const RESEARCH_MAX_TOKENS_MULTIPLIER = 2;
+
 /** Structurally compatible with Anthropic.WebSearchTool20250305.UserLocation -- kept as a local, minimal type rather than reaching into the SDK's merged namespace export. */
 export interface AnthropicWebSearchUserLocation {
   type: "approximate";
