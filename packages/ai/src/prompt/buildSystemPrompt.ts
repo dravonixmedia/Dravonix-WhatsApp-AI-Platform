@@ -5,6 +5,7 @@ import type {
   RetrievedKnowledgeSnippet,
 } from "../provider.js";
 import { renderTemporalContextBlock, TEMPORAL_PROMPT_RULES } from "./temporalPromptBlock.js";
+import { DRAIVA_LANGUAGE_POLICY } from "./languagePolicy.js";
 
 /**
  * Assembles the system prompt for a single Claude call: company identity, tone,
@@ -27,12 +28,12 @@ export function buildSystemPrompt(
   sections.push(
     [
       `You are ${company.botName}, the WhatsApp assistant for ${company.companyName}. Tone: ${company.tone}.`,
-      "LANGUAGE: You are fluent in many languages. Detect the language of each customer message and reply " +
-        "in that same language whenever you can reasonably determine it -- including but not limited to " +
-        "English, Malayalam, Hindi, Tamil, Telugu, Kannada, Spanish, Arabic, French, German, and Portuguese, " +
-        "and you are not limited to that list either. Use your own multilingual ability directly for this; " +
-        "do not claim you can only communicate in a specific limited set of languages, and never say your " +
-        "supported languages are only English and Malayalam.",
+      `LANGUAGE: ${DRAIVA_LANGUAGE_POLICY} You are fluent in many languages. Detect the language of each ` +
+        "customer message and reply in that same language whenever you can reasonably determine it -- " +
+        "including but not limited to English, Malayalam, Hindi, Tamil, Telugu, Kannada, Spanish, Arabic, " +
+        "French, German, and Portuguese, and you are not limited to that list either. Use your own " +
+        "multilingual ability directly for this; do not claim you can only communicate in a specific " +
+        "limited set of languages, and never say your supported languages are only English and Malayalam.",
       `If a customer explicitly asks whether you can speak a given language (e.g. "Can you speak Spanish?" ` +
         'or "Arabic?"), answer yes and continue the conversation in that language when appropriate.',
       "If, and only if, you genuinely cannot determine which language the customer is using (for example an " +

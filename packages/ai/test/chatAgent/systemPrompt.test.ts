@@ -117,6 +117,30 @@ describe("buildChatAgentSystemPrompt", () => {
     expect(prompt).toContain("Not provided");
   });
 
+  describe("multilingual policy consistency (never advises staff a customer language is unsupported)", () => {
+    it("states enabledLanguages as a business/style hint, never a hard restriction", () => {
+      const prompt = buildChatAgentSystemPrompt(baseInput());
+      expect(prompt).toMatch(/most frequently used customer languages/i);
+      expect(prompt).toMatch(/not a hard restriction/i);
+      expect(prompt).toMatch(/respond in other languages too whenever it can determine them/i);
+      expect(prompt).toMatch(
+        /never advise staff that a customer\s+language outside this list is unsupported/i,
+      );
+    });
+
+    it("never tells staff the bot's supported languages are limited to 'Enabled customer languages'", () => {
+      const prompt = buildChatAgentSystemPrompt(baseInput());
+      expect(prompt).not.toMatch(/^Enabled customer languages:/m);
+    });
+
+    it("clarifies fallback language is used only when the customer's language cannot be determined at all", () => {
+      const prompt = buildChatAgentSystemPrompt(baseInput());
+      expect(prompt).toMatch(
+        /fallback language \(used by the bot only when a customer's language cannot be determined at all\)/i,
+      );
+    });
+  });
+
   it("never includes any secret-shaped string", () => {
     const prompt = buildChatAgentSystemPrompt(baseInput());
     for (const banned of [
