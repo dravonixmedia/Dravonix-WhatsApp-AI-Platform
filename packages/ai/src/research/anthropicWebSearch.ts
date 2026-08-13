@@ -12,10 +12,15 @@ import type {
  * Phase 1 mock-oriented WebResearchProvider/rankSources/synthesizeFindings
  * pipeline (still valid, still used by tests and the future custom-tool
  * path) -- Anthropic's web search runs entirely on Anthropic's own
- * infrastructure within a single `messages.create()` call, so there is no
- * client-executed `search(query)` step to wrap. This module only maps the
- * completed response's content blocks into this platform's existing,
- * provider-agnostic research types.
+ * infrastructure, so there is no client-executed `search(query)` step to
+ * wrap. A long-running server-side search turn can pause mid-way
+ * (`stop_reason: "pause_turn"`), requiring providers/anthropicProvider.ts to
+ * re-send the paused assistant content in a bounded number of continuation
+ * calls before the turn is actually complete -- see
+ * MAX_SERVER_TOOL_CONTINUATIONS below. This module only maps the completed
+ * response's content blocks (already assembled across every call that made
+ * up the turn) into this platform's existing, provider-agnostic research
+ * types.
  */
 
 /**
@@ -44,6 +49,20 @@ export const ANTHROPIC_WEB_SEARCH_MAX_USES = 3;
  * handful of results) without an arbitrary, unbounded ceiling.
  */
 export const RESEARCH_MAX_TOKENS_MULTIPLIER = 2;
+
+/**
+ * Maximum number of continuation calls providers/anthropicProvider.ts will
+ * issue when Anthropic pauses a research turn (`stop_reason: "pause_turn"`)
+ * -- per Anthropic's documented server-tools contract, the paused assistant
+ * content must be re-sent as-is to let Claude continue the same turn. Left
+ * unbounded, a turn that keeps pausing could loop indefinitely; 2 is a
+ * conservative ceiling for a staging pilot bounded to at most
+ * ANTHROPIC_WEB_SEARCH_MAX_USES (3) searches per turn in the first place --
+ * if the turn still hasn't resolved after the initial call plus 2
+ * continuations, the provider stops and reports a provider_timeout research
+ * failure rather than looping further or fabricating an answer.
+ */
+export const MAX_SERVER_TOOL_CONTINUATIONS = 2;
 
 /** Structurally compatible with Anthropic.WebSearchTool20250305.UserLocation -- kept as a local, minimal type rather than reaching into the SDK's merged namespace export. */
 export interface AnthropicWebSearchUserLocation {
@@ -239,5 +258,11 @@ export function extractResearchExecutionMetadata(
     searchQueries,
     findings,
     failureReason,
+    // This function has no knowledge of pause_turn continuations -- the
+    // caller (providers/anthropicProvider.ts) owns that bookkeeping and
+    // overrides these after calling this function. Defaulted to 0 here so
+    // the return type is self-consistent for any other caller.
+    pauseTurnCount: 0,
+    researchContinuationCount: 0,
   };
 }

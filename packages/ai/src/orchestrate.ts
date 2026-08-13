@@ -296,6 +296,8 @@ export async function generateValidatedResponse(
       sourceCount: first.research?.findings.length ?? 0,
       researchLatencyMs: researchStartedAt !== null ? Date.now() - researchStartedAt : 0,
       failureCategory: first.research?.failureReason ?? null,
+      pauseTurnCount: first.research?.pauseTurnCount ?? 0,
+      researchContinuationCount: first.research?.researchContinuationCount ?? 0,
     };
     deps.research?.onExecuted?.(diagnostics);
   } else if (researchRequired && deps.research) {
@@ -313,6 +315,8 @@ export async function generateValidatedResponse(
       sourceCount: 0,
       researchLatencyMs: 0,
       failureCategory: null,
+      pauseTurnCount: 0,
+      researchContinuationCount: 0,
     });
   }
   const firstAttempt = tryParse(first.rawText);

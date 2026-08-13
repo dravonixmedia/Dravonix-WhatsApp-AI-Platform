@@ -119,6 +119,10 @@ export interface LiveResearchExecutionMetadata {
   findings: ResearchFinding[];
   /** Set when at least one search failed server-side (e.g. rate limited); does not necessarily mean the whole turn failed if other searches or company knowledge still produced a usable answer. */
   failureReason: ResearchFailureReason | null;
+  /** How many times Anthropic paused the server-side search loop (stop_reason: "pause_turn") this turn. 0 for the common single-call case. */
+  pauseTurnCount: number;
+  /** How many continuation messages.create() calls providers/anthropicProvider.ts issued to resume a paused turn. 0 for the common single-call case; bounded by MAX_SERVER_TOOL_CONTINUATIONS (research/anthropicWebSearch.ts). */
+  researchContinuationCount: number;
 }
 
 /**
@@ -154,4 +158,8 @@ export interface ResearchExecutionDiagnostics {
    */
   researchLatencyMs: number;
   failureCategory: ResearchFailureReason | null;
+  /** How many times Anthropic paused the server-side search loop this turn (see LiveResearchExecutionMetadata.pauseTurnCount). 0 for the common single-call case. */
+  pauseTurnCount: number;
+  /** How many continuation calls were issued to resume a paused turn (see LiveResearchExecutionMetadata.researchContinuationCount). 0 for the common single-call case. */
+  researchContinuationCount: number;
 }
