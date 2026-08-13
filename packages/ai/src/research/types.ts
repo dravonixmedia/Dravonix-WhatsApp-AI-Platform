@@ -126,6 +126,47 @@ export interface LiveResearchExecutionMetadata {
 }
 
 /**
+ * DRAIVA Research -- staging-only live observability (temporary
+ * instrumentation, see providers/anthropicProvider.ts and
+ * apps/workers/message-consumer/src/processMessageJob.ts). Captures exactly
+ * what Anthropic's API actually did for one research-enabled call: the
+ * request shape sent (never the customer message or system prompt) and the
+ * response's structural shape (never the response text, search queries,
+ * URLs, or encrypted_content). Deliberately a separate type from
+ * LiveResearchExecutionMetadata/ResearchExecutionDiagnostics above -- this
+ * is Anthropic-specific wire-level diagnostics for answering "did
+ * Anthropic actually execute web_search", not the provider-agnostic
+ * research-outcome shape those types already serve.
+ */
+export interface AnthropicResearchCallDiagnostics {
+  /** Deterministic intent-detector result for this turn (research/intentDetector.ts). */
+  researchRequired: boolean;
+  /** Whether the researchStagingEnabled + companies.is_demo double gate was on for this turn. */
+  researchEnabled: boolean;
+  model: string;
+  /** The server tool's `name` field (always "web_search" when a tool was attached), or null when researchEnabled was false and no tool was attached at all. */
+  toolName: string | null;
+  /** The server tool's `type` field (e.g. "web_search_20250305"), or null when no tool was attached. */
+  toolType: string | null;
+  /** String rendering of the `tool_choice` actually sent, e.g. "tool:web_search" when forced, "auto" when left to the model, or null when no tool was attached. */
+  toolChoice: string | null;
+  /** The max_tokens value actually sent on the first (research) call. */
+  maxTokens: number;
+  /** stop_reason of the FINAL call that completed this turn (after any pause_turn continuations). */
+  stopReason: string | null;
+  /** content block `.type` values from every call that made up this turn, in call order (e.g. ["server_tool_use", "web_search_tool_result", "text"]). Types only -- never block contents. */
+  responseBlockTypes: string[];
+  /** Sum of usage.server_tool_use.web_search_requests across every call this turn, or null if the field was never present on any response (distinct from a genuine 0). */
+  webSearchRequests: number | null;
+  /** How many times Anthropic paused the server-side search loop this turn. */
+  pauseTurnCount: number;
+  /** How many continuation calls were issued to resume a paused turn. */
+  researchContinuationCount: number;
+  /** Number of distinct sources extracted from the response this turn. */
+  sourceCount: number;
+}
+
+/**
  * Sanitized diagnostics for one turn's research usage (Phase 2 design
  * report, section 18 / observability). Never logs raw query text, source
  * content, or provider payloads -- only counts, a short reason string, and

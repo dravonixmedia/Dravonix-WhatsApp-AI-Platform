@@ -1,5 +1,8 @@
 import type { ConversationTemporalContext } from "@dravonix/core";
-import type { LiveResearchExecutionMetadata } from "./research/types.js";
+import type {
+  AnthropicResearchCallDiagnostics,
+  LiveResearchExecutionMetadata,
+} from "./research/types.js";
 
 export interface CompanyAiContext {
   companyId: string;
@@ -99,6 +102,17 @@ export interface AiGenerationResult {
   usage: AiUsage;
   /** Present only when input.researchEnabled was true for this call. Sanitized, structural metadata about Anthropic's native web-search tool use during this turn -- never raw provider payloads. */
   research?: LiveResearchExecutionMetadata;
+  /**
+   * DRAIVA Research -- TEMPORARY staging-only live observability (see
+   * research/anthropicWebSearch.ts's buildAnthropicResearchCallDiagnostics
+   * and apps/workers/message-consumer/src/processMessageJob.ts). Present
+   * only when input.researchEnabled was true for this call, same as
+   * `research` above. Distinct, deliberately narrower shape: wire-level
+   * request/response structure only (tool config, stop_reason, block
+   * types, web_search_requests count) -- never response text, search query
+   * text, URLs, or encrypted_content.
+   */
+  researchDiagnostics?: AnthropicResearchCallDiagnostics;
 }
 
 /**

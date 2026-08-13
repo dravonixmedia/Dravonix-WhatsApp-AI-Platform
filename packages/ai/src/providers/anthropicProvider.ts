@@ -4,6 +4,7 @@ import {
   ANTHROPIC_WEB_SEARCH_MAX_USES,
   MAX_SERVER_TOOL_CONTINUATIONS,
   RESEARCH_MAX_TOKENS_MULTIPLIER,
+  buildAnthropicResearchCallDiagnostics,
   buildAnthropicWebSearchTool,
   extractResearchExecutionMetadata,
 } from "../research/anthropicWebSearch.js";
@@ -129,19 +130,24 @@ export class AnthropicProvider implements AiProvider {
           Math.round(this.config.maxTokens * RESEARCH_MAX_TOKENS_MULTIPLIER))
         : this.config.maxTokens;
 
-    const toolConfig = researchEnabled
+    const webSearchTool = researchEnabled
+      ? buildAnthropicWebSearchTool({
+          maxUses: this.config.webSearchMaxUses ?? ANTHROPIC_WEB_SEARCH_MAX_USES,
+        })
+      : null;
+    // Force web_search for a deterministically-detected explicit research
+    // request instead of leaving it to auto -- see the class doc comment above.
+    const webSearchToolChoice =
+      researchEnabled && researchRequired
+        ? ({
+            type: "tool" as const,
+            name: "web_search" as const,
+          } satisfies Anthropic.ToolChoiceTool)
+        : undefined;
+    const toolConfig = webSearchTool
       ? {
-          tools: [
-            buildAnthropicWebSearchTool({
-              maxUses: this.config.webSearchMaxUses ?? ANTHROPIC_WEB_SEARCH_MAX_USES,
-            }),
-          ],
-          // Force web_search for a deterministically-detected explicit
-          // research request instead of leaving it to auto -- see the
-          // class doc comment above.
-          ...(researchRequired
-            ? { tool_choice: { type: "tool" as const, name: "web_search" as const } }
-            : {}),
+          tools: [webSearchTool],
+          ...(webSearchToolChoice ? { tool_choice: webSearchToolChoice } : {}),
         }
       : {};
 
@@ -161,6 +167,13 @@ export class AnthropicProvider implements AiProvider {
     let totalOutputTokens = response.usage.output_tokens;
     let pauseTurnCount = 0;
     let continuationCount = 0;
+    // DRAIVA Research staging-only observability (see research/types.ts's
+    // AnthropicResearchCallDiagnostics doc comment): tracked alongside the
+    // existing token accumulation above, purely additive -- read-only
+    // instrumentation on top of the exact same calls already being made,
+    // never an extra request and never a change to which requests are made.
+    let webSearchRequestsTotal = response.usage.server_tool_use?.web_search_requests ?? 0;
+    let webSearchRequestsSeen = response.usage.server_tool_use != null;
 
     if (researchEnabled) {
       while (
@@ -184,6 +197,10 @@ export class AnthropicProvider implements AiProvider {
         allContent.push(...response.content);
         totalInputTokens += response.usage.input_tokens;
         totalOutputTokens += response.usage.output_tokens;
+        if (response.usage.server_tool_use != null) {
+          webSearchRequestsSeen = true;
+          webSearchRequestsTotal += response.usage.server_tool_use.web_search_requests;
+        }
       }
     }
 
@@ -199,6 +216,10 @@ export class AnthropicProvider implements AiProvider {
       .map((block) => block.text)
       .join("");
 
+    const extracted = researchEnabled
+      ? extractResearchExecutionMetadata(allContent, new Date())
+      : null;
+
     return {
       rawText,
       usage: {
@@ -209,19 +230,31 @@ export class AnthropicProvider implements AiProvider {
         // outside the beta prompt-caching resource. Wire this up when upgrading.
         cachedInputTokens: 0,
       },
-      ...(researchEnabled
+      ...(researchEnabled && extracted
         ? {
-            research: (() => {
-              const extracted = extractResearchExecutionMetadata(allContent, new Date());
-              return {
-                ...extracted,
-                failureReason: exceededContinuationBound
-                  ? (extracted.failureReason ?? "provider_timeout")
-                  : extracted.failureReason,
-                pauseTurnCount,
-                researchContinuationCount: continuationCount,
-              };
-            })(),
+            research: {
+              ...extracted,
+              failureReason: exceededContinuationBound
+                ? (extracted.failureReason ?? "provider_timeout")
+                : extracted.failureReason,
+              pauseTurnCount,
+              researchContinuationCount: continuationCount,
+            },
+            researchDiagnostics: buildAnthropicResearchCallDiagnostics({
+              researchRequired,
+              researchEnabled,
+              model: this.config.model,
+              tool: webSearchTool ? { type: webSearchTool.type, name: webSearchTool.name } : null,
+              toolChoice: webSearchToolChoice,
+              maxTokens,
+              allContent,
+              finalStopReason: response.stop_reason,
+              webSearchRequestsTotal,
+              webSearchRequestsSeen,
+              pauseTurnCount,
+              researchContinuationCount: continuationCount,
+              sourceCount: extracted.findings.length,
+            }),
           }
         : {}),
     };

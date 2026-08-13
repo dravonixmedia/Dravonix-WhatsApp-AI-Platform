@@ -28,4 +28,15 @@ export interface MessageConsumerRepository {
     conversationId: string;
     leadUpdates: LeadUpdates;
   }): Promise<void>;
+  /**
+   * DRAIVA Research -- TEMPORARY staging-only live observability. Writes a
+   * sanitized, structural-only diagnostics object (never response text,
+   * prompts, search queries, or URLs -- see AnthropicResearchCallDiagnostics
+   * in @dravonix/ai) into the already-existing, currently-unused
+   * messages.ai_structured_response jsonb column for one outbound AI
+   * message. The caller (processMessageJob.ts) is solely responsible for
+   * only ever invoking this when APP_ENV === "staging" -- this method
+   * itself performs no environment check, since it has no access to it.
+   */
+  recordResearchDiagnostics(messageId: string, diagnostics: Record<string, unknown>): Promise<void>;
 }

@@ -204,6 +204,17 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
     });
     if (error) throw error;
   }
+
+  async recordResearchDiagnostics(
+    messageId: string,
+    diagnostics: Record<string, unknown>,
+  ): Promise<void> {
+    const { error } = await this.client
+      .from("messages")
+      .update({ ai_structured_response: { researchDiagnostics: diagnostics } })
+      .eq("id", messageId);
+    if (error) throw error;
+  }
 }
 
 function leadUpdatesToRow(updates: LeadUpdates): Record<string, string | null> {

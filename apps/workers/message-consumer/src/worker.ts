@@ -102,6 +102,7 @@ export default {
       }),
       logger,
       researchStagingEnabled: platformEnv.researchStagingEnabled,
+      appEnv: platformEnv.APP_ENV,
     };
 
     for (const message of batch.messages) {

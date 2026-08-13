@@ -4,6 +4,7 @@ import { aiStructuredResponseSchema, type AiStructuredResponse } from "./schema.
 import { evaluateResearchEligibility, type ResearchEligibility } from "./research/eligibility.js";
 import { detectResearchIntent } from "./research/intentDetector.js";
 import type {
+  AnthropicResearchCallDiagnostics,
   LiveResearchExecutionMetadata,
   ResearchExecutionDiagnostics,
 } from "./research/types.js";
@@ -18,6 +19,13 @@ export interface OrchestrationResult {
   usedFallback: boolean;
   /** Present only when input.researchEnabled was true for the first attempt (research never runs on a repair attempt -- see providers/anthropicProvider.ts). */
   research?: LiveResearchExecutionMetadata;
+  /**
+   * DRAIVA Research -- TEMPORARY staging-only live observability, threaded
+   * straight through from the provider (see provider.ts's AiGenerationResult
+   * and research/types.ts's AnthropicResearchCallDiagnostics doc comment).
+   * Present only when input.researchEnabled was true for the first attempt.
+   */
+  researchDiagnostics?: AnthropicResearchCallDiagnostics;
 }
 
 /**
@@ -263,6 +271,7 @@ export async function generateValidatedResponse(
     usage: AiUsage,
     repaired: boolean,
     research?: LiveResearchExecutionMetadata,
+    researchDiagnostics?: AnthropicResearchCallDiagnostics,
   ): OrchestrationResult {
     const safetyChecked = applySafetyRules(data, {
       voiceEnabled: input.company.voiceEnabled,
@@ -290,7 +299,14 @@ export async function generateValidatedResponse(
         repairSucceeded: repaired ? true : null,
       });
     }
-    return { response: safetyChecked, usage, repaired, usedFallback: false, research };
+    return {
+      response: safetyChecked,
+      usage,
+      repaired,
+      usedFallback: false,
+      research,
+      researchDiagnostics,
+    };
   }
 
   const researchStartedAt = eligibility ? Date.now() : null;
@@ -341,7 +357,13 @@ export async function generateValidatedResponse(
   });
 
   if (firstAttempt.data) {
-    return finalizeWithSafetyCheck(firstAttempt.data, first.usage, false, first.research);
+    return finalizeWithSafetyCheck(
+      firstAttempt.data,
+      first.usage,
+      false,
+      first.research,
+      first.researchDiagnostics,
+    );
   }
 
   const repair = await deps.provider.generate(
@@ -366,7 +388,13 @@ export async function generateValidatedResponse(
   };
 
   if (repairAttempt.data) {
-    return finalizeWithSafetyCheck(repairAttempt.data, combinedUsage, true, first.research);
+    return finalizeWithSafetyCheck(
+      repairAttempt.data,
+      combinedUsage,
+      true,
+      first.research,
+      first.researchDiagnostics,
+    );
   }
 
   // The repair effort as a whole (not just this one attempt) failed to save
@@ -391,5 +419,6 @@ export async function generateValidatedResponse(
     repaired: true,
     usedFallback: true,
     research: first.research,
+    researchDiagnostics: first.researchDiagnostics,
   };
 }

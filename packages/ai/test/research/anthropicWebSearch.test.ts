@@ -2,9 +2,11 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_WEB_SEARCH_MAX_USES,
+  buildAnthropicResearchCallDiagnostics,
   buildAnthropicWebSearchTool,
   classifyWebSearchErrorCode,
   extractResearchExecutionMetadata,
+  type BuildAnthropicResearchCallDiagnosticsInput,
 } from "../../src/research/anthropicWebSearch.js";
 
 const NOW = new Date("2026-08-12T09:00:00.000Z");
@@ -244,5 +246,174 @@ describe("extractResearchExecutionMetadata", () => {
       webSearchResults([{ url: "not-a-valid-url", title: "Bad URL" }]),
     ];
     expect(() => extractResearchExecutionMetadata(content, NOW)).not.toThrow();
+  });
+});
+
+describe("buildAnthropicResearchCallDiagnostics (DRAIVA Research staging-only live observability)", () => {
+  function baseInput(
+    overrides: Partial<BuildAnthropicResearchCallDiagnosticsInput> = {},
+  ): BuildAnthropicResearchCallDiagnosticsInput {
+    return {
+      researchRequired: false,
+      researchEnabled: false,
+      model: "claude-sonnet-5",
+      tool: null,
+      toolChoice: undefined,
+      maxTokens: 2048,
+      allContent: [],
+      finalStopReason: "end_turn",
+      webSearchRequestsTotal: 0,
+      webSearchRequestsSeen: false,
+      pauseTurnCount: 0,
+      researchContinuationCount: 0,
+      sourceCount: 0,
+      ...overrides,
+    };
+  }
+
+  it("A. normal non-research response -- no tool, no tool_choice, empty block types", () => {
+    const diagnostics = buildAnthropicResearchCallDiagnostics(
+      baseInput({ allContent: [{ type: "text", text: "{}" } as Anthropic.ContentBlock] }),
+    );
+    expect(diagnostics.researchEnabled).toBe(false);
+    expect(diagnostics.toolName).toBeNull();
+    expect(diagnostics.toolType).toBeNull();
+    expect(diagnostics.toolChoice).toBeNull();
+    expect(diagnostics.responseBlockTypes).toEqual(["text"]);
+    expect(diagnostics.webSearchRequests).toBeNull();
+  });
+
+  it("B. server_tool_use + web_search_tool_result + text -- block types captured in order", () => {
+    const content: Anthropic.ContentBlock[] = [
+      serverToolUse("q"),
+      webSearchResults([{ url: "https://example.test/a", title: "A" }]),
+      { type: "text", text: "{}" } as Anthropic.ContentBlock,
+    ];
+    const diagnostics = buildAnthropicResearchCallDiagnostics(
+      baseInput({
+        researchRequired: true,
+        researchEnabled: true,
+        tool: { type: "web_search_20250305", name: "web_search" },
+        toolChoice: { type: "tool", name: "web_search" },
+        allContent: content,
+        sourceCount: 1,
+      }),
+    );
+    expect(diagnostics.responseBlockTypes).toEqual([
+      "server_tool_use",
+      "web_search_tool_result",
+      "text",
+    ]);
+    expect(diagnostics.toolName).toBe("web_search");
+    expect(diagnostics.toolType).toBe("web_search_20250305");
+    expect(diagnostics.toolChoice).toBe("tool:web_search");
+    expect(diagnostics.sourceCount).toBe(1);
+  });
+
+  it("C. pause_turn -- stopReason reflects the paused state when that is the final call captured", () => {
+    const diagnostics = buildAnthropicResearchCallDiagnostics(
+      baseInput({
+        researchEnabled: true,
+        allContent: [serverToolUse("q")],
+        finalStopReason: "pause_turn",
+        pauseTurnCount: 1,
+        researchContinuationCount: 0,
+      }),
+    );
+    expect(diagnostics.stopReason).toBe("pause_turn");
+    expect(diagnostics.pauseTurnCount).toBe(1);
+  });
+
+  it("D. final end_turn after continuations -- stopReason reflects the terminal call, not an intermediate pause", () => {
+    const diagnostics = buildAnthropicResearchCallDiagnostics(
+      baseInput({
+        researchEnabled: true,
+        allContent: [
+          serverToolUse("q"),
+          webSearchResults([{ url: "https://example.test/a", title: "A" }]),
+          { type: "text", text: "{}" } as Anthropic.ContentBlock,
+        ],
+        finalStopReason: "end_turn",
+        pauseTurnCount: 1,
+        researchContinuationCount: 1,
+      }),
+    );
+    expect(diagnostics.stopReason).toBe("end_turn");
+  });
+
+  it("E. web_search_requests = 1 -- usage.server_tool_use.web_search_requests captured verbatim", () => {
+    const diagnostics = buildAnthropicResearchCallDiagnostics(
+      baseInput({
+        researchEnabled: true,
+        webSearchRequestsTotal: 1,
+        webSearchRequestsSeen: true,
+      }),
+    );
+    expect(diagnostics.webSearchRequests).toBe(1);
+  });
+
+  it("F. web_search_requests = 0 (field present, genuinely zero) is distinct from the field never being present", () => {
+    const zeroButPresent = buildAnthropicResearchCallDiagnostics(
+      baseInput({ researchEnabled: true, webSearchRequestsTotal: 0, webSearchRequestsSeen: true }),
+    );
+    expect(zeroButPresent.webSearchRequests).toBe(0);
+
+    const neverPresent = buildAnthropicResearchCallDiagnostics(
+      baseInput({ researchEnabled: true, webSearchRequestsTotal: 0, webSearchRequestsSeen: false }),
+    );
+    expect(neverPresent.webSearchRequests).toBeNull();
+  });
+
+  it("G. multiple continuation calls -- block types accumulate across every call in order, counts reflect all calls", () => {
+    const content: Anthropic.ContentBlock[] = [
+      serverToolUse("q1"),
+      serverToolUse("q2"),
+      webSearchResults([{ url: "https://example.test/a", title: "A" }]),
+      { type: "text", text: "{}" } as Anthropic.ContentBlock,
+    ];
+    const diagnostics = buildAnthropicResearchCallDiagnostics(
+      baseInput({
+        researchEnabled: true,
+        allContent: content,
+        finalStopReason: "end_turn",
+        pauseTurnCount: 2,
+        researchContinuationCount: 2,
+        webSearchRequestsTotal: 2,
+        webSearchRequestsSeen: true,
+      }),
+    );
+    expect(diagnostics.responseBlockTypes).toEqual([
+      "server_tool_use",
+      "server_tool_use",
+      "web_search_tool_result",
+      "text",
+    ]);
+    expect(diagnostics.pauseTurnCount).toBe(2);
+    expect(diagnostics.researchContinuationCount).toBe(2);
+    expect(diagnostics.webSearchRequests).toBe(2);
+  });
+
+  it("never includes response text, search query text, URLs, or encrypted_content in the diagnostics object", () => {
+    const content: Anthropic.ContentBlock[] = [
+      serverToolUse("Kerala digital marketing agencies competitors"),
+      webSearchResults([
+        { url: "https://example-industry.test/kerala", title: "Kerala market report" },
+      ]),
+      textWithCitations("Several agencies compete in the Kerala market.", [
+        {
+          url: "https://example-industry.test/kerala",
+          title: "Kerala market report",
+          cited_text: "several agencies compete",
+        },
+      ]),
+    ];
+    const diagnostics = buildAnthropicResearchCallDiagnostics(
+      baseInput({ researchEnabled: true, allContent: content, sourceCount: 1 }),
+    );
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain("Kerala");
+    expect(serialized).not.toContain("kerala");
+    expect(serialized).not.toContain("https://");
+    expect(serialized).not.toContain("agencies");
   });
 });
