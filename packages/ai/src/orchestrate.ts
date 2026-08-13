@@ -2,6 +2,7 @@ import { resolveFallbackMessage } from "./fallbackMessage.js";
 import { applySafetyRules } from "./safety.js";
 import { aiStructuredResponseSchema, type AiStructuredResponse } from "./schema.js";
 import { evaluateResearchEligibility, type ResearchEligibility } from "./research/eligibility.js";
+import { detectResearchIntent } from "./research/intentDetector.js";
 import type {
   LiveResearchExecutionMetadata,
   ResearchExecutionDiagnostics,
@@ -244,6 +245,19 @@ export async function generateValidatedResponse(
     deps.research?.onDecision?.(eligibility);
   }
 
+  // Deterministic research-intent pre-classification (research/intentDetector.ts):
+  // computed from the customer's current message alone, independent of
+  // whether research is actually enabled for this turn, so diagnostics can
+  // distinguish "customer explicitly asked for research" from "the staging
+  // gate happened to be off." Only forwarded to the provider (forcing the
+  // research path) when the double gate is ALSO on -- this never expands
+  // when research can run, only how deterministically it's triggered when
+  // it can.
+  const researchRequired = detectResearchIntent(input.customerMessage).researchRequired;
+  const researchGateEnabled = Boolean(input.researchEnabled);
+  const providerInput: AiGenerationInput =
+    researchRequired && researchGateEnabled ? { ...input, researchRequired: true } : input;
+
   function finalizeWithSafetyCheck(
     data: AiStructuredResponse,
     usage: AiUsage,
@@ -270,9 +284,11 @@ export async function generateValidatedResponse(
   }
 
   const researchStartedAt = eligibility ? Date.now() : null;
-  const first = await deps.provider.generate(input);
+  const first = await deps.provider.generate(providerInput);
   if (eligibility) {
     const diagnostics: ResearchExecutionDiagnostics = {
+      researchRequired,
+      researchEnabled: researchGateEnabled,
       researchStarted: (first.research?.searchesPerformed ?? 0) > 0,
       researchCompleted:
         (first.research?.searchesPerformed ?? 0) > 0 && !first.research?.failureReason,
@@ -282,6 +298,22 @@ export async function generateValidatedResponse(
       failureCategory: first.research?.failureReason ?? null,
     };
     deps.research?.onExecuted?.(diagnostics);
+  } else if (researchRequired && deps.research) {
+    // The customer explicitly asked for research (deterministically
+    // detected) but the double gate was off for this turn -- surfaced for
+    // operational visibility only. Behavior is unchanged: no tool, no
+    // forced path, the existing safe non-research answer proceeds exactly
+    // as it did before this feature existed.
+    deps.research.onExecuted?.({
+      researchRequired: true,
+      researchEnabled: researchGateEnabled,
+      researchStarted: false,
+      researchCompleted: false,
+      researchReason: "research_disabled_for_company_or_environment",
+      sourceCount: 0,
+      researchLatencyMs: 0,
+      failureCategory: null,
+    });
   }
   const firstAttempt = tryParse(first.rawText);
   emitDiagnostics(deps, input, {

@@ -76,6 +76,16 @@ export interface AiGenerationInput {
    * preserves today's exact single-shot, tool-free behavior byte for byte.
    */
   researchEnabled?: boolean;
+  /**
+   * DRAIVA Research: set by orchestrate.ts (research/intentDetector.ts) when
+   * the customer's current message was deterministically classified as an
+   * explicit RESEARCH ACTION REQUEST. Only meaningful when researchEnabled
+   * is also true (see anthropicProvider.ts) -- when both are true, the
+   * provider forces web_search tool use for this turn (tool_choice) instead
+   * of leaving it to the model's own judgment. Omitted/false preserves the
+   * existing model-judgment-only behavior.
+   */
+  researchRequired?: boolean;
 }
 
 export interface AiUsage {

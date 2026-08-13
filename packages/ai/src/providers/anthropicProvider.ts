@@ -38,6 +38,18 @@ export interface AnthropicProviderConfig {
  * search there would be an independent, uncounted-against-the-turn search --
  * dropping it caps total searches for one customer turn at
  * config.webSearchMaxUses regardless of whether a repair happens.
+ *
+ * DRAIVA Research -- deterministic intent override: when `input.researchRequired`
+ * is ALSO true (research/intentDetector.ts classified the customer's current
+ * message as an explicit research request), `tool_choice` is set to force
+ * web_search rather than leaving the decision to `auto`. Repeated staging
+ * tests showed that prompt instructions alone were not reliably enough to
+ * stop the model from silently answering "I don't have confirmed details"
+ * for an explicit request -- forcing the tool for these high-confidence
+ * cases is a stronger, code-level guarantee than any system-prompt wording
+ * can provide. Claude still formulates the query, evaluates results, and
+ * synthesizes the final answer -- only whether the tool is invoked at all
+ * is no longer left to chance.
  */
 export class AnthropicProvider implements AiProvider {
   private readonly client: Anthropic;
@@ -51,12 +63,14 @@ export class AnthropicProvider implements AiProvider {
     repairInstruction?: string,
   ): Promise<AiGenerationResult> {
     const researchEnabled = Boolean(input.researchEnabled) && !repairInstruction;
+    const researchRequired = researchEnabled && Boolean(input.researchRequired);
     const system = buildSystemPrompt(
       input.company,
       input.memory,
       input.knowledge,
       input.temporal,
       researchEnabled,
+      researchRequired,
     );
 
     const messages: Anthropic.MessageParam[] = [
@@ -112,6 +126,12 @@ export class AnthropicProvider implements AiProvider {
                 maxUses: this.config.webSearchMaxUses ?? ANTHROPIC_WEB_SEARCH_MAX_USES,
               }),
             ],
+            // Force web_search for a deterministically-detected explicit
+            // research request instead of leaving it to auto -- see the
+            // class doc comment above.
+            ...(researchRequired
+              ? { tool_choice: { type: "tool" as const, name: "web_search" as const } }
+              : {}),
           }
         : {}),
     });

@@ -20,6 +20,16 @@ import { RESEARCH_LANGUAGE_SYNTHESIS_POLICY } from "../research/languagePolicy.j
  * WEB RESEARCH section -- omitting it (every call site before this feature
  * existed, and every repair-attempt call) leaves the prompt byte-for-byte
  * identical to before this parameter existed.
+ *
+ * `researchRequired` (default false, only meaningful when `researchEnabled`
+ * is also true) adds a short, per-turn RESEARCH REQUIRED FOR THIS TURN
+ * directive when the deterministic intent detector (research/intentDetector.ts)
+ * classified the customer's current message as an explicit research
+ * request. This is a reinforcing instruction, not the enforcement mechanism
+ * itself -- the actual guarantee that Claude invokes web_search this turn
+ * comes from `tool_choice` in providers/anthropicProvider.ts; this text
+ * exists so Claude's synthesis of the forced tool result stays aligned with
+ * why it was forced.
  */
 export function buildSystemPrompt(
   company: CompanyAiContext,
@@ -27,6 +37,7 @@ export function buildSystemPrompt(
   knowledge: RetrievedKnowledgeSnippet[],
   temporal: ConversationTemporalContext,
   researchEnabled = false,
+  researchRequired = false,
 ): string {
   const sections: string[] = [];
 
@@ -146,6 +157,20 @@ export function buildSystemPrompt(
         "  question cannot be answered without it.",
       ].join("\n"),
     );
+
+    if (researchRequired) {
+      sections.push(
+        [
+          "RESEARCH REQUIRED FOR THIS TURN: the customer's current message has been deterministically",
+          "identified as an explicit RESEARCH ACTION REQUEST, not a question about whether the company",
+          "offers research as a service. web_search has been forced on for this turn -- do NOT reply that",
+          "you don't have the information and do NOT set requiresHuman=true merely because company",
+          "knowledge doesn't cover it. Use the search results you receive to answer the customer's question",
+          "per the WEB RESEARCH rules above. Only set requiresHuman=true afterward if web_search itself",
+          "fails, is unavailable, or cannot answer the request.",
+        ].join("\n"),
+      );
+    }
   }
 
   if (company.enabledLanguages.includes("ml")) {

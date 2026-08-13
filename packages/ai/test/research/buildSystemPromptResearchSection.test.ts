@@ -95,4 +95,35 @@ describe("buildSystemPrompt -- WEB RESEARCH section (DRAIVA Research staging pil
       expect(researchSection).not.toMatch(banned);
     }
   });
+
+  describe("researchRequired -- deterministic intent-detector directive", () => {
+    it("omits the RESEARCH REQUIRED FOR THIS TURN directive when researchRequired is false/omitted", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const withDefault = buildSystemPrompt(company, memory, knowledge, temporal, true);
+      const withExplicitFalse = buildSystemPrompt(
+        company,
+        memory,
+        knowledge,
+        temporal,
+        true,
+        false,
+      );
+      expect(withDefault).toBe(withExplicitFalse);
+      expect(withDefault).not.toContain("RESEARCH REQUIRED FOR THIS TURN");
+    });
+
+    it("adds the RESEARCH REQUIRED FOR THIS TURN directive only when both researchEnabled and researchRequired are true", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge, temporal, true, true);
+      expect(prompt).toContain("RESEARCH REQUIRED FOR THIS TURN");
+      expect(prompt).toMatch(/do NOT set requiresHuman=true merely because company/);
+    });
+
+    it("never adds the directive when researchEnabled is false, even if researchRequired is (meaninglessly) true", () => {
+      const { company, memory, knowledge, temporal } = makeInput();
+      const prompt = buildSystemPrompt(company, memory, knowledge, temporal, false, true);
+      expect(prompt).not.toContain("RESEARCH REQUIRED FOR THIS TURN");
+      expect(prompt).not.toContain("WEB RESEARCH");
+    });
+  });
 });
