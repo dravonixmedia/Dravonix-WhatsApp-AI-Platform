@@ -128,12 +128,23 @@ export interface LiveResearchExecutionMetadata {
  * a bounded latency measurement.
  */
 export interface ResearchExecutionDiagnostics {
-  /** True when Claude actually invoked web_search at least once this turn. */
+  /**
+   * True when the deterministic intent detector (research/intentDetector.ts)
+   * classified the customer's current message as an explicit research
+   * request, independent of whether research was actually enabled for this
+   * turn -- lets monitoring distinguish "customer asked for research but the
+   * staging gate was off" from "customer never asked."
+   */
+  researchRequired: boolean;
+  /** True when the researchStagingEnabled + companies.is_demo double gate was on for this turn. */
+  researchEnabled: boolean;
+  /** True when Claude actually invoked web_search at least once this turn (aka "research invoked"). */
   researchStarted: boolean;
   /** True when research started AND completed without an unrecoverable failure. */
   researchCompleted: boolean;
   /** Why research was or wasn't eligible for this turn (see eligibility.ts). */
   researchReason: string;
+  /** Number of distinct sources returned this turn (aka "research source count"). */
   sourceCount: number;
   /**
    * Wall-clock duration of the whole provider call that had research

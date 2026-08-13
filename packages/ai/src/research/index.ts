@@ -12,3 +12,4 @@ export * from "./eligibility.js";
 export * from "./attribution.js";
 export * from "./auditContext.js";
 export * from "./languagePolicy.js";
+export * from "./intentDetector.js";
