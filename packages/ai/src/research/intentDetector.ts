@@ -60,8 +60,18 @@ const RESEARCH_ACTION_PATTERNS: Array<{ signal: string; pattern: RegExp }> = [
       /\b(can you|could you|please|will you)\b[\s\S]{0,20}\b(research|investigate|analyze|analyse|look into|compare)\b/i,
   },
   {
+    // Anchored to the START OF A SENTENCE (string start, or right after
+    // ./!/? plus whitespace), not just the start of the whole message --
+    // a customer very commonly prefixes context before the actual command
+    // (e.g. "Imagine we are an interior fit-out company. Research the
+    // Kerala market for competing interior fit-out companies."), and the
+    // original whole-message anchor missed every one of those.
     signal: "en:imperative_verb",
-    pattern: /^\s*(research|investigate|analyze|analyse|look into|find|compare)\b/i,
+    pattern: /(?:^|[.!?]\s+)\s*(research|investigate|analyze|analyse|look into|find|compare)\b/i,
+  },
+  {
+    signal: "en:who_are_competitors",
+    pattern: /\bwho\s+(are|is)\b[\s\S]{0,15}\b(our|the|your|my)\b[\s\S]{0,10}\bcompetitors?\b/i,
   },
   {
     signal: "en:do_an_analysis",
