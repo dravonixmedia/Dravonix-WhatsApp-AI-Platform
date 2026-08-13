@@ -217,14 +217,43 @@ function describeValidationFailure(failure: ParseAttempt): string {
  * instructions. Explicitly preserves the original response language and asks
  * for concision, since a truncation (the most common real-world cause of a
  * failed first attempt) is itself often a token-budget problem.
+ *
+ * DRAIVA Research: the repair call never re-attaches the web_search tool
+ * (providers/anthropicProvider.ts) and its message list is rebuilt fresh from
+ * `input` -- it has no way to see whatever Anthropic's web_search tool
+ * already found on the first attempt. Before this fix, a first attempt that
+ * genuinely found real research results but still failed schema/JSON
+ * validation (e.g. a citation-heavy response the repair-triggering parse
+ * couldn't handle) silently discarded that research: the repair call would
+ * reformulate an answer from nothing, with no company knowledge match for a
+ * market-research question, honestly but unhelpfully producing exactly the
+ * "I don't have market research data..." refusal this was meant to fix.
+ * When `research.findings` is non-empty, its already-sanitized titles/
+ * excerpts (research/anthropicWebSearch.ts's excerpt(), never raw URLs or
+ * encrypted_content) are included so the repair call can still produce a
+ * real, research-backed answer instead of a research-blind one.
  */
-function buildRepairInstruction(language: string, failure: ParseAttempt): string {
+function buildRepairInstruction(
+  language: string,
+  failure: ParseAttempt,
+  research?: LiveResearchExecutionMetadata,
+): string {
+  const researchRecap =
+    research && research.findings.length > 0
+      ? "\n\nThe following research findings were already retrieved via web_search this turn -- " +
+        "use them to answer the customer's question in your repaired response; do not say you lack " +
+        "this information and do not add anything beyond what is listed here:\n" +
+        research.findings
+          .map((f) => `- ${f.sourceTitle}${f.keyFindings ? `: ${f.keyFindings}` : ""}`)
+          .join("\n")
+      : "";
   return (
     `Your previous response failed validation: ${describeValidationFailure(failure)} ` +
     "Respond again with ONLY a single valid JSON object matching this exact schema -- no prose, no " +
     `markdown fences:\n${SCHEMA_RECAP}\n` +
     `Reply in the same language as before (${language}). Keep the answer as concise as possible while ` +
-    "still complete and valid, so the full JSON response fits comfortably within the token limit."
+    "still complete and valid, so the full JSON response fits comfortably within the token limit." +
+    researchRecap
   );
 }
 
@@ -368,7 +397,7 @@ export async function generateValidatedResponse(
 
   const repair = await deps.provider.generate(
     input,
-    buildRepairInstruction(language, firstAttempt),
+    buildRepairInstruction(language, firstAttempt, first.research),
   );
   const repairAttempt = tryParse(repair.rawText);
   emitDiagnostics(deps, input, {
