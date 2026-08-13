@@ -84,6 +84,8 @@ class FakeEntitlementRepository implements EntitlementRepository {
 class FakeMessageConsumerRepository implements MessageConsumerRepository {
   context: ConversationContext = baseConversationContext();
   appliedLeadUpdates: unknown[] = [];
+  recordedResearchDiagnostics: Array<{ messageId: string; diagnostics: Record<string, unknown> }> =
+    [];
 
   async loadConversationContext(_conversationId: string): Promise<ConversationContext> {
     return this.context;
@@ -91,6 +93,13 @@ class FakeMessageConsumerRepository implements MessageConsumerRepository {
 
   async applyLeadUpdates(input: { leadUpdates: unknown }): Promise<void> {
     this.appliedLeadUpdates.push(input.leadUpdates);
+  }
+
+  async recordResearchDiagnostics(
+    messageId: string,
+    diagnostics: Record<string, unknown>,
+  ): Promise<void> {
+    this.recordedResearchDiagnostics.push({ messageId, diagnostics });
   }
 }
 
@@ -698,6 +707,132 @@ describe("processMessageJob", () => {
       expect(JSON.stringify(diagnosticsLine)).not.toContain(
         "Kerala interior fit-out market competitors",
       );
+    });
+  });
+
+  describe("DRAIVA Research staging-only live observability (TEMPORARY instrumentation)", () => {
+    function researchDiagnosticsAiProvider(): MockAiProvider {
+      const provider = new MockAiProvider();
+      const originalGenerate = provider.generate.bind(provider);
+      provider.generate = async (input, repairInstruction) => {
+        const result = await originalGenerate(input, repairInstruction);
+        return {
+          ...result,
+          researchDiagnostics: {
+            researchRequired: true,
+            researchEnabled: true,
+            model: "claude-sonnet-5",
+            toolName: "web_search",
+            toolType: "web_search_20250305",
+            toolChoice: "tool:web_search",
+            maxTokens: 4096,
+            stopReason: "end_turn",
+            responseBlockTypes: ["server_tool_use", "web_search_tool_result", "text"],
+            webSearchRequests: 1,
+            pauseTurnCount: 0,
+            researchContinuationCount: 0,
+            sourceCount: 1,
+          },
+        };
+      };
+      return provider;
+    }
+
+    it("writes sanitized research diagnostics onto the outbound message when appEnv is staging", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        aiProvider: researchDiagnosticsAiProvider(),
+        researchStagingEnabled: true,
+        appEnv: "staging",
+      });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(repo.recordedResearchDiagnostics).toHaveLength(1);
+      expect(repo.recordedResearchDiagnostics[0]?.diagnostics).toMatchObject({
+        researchRequired: true,
+        researchEnabled: true,
+        stopReason: "end_turn",
+        webSearchRequests: 1,
+        sourceCount: 1,
+      });
+    });
+
+    it("does NOT write research diagnostics when appEnv is production, even though researchDiagnostics is present", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        aiProvider: researchDiagnosticsAiProvider(),
+        researchStagingEnabled: true,
+        appEnv: "production",
+      });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(repo.recordedResearchDiagnostics).toHaveLength(0);
+    });
+
+    it("does NOT write research diagnostics when appEnv is omitted (every pre-existing caller/test)", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        aiProvider: researchDiagnosticsAiProvider(),
+        researchStagingEnabled: true,
+      });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(repo.recordedResearchDiagnostics).toHaveLength(0);
+    });
+
+    it("does NOT write research diagnostics when appEnv is staging but this turn had no researchDiagnostics (non-research call)", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot(), { appEnv: "staging" });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(repo.recordedResearchDiagnostics).toHaveLength(0);
+    });
+
+    it("never includes the answer text, customer message, or a URL in the written diagnostics object", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        aiProvider: researchDiagnosticsAiProvider(),
+        researchStagingEnabled: true,
+        appEnv: "staging",
+      });
+
+      await processMessageJob(
+        deps,
+        makePayload({ body: "Can you research the Kerala market for competing agencies?" }),
+      );
+
+      const serialized = JSON.stringify(repo.recordedResearchDiagnostics[0]?.diagnostics);
+      expect(serialized).not.toContain("Kerala");
+      expect(serialized).not.toContain("https://");
+    });
+
+    it("a failure writing diagnostics never affects the customer-facing outcome -- the WhatsApp reply is still sent", async () => {
+      repo.context = baseConversationContext({
+        aiContext: { ...baseConversationContext().aiContext, isDemo: true },
+      });
+      repo.recordResearchDiagnostics = async () => {
+        throw new Error("simulated write failure");
+      };
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        aiProvider: researchDiagnosticsAiProvider(),
+        researchStagingEnabled: true,
+        appEnv: "staging",
+      });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
     });
   });
 });

@@ -48,6 +48,17 @@ export interface MessageConsumerDeps {
    * feature) defaults to false, leaving behavior unchanged.
    */
   researchStagingEnabled?: boolean;
+  /**
+   * DRAIVA Research -- TEMPORARY staging-only live observability hard gate
+   * (see recordResearchDiagnostics below). The literal APP_ENV value
+   * (packages/config's loadEnv().APP_ENV), NOT researchStagingEnabled or the
+   * per-conversation researchEnabled double gate -- deliberately a separate,
+   * direct check so this write can never fire in production even if some
+   * other gate were ever misconfigured. Omitting this field (every current
+   * test/caller that predates this instrumentation) defaults to `undefined`,
+   * which never equals "staging", so no write ever happens.
+   */
+  appEnv?: string;
 }
 
 /**
@@ -111,8 +122,11 @@ export async function processMessageJob(
   let response: Awaited<ReturnType<typeof generateValidatedResponse>>["response"];
   let usedFallback: boolean;
   let research: Awaited<ReturnType<typeof generateValidatedResponse>>["research"];
+  let researchDiagnostics: Awaited<
+    ReturnType<typeof generateValidatedResponse>
+  >["researchDiagnostics"];
   try {
-    ({ response, usedFallback, research } = await generateValidatedResponse(
+    ({ response, usedFallback, research, researchDiagnostics } = await generateValidatedResponse(
       {
         provider: deps.aiProvider,
         onValidationFailure: (details) =>
@@ -232,5 +246,23 @@ export async function processMessageJob(
     log.error("Outbound WhatsApp send failed or is unconfirmed", {
       outboundStatus: outboundResult.outboundStatus,
     });
+  }
+
+  // DRAIVA Research -- TEMPORARY staging-only live observability (see
+  // MessageConsumerDeps.appEnv's doc comment above and
+  // recordResearchDiagnostics's doc comment in repository.ts). Hard-gated on
+  // the literal APP_ENV value, never on researchEnabled/researchStagingEnabled
+  // alone, so this can never write in production. Best-effort: a failure here
+  // must never affect the customer-facing outcome the code above already
+  // completed (the WhatsApp reply was already sent), so it's caught and
+  // logged rather than thrown.
+  if (deps.appEnv === "staging" && researchDiagnostics) {
+    try {
+      await deps.repo.recordResearchDiagnostics(outboundResult.messageId, {
+        ...researchDiagnostics,
+      });
+    } catch (error) {
+      log.error("Failed to record staging-only research diagnostics", safeErrorDetails(error));
+    }
   }
 }

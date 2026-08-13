@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { classifyAuthorityTier } from "./sourceRanker.js";
 import type {
+  AnthropicResearchCallDiagnostics,
   LiveResearchExecutionMetadata,
   ResearchFailureReason,
   ResearchFinding,
@@ -264,5 +265,57 @@ export function extractResearchExecutionMetadata(
     // the return type is self-consistent for any other caller.
     pauseTurnCount: 0,
     researchContinuationCount: 0,
+  };
+}
+
+export interface BuildAnthropicResearchCallDiagnosticsInput {
+  researchRequired: boolean;
+  researchEnabled: boolean;
+  model: string;
+  /** The exact tool declaration sent (first entry of the `tools` array), or null when researchEnabled was false and no tool was attached. */
+  tool: { type: string; name: string } | null;
+  /** The exact `tool_choice` sent, or undefined when left to the model's own judgment (or no tool attached at all). */
+  toolChoice: { type: "tool"; name: string } | undefined;
+  maxTokens: number;
+  /** Every content block from every call that made up this turn, in call order (providers/anthropicProvider.ts's `allContent`). */
+  allContent: Anthropic.ContentBlock[];
+  /** stop_reason of the final call. */
+  finalStopReason: string | null;
+  /** Sum of usage.server_tool_use.web_search_requests across every call. */
+  webSearchRequestsTotal: number;
+  /** True if usage.server_tool_use was present (non-null) on at least one call -- distinguishes a genuine 0 from the field never being returned. */
+  webSearchRequestsSeen: boolean;
+  pauseTurnCount: number;
+  researchContinuationCount: number;
+  sourceCount: number;
+}
+
+/**
+ * DRAIVA Research -- staging-only live observability metadata mapper. Pure
+ * and synchronous: takes exactly what providers/anthropicProvider.ts already
+ * has in hand after a (possibly multi-call, pause_turn-continued) research
+ * turn completes, and produces the sanitized AnthropicResearchCallDiagnostics
+ * shape apps/workers/message-consumer persists (staging only -- see
+ * processMessageJob.ts). Never reads or returns response text, search query
+ * text, URLs, or encrypted_content -- only structural metadata (block
+ * `.type` values, stop_reason, counts).
+ */
+export function buildAnthropicResearchCallDiagnostics(
+  input: BuildAnthropicResearchCallDiagnosticsInput,
+): AnthropicResearchCallDiagnostics {
+  return {
+    researchRequired: input.researchRequired,
+    researchEnabled: input.researchEnabled,
+    model: input.model,
+    toolName: input.tool?.name ?? null,
+    toolType: input.tool?.type ?? null,
+    toolChoice: input.toolChoice ? `tool:${input.toolChoice.name}` : input.tool ? "auto" : null,
+    maxTokens: input.maxTokens,
+    stopReason: input.finalStopReason,
+    responseBlockTypes: input.allContent.map((block) => block.type),
+    webSearchRequests: input.webSearchRequestsSeen ? input.webSearchRequestsTotal : null,
+    pauseTurnCount: input.pauseTurnCount,
+    researchContinuationCount: input.researchContinuationCount,
+    sourceCount: input.sourceCount,
   };
 }

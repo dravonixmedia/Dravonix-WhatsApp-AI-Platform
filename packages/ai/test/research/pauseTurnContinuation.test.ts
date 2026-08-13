@@ -453,3 +453,117 @@ describe("8. Exact staging-bug regression fixture -- fails on the pre-fix implem
     expect(outcome.research?.findings.length).toBeGreaterThan(0);
   });
 });
+
+describe("AnthropicProvider.generate -- researchDiagnostics (DRAIVA Research staging-only live observability)", () => {
+  beforeEach(() => {
+    createMock.mockReset();
+  });
+
+  it("is omitted entirely for a non-research call", async () => {
+    createMock.mockResolvedValueOnce({
+      content: [{ type: "text", text: "{}" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+    });
+
+    const result = await provider.generate(makeInput());
+
+    expect(result.researchDiagnostics).toBeUndefined();
+  });
+
+  it("captures request + response metadata for a single-call research success, including usage.server_tool_use.web_search_requests", async () => {
+    createMock.mockResolvedValueOnce({
+      ...searchResultThenFinalText("t1", "https://example-industry.test/kerala"),
+      usage: { input_tokens: 200, output_tokens: 300, server_tool_use: { web_search_requests: 1 } },
+    });
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+    });
+
+    const result = await provider.generate(
+      makeInput({ researchEnabled: true, researchRequired: true }),
+    );
+
+    expect(result.researchDiagnostics).toEqual({
+      researchRequired: true,
+      researchEnabled: true,
+      model: "claude-sonnet-5",
+      toolName: "web_search",
+      toolType: "web_search_20250305",
+      toolChoice: "tool:web_search",
+      maxTokens: 4096,
+      stopReason: "end_turn",
+      responseBlockTypes: ["web_search_tool_result", "text"],
+      webSearchRequests: 1,
+      pauseTurnCount: 0,
+      researchContinuationCount: 0,
+      sourceCount: result.research?.findings.length,
+    });
+    // Never leaks response text, search query text, or URLs.
+    const serialized = JSON.stringify(result.researchDiagnostics);
+    expect(serialized).not.toContain("Kerala");
+    expect(serialized).not.toContain("https://");
+  });
+
+  it("accumulates block types and web_search_requests across a pause_turn continuation, and reports the FINAL call's stop_reason", async () => {
+    createMock
+      .mockResolvedValueOnce({
+        ...pausedServerToolUseOnly("Kerala digital marketing agencies"),
+        usage: {
+          input_tokens: 400,
+          output_tokens: 30,
+          server_tool_use: { web_search_requests: 1 },
+        },
+      })
+      .mockResolvedValueOnce({
+        ...searchResultThenFinalText("t1", "https://example-industry.test/kerala"),
+        usage: {
+          input_tokens: 200,
+          output_tokens: 300,
+          server_tool_use: { web_search_requests: 0 },
+        },
+      });
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+    });
+
+    const result = await provider.generate(
+      makeInput({ researchEnabled: true, researchRequired: true }),
+    );
+
+    expect(result.researchDiagnostics?.stopReason).toBe("end_turn");
+    expect(result.researchDiagnostics?.responseBlockTypes).toEqual([
+      "server_tool_use",
+      "web_search_tool_result",
+      "text",
+    ]);
+    expect(result.researchDiagnostics?.pauseTurnCount).toBe(1);
+    expect(result.researchDiagnostics?.researchContinuationCount).toBe(1);
+    // 1 (first call) + 0 (continuation) -- summed across every call this turn.
+    expect(result.researchDiagnostics?.webSearchRequests).toBe(1);
+  });
+
+  it("reports webSearchRequests as null (not 0) when usage.server_tool_use was never present on any response", async () => {
+    createMock.mockResolvedValueOnce(textResponse(VALID_ANSWER, "end_turn"));
+    const provider = new AnthropicProvider({
+      apiKey: "k",
+      model: "claude-sonnet-5",
+      maxTokens: 2048,
+    });
+
+    const result = await provider.generate(
+      makeInput({ researchEnabled: true, researchRequired: true }),
+    );
+
+    expect(result.researchDiagnostics?.webSearchRequests).toBeNull();
+  });
+});
