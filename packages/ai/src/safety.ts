@@ -88,14 +88,35 @@ function stripVoiceUnavailableClaim(answer: string, voiceEnabled: boolean): stri
 export interface SafetyContext {
   /** Whether this company has voice (speech-to-text/text-to-speech) enabled. Defaults to true. */
   voiceEnabled?: boolean;
+  /**
+   * DRAIVA Research: the number of external web-search findings actually
+   * returned for this turn (orchestrate.ts passes
+   * LiveResearchExecutionMetadata.findings.length -- the same count already
+   * surfaced as ResearchExecutionDiagnostics.sourceCount, never recomputed
+   * separately here). A cited, successfully-researched claim is real
+   * grounding, just structurally distinct from company knowledge --
+   * knowledgeSourceIds must never absorb research citations (see
+   * research/attribution.ts's company-fact/external-research separation
+   * policy), so this is a second, independent grounding signal rather than
+   * a change to what knowledgeSourceIds means. Defaults to 0 (no research
+   * grounding), which is the correct value both when research never ran and
+   * when it ran but genuinely failed/found nothing -- findings.length is
+   * already 0 in both cases, so no separate failureReason check is needed
+   * here.
+   */
+  researchSourceCount?: number;
 }
 
 /**
  * Applies structural safety rules to an already schema-valid AI response,
  * returning a possibly-modified copy. Forces requiresHuman=true (and records a
  * handoverReason) when the answer appears to make a pricing/availability/hours
- * claim without citing any knowledgeSourceIds. Also strips a stale
- * voice-unsupported claim (when voice is actually enabled).
+ * claim without citing any knowledgeSourceIds AND without any successful
+ * research grounding (context.researchSourceCount) -- a genuinely successful,
+ * cited research answer must not be forced into a handover merely because it
+ * has no company-knowledge sourceIds (see context.researchSourceCount's doc
+ * comment). Also strips a stale voice-unsupported claim (when voice is
+ * actually enabled).
  *
  * Escalates -- rather than silently rewriting the text -- when the answer
  * promises human/team follow-up but the model didn't set requiresHuman=true
@@ -112,7 +133,8 @@ export function applySafetyRules(
   response: AiStructuredResponse,
   context: SafetyContext = {},
 ): AiStructuredResponse {
-  const hasGrounding = response.knowledgeSourceIds.length > 0;
+  const hasGrounding =
+    response.knowledgeSourceIds.length > 0 || (context.researchSourceCount ?? 0) > 0;
 
   if (!hasGrounding && containsUngroundedClaim(response.answer)) {
     return {
