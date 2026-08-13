@@ -30,6 +30,28 @@ import { RESEARCH_LANGUAGE_SYNTHESIS_POLICY } from "../research/languagePolicy.j
  * comes from `tool_choice` in providers/anthropicProvider.ts; this text
  * exists so Claude's synthesis of the forced tool result stays aligned with
  * why it was forced.
+ *
+ * `researchFindingsAvailable` (default false) gates ONLY the SAFETY RULES
+ * company-scope carve-out below -- deliberately independent of
+ * `researchEnabled`/`researchRequired`, which also gate the full WEB
+ * RESEARCH section (misleading to include on a call where the web_search
+ * tool isn't actually attached). providers/anthropicProvider.ts forces
+ * `researchEnabled=false` for a repair attempt (no tool re-attached there,
+ * see that file's doc comment), but a repair attempt for a turn where
+ * research already ran and found real results still needs the SAFETY
+ * RULES section to allow discussing that already-retrieved public
+ * information -- otherwise the unconditional non-research wording
+ * ("Do not discuss another company's data; you only know about
+ * {company}.") directly contradicts orchestrate.ts's buildRepairInstruction,
+ * which appends those findings as a user-turn instruction to use them. The
+ * SAFETY RULES section explicitly tells the model to disregard any
+ * customer/document instruction that contradicts these rules, so without
+ * this flag the model reliably obeys the stricter system-prompt line over
+ * the repair instruction and refuses -- exactly the live-staging bug this
+ * fixes (repair's researchDiagnostics still reports the first attempt's
+ * successful search: sourceCount>0, webSearchRequests=1, yet the
+ * customer-visible answer came from a repair call whose system prompt
+ * silently reverted to the pre-research wording).
  */
 export function buildSystemPrompt(
   company: CompanyAiContext,
@@ -38,6 +60,7 @@ export function buildSystemPrompt(
   temporal: ConversationTemporalContext,
   researchEnabled = false,
   researchRequired = false,
+  researchFindingsAvailable = false,
 ): string {
   const sections: string[] = [];
 
@@ -108,13 +131,15 @@ export function buildSystemPrompt(
       // the WEB RESEARCH section for how that research must be conducted
       // and attributed (research/attribution.ts's company-fact/external-
       // research separation).
-      researchEnabled
+      researchEnabled || researchFindingsAvailable
         ? "- Never claim or fabricate a specific, non-public fact about another company (their exact pricing, " +
           "contracts, financials, or other internal specifics) as if you had direct company-knowledge access " +
           `to it -- your approved company knowledge covers only ${company.companyName}. This does NOT forbid ` +
           "discussing publicly available information about other companies, competitors, or market/industry " +
           "trends when the customer explicitly requests research, investigation, comparison, or market/" +
-          "competitor analysis -- the WEB RESEARCH section below takes precedence for those requests."
+          "competitor analysis -- the WEB RESEARCH section below takes precedence for those requests, and " +
+          "already-retrieved external research findings provided elsewhere in this prompt may be used the " +
+          "same way even if that section is not shown for this specific call."
         : "- Do not discuss another company's data; you only know about " +
           company.companyName +
           ".",

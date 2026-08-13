@@ -80,6 +80,12 @@ export class AnthropicProvider implements AiProvider {
   ): Promise<AiGenerationResult> {
     const researchEnabled = Boolean(input.researchEnabled) && !repairInstruction;
     const researchRequired = researchEnabled && Boolean(input.researchRequired);
+    // Deliberately NOT gated on `!repairInstruction` like researchEnabled above --
+    // see buildSystemPrompt's researchFindingsAvailable doc comment. A repair
+    // attempt for a turn where research already ran still needs the SAFETY
+    // RULES section's company-scope carve-out so it doesn't contradict
+    // buildRepairInstruction's injected research-findings recap (orchestrate.ts).
+    const researchFindingsAvailable = Boolean(input.researchEnabled);
     const system = buildSystemPrompt(
       input.company,
       input.memory,
@@ -87,6 +93,7 @@ export class AnthropicProvider implements AiProvider {
       input.temporal,
       researchEnabled,
       researchRequired,
+      researchFindingsAvailable,
     );
 
     const messages: Anthropic.MessageParam[] = [
