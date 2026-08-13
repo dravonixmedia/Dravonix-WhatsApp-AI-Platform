@@ -264,7 +264,17 @@ export async function generateValidatedResponse(
     repaired: boolean,
     research?: LiveResearchExecutionMetadata,
   ): OrchestrationResult {
-    const safetyChecked = applySafetyRules(data, { voiceEnabled: input.company.voiceEnabled });
+    const safetyChecked = applySafetyRules(data, {
+      voiceEnabled: input.company.voiceEnabled,
+      // DRAIVA Research: the same findings count already surfaced as
+      // ResearchExecutionDiagnostics.sourceCount below -- a second,
+      // independent grounding signal for safety.ts, never merged into
+      // knowledgeSourceIds (see SafetyContext.researchSourceCount's doc
+      // comment in safety.ts). 0 when research never ran or genuinely
+      // failed/found nothing, which is exactly the case that must NOT count
+      // as grounding.
+      researchSourceCount: research?.findings.length ?? 0,
+    });
     // A safety-rule-forced escalation (Claude itself did not set requiresHuman,
     // but an unsupported/ungrounded claim required it) is a distinct category
     // from a parsing/schema failure -- reported separately so it's never
