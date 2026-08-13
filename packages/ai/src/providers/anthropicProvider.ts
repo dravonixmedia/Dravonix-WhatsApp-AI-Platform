@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { buildSystemPrompt } from "../prompt/buildSystemPrompt.js";
 import {
   ANTHROPIC_WEB_SEARCH_MAX_USES,
+  MAX_SERVER_TOOL_CONTINUATIONS,
   RESEARCH_MAX_TOKENS_MULTIPLIER,
   buildAnthropicWebSearchTool,
   extractResearchExecutionMetadata,
@@ -50,6 +51,20 @@ export interface AnthropicProviderConfig {
  * can provide. Claude still formulates the query, evaluates results, and
  * synthesizes the final answer -- only whether the tool is invoked at all
  * is no longer left to chance.
+ *
+ * DRAIVA Research -- pause_turn continuation: Anthropic's server-side search
+ * loop can pause a long-running research turn (`stop_reason: "pause_turn"`)
+ * before it produces a final answer. Per Anthropic's documented server-tools
+ * contract, resuming requires re-sending the paused assistant `content`
+ * as-is in a follow-up `messages.create()` call with the same `tools`. A
+ * research-enabled call loops through this up to MAX_SERVER_TOOL_CONTINUATIONS
+ * times, accumulating every response's content blocks (so search results and
+ * citations from every segment are preserved) and every call's token usage.
+ * If the turn is still paused after the bound, the accumulated (likely
+ * incomplete) text is returned as-is with a `provider_timeout` research
+ * failure -- never fabricated, never silently treated as a normal successful
+ * answer. This never applies to a repair attempt (no tool is ever attached
+ * there) or a plain non-research call (no tool, so Anthropic never pauses).
  */
 export class AnthropicProvider implements AiProvider {
   private readonly client: Anthropic;
@@ -114,29 +129,72 @@ export class AnthropicProvider implements AiProvider {
           Math.round(this.config.maxTokens * RESEARCH_MAX_TOKENS_MULTIPLIER))
         : this.config.maxTokens;
 
-    const response = await this.client.messages.create({
+    const toolConfig = researchEnabled
+      ? {
+          tools: [
+            buildAnthropicWebSearchTool({
+              maxUses: this.config.webSearchMaxUses ?? ANTHROPIC_WEB_SEARCH_MAX_USES,
+            }),
+          ],
+          // Force web_search for a deterministically-detected explicit
+          // research request instead of leaving it to auto -- see the
+          // class doc comment above.
+          ...(researchRequired
+            ? { tool_choice: { type: "tool" as const, name: "web_search" as const } }
+            : {}),
+        }
+      : {};
+
+    let response = await this.client.messages.create({
       model: this.config.model,
       max_tokens: maxTokens,
       system,
       messages,
-      ...(researchEnabled
-        ? {
-            tools: [
-              buildAnthropicWebSearchTool({
-                maxUses: this.config.webSearchMaxUses ?? ANTHROPIC_WEB_SEARCH_MAX_USES,
-              }),
-            ],
-            // Force web_search for a deterministically-detected explicit
-            // research request instead of leaving it to auto -- see the
-            // class doc comment above.
-            ...(researchRequired
-              ? { tool_choice: { type: "tool" as const, name: "web_search" as const } }
-              : {}),
-          }
-        : {}),
+      ...toolConfig,
     });
 
-    const rawText = response.content
+    // Every content block from every call that made up this turn, in order --
+    // needed so search results/citations from an earlier, now-superseded
+    // pause_turn segment are never lost (see the class doc comment above).
+    const allContent: Anthropic.ContentBlock[] = [...response.content];
+    let totalInputTokens = response.usage.input_tokens;
+    let totalOutputTokens = response.usage.output_tokens;
+    let pauseTurnCount = 0;
+    let continuationCount = 0;
+
+    if (researchEnabled) {
+      while (
+        response.stop_reason === "pause_turn" &&
+        continuationCount < MAX_SERVER_TOOL_CONTINUATIONS
+      ) {
+        pauseTurnCount += 1;
+        continuationCount += 1;
+        // Resume the SAME turn: re-send the paused assistant content as-is,
+        // per Anthropic's documented pattern. Never fabricate a tool_result
+        // and never execute web_search ourselves -- Anthropic is the
+        // server-side tool executor; this call only lets it continue.
+        messages.push({ role: "assistant", content: response.content });
+        response = await this.client.messages.create({
+          model: this.config.model,
+          max_tokens: maxTokens,
+          system,
+          messages,
+          ...toolConfig,
+        });
+        allContent.push(...response.content);
+        totalInputTokens += response.usage.input_tokens;
+        totalOutputTokens += response.usage.output_tokens;
+      }
+    }
+
+    // Still paused after the bound -- stop rather than loop further. The
+    // (likely incomplete) accumulated text is returned as-is below; it will
+    // fail JSON parsing in orchestrate.ts and correctly fall through to the
+    // existing repair path, exactly as any other malformed-response case
+    // does. Never fabricated, never silently treated as a normal answer.
+    const exceededContinuationBound = researchEnabled && response.stop_reason === "pause_turn";
+
+    const rawText = allContent
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
       .map((block) => block.text)
       .join("");
@@ -144,15 +202,27 @@ export class AnthropicProvider implements AiProvider {
     return {
       rawText,
       usage: {
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
         // Prompt caching (ADR-0004) is a documented follow-up: the installed SDK
         // version's stable Usage type does not yet surface cache_read_input_tokens
         // outside the beta prompt-caching resource. Wire this up when upgrading.
         cachedInputTokens: 0,
       },
       ...(researchEnabled
-        ? { research: extractResearchExecutionMetadata(response.content, new Date()) }
+        ? {
+            research: (() => {
+              const extracted = extractResearchExecutionMetadata(allContent, new Date());
+              return {
+                ...extracted,
+                failureReason: exceededContinuationBound
+                  ? (extracted.failureReason ?? "provider_timeout")
+                  : extracted.failureReason,
+                pauseTurnCount,
+                researchContinuationCount: continuationCount,
+              };
+            })(),
+          }
         : {}),
     };
   }
