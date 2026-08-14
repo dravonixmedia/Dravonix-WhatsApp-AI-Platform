@@ -1,4 +1,4 @@
-import type { CompanyRole } from "@dravonix/database";
+import type { CompanyRole, PlatformRole } from "@dravonix/database";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { createServerSupabaseClient } from "./supabase/server.js";
@@ -127,5 +127,65 @@ export const getDashboardSession = cache(async (): Promise<DashboardSession | nu
     activeMemberId: active.memberId,
     activeRole: active.role,
     accessToken,
+  };
+});
+
+export interface PlatformSession {
+  userId: string;
+  email: string | null;
+  /**
+   * null when the signed-in user has no active `platform_members` row --
+   * distinct from the whole function returning null (no signed-in user at
+   * all), so a caller can tell "not authenticated" (redirect to /login)
+   * apart from "authenticated but not platform staff" (render a forbidden
+   * page, never a login redirect -- the account is real, it just has no
+   * platform access).
+   */
+  platformRole: PlatformRole | null;
+}
+
+/**
+ * Resolves the Dravonix Super Admin platform-staff session for /admin/*
+ * routes (see app/admin/layout.tsx). Deliberately entirely separate from
+ * getDashboardSession() above -- it never queries company_members and never
+ * requires any company membership, because a platform staff member is not
+ * necessarily a member of any customer company. This function must never be
+ * used to decide company-scoped authorization, and getDashboardSession()
+ * must never be changed to accommodate this -- the two sessions are
+ * intentionally independent so /dashboard's existing customer-facing
+ * authentication flow is never weakened or coupled to platform staff status.
+ *
+ * The `platform_members` query below is RLS-scoped (the caller's own JWT,
+ * via createServerSupabaseClient()): that table's only SELECT policy is
+ * `is_platform_staff()`, which itself is only true when the caller already
+ * has an active `platform_members` row. So a non-platform-staff caller's
+ * query is denied by RLS (returns no rows) rather than merely filtered by
+ * this function's own `.eq()` -- the database enforces the same boundary
+ * this function checks, not just this function alone.
+ *
+ * Returns null only when there is no signed-in user at all. An authenticated
+ * user with no platform access still gets a session object back, with
+ * `platformRole: null` -- see that field's doc comment for why this
+ * distinction matters to callers.
+ */
+export const getPlatformSession = cache(async (): Promise<PlatformSession | null> => {
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: member, error } = await supabase
+    .from("platform_members")
+    .select("role")
+    .eq("user_id", user.id)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw error;
+
+  return {
+    userId: user.id,
+    email: user.email ?? null,
+    platformRole: (member?.role as PlatformRole | undefined) ?? null,
   };
 });
