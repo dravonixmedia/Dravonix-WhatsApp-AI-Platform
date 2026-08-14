@@ -82,10 +82,25 @@ describe("Super Admin foundation: /admin is server-side gated and independent of
     expect(source).not.toMatch(/\.eq\(\s*["']company_id["']/);
   });
 
-  it("the AdminSidebar placeholder items are not real <Link> routes -- only Dashboard (/admin) is a working destination in this phase", () => {
+  it("the AdminSidebar's remaining placeholder items (Research, Settings) are not real <Link> routes -- only implemented sections are", () => {
     const source = readSource("app/admin/AdminSidebar.tsx");
-    const linkMatches = source.match(/<Link\s+href=/g) ?? [];
-    expect(linkMatches.length).toBe(1);
-    expect(source).toContain('href="/admin"');
+    // NAV_ITEMS is data-mapped to a single <Link> in the JSX, so the source
+    // contains one <Link> tag, not nine -- what must be nine is the number
+    // of routes actually listed as data, one per implemented section.
+    expect(source).toContain("<Link");
+    const navItemsSection = source.slice(
+      source.indexOf("const NAV_ITEMS"),
+      source.indexOf("const PLACEHOLDER_ITEMS"),
+    );
+    const hrefMatches = navItemsSection.match(/href: "\/admin[^"]*"/g) ?? [];
+    // Dashboard, Companies, Users & Roles, Plans, Subscriptions,
+    // Entitlements, Usage, Audit Logs, Support Access -- every route this
+    // pass actually built a real page for.
+    expect(hrefMatches.length).toBe(9);
+    expect(navItemsSection).toContain('href: "/admin"');
+    expect(navItemsSection).toContain('href: "/admin/companies"');
+
+    const placeholderRenderSection = source.slice(source.indexOf("{PLACEHOLDER_ITEMS.map"));
+    expect(placeholderRenderSection).not.toContain("<Link");
   });
 });

@@ -84,6 +84,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_currency.sql"
 echo "Running voice pipeline media/transcription idempotency (migration 16) constraint assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_media_idempotency.sql"
 
+echo "Running Super Admin test-client foundation (migration 17) RLS/RPC hardening assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_super_admin.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
