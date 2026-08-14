@@ -1,30 +1,50 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 /**
- * Phase 1 foundation only: "Dashboard" is the only real, working destination
- * (/admin). Every other entry is a visual placeholder for a later phase --
- * deliberately NOT a <Link> to a route that doesn't exist yet (that would be
- * a dead link / fake functionality, which this phase explicitly avoids).
+ * Phase 1 built only "Dashboard" (/admin) as a real destination; every other
+ * item was a visual placeholder. This pass wires up every route this turn
+ * actually implements -- Companies, Users & Roles, Plans, Subscriptions,
+ * Entitlements, Usage, Audit Logs, Support Access. Research and Settings
+ * remain placeholders: neither was part of this turn's scope, and linking to
+ * a route with no real page behind it would be exactly the "fake
+ * functionality" this project's Super Admin instructions repeatedly warn
+ * against.
  */
-const PLACEHOLDER_ITEMS = [
-  "Companies",
-  "Users & Roles",
-  "Plans",
-  "Subscriptions",
-  "Entitlements",
-  "Usage",
-  "Research",
-  "Audit Logs",
-  "Support Access",
-  "Settings",
+const NAV_ITEMS = [
+  { label: "Dashboard", href: "/admin" },
+  { label: "Companies", href: "/admin/companies" },
+  { label: "Users & Roles", href: "/admin/users" },
+  { label: "Plans", href: "/admin/plans" },
+  { label: "Subscriptions", href: "/admin/subscriptions" },
+  { label: "Entitlements", href: "/admin/entitlements" },
+  { label: "Usage", href: "/admin/usage" },
+  { label: "Audit Logs", href: "/admin/audit" },
+  { label: "Support Access", href: "/admin/support-access" },
 ] as const;
 
+const PLACEHOLDER_ITEMS = ["Research", "Settings"] as const;
+
 export function AdminSidebar() {
+  const pathname = usePathname();
+
   return (
     <nav className="dvx-nav-rail" aria-label="Super Admin">
-      <Link href="/admin" className="dvx-nav-link dvx-nav-card dvx-nav-link--active">
-        <span className="dvx-nav-card-label">Dashboard</span>
-      </Link>
+      {NAV_ITEMS.map((item) => {
+        const isActive =
+          item.href === "/admin" ? pathname === "/admin" : pathname?.startsWith(item.href);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={`dvx-nav-link dvx-nav-card${isActive ? " dvx-nav-link--active" : ""}`}
+          >
+            <span className="dvx-nav-card-label">{item.label}</span>
+          </Link>
+        );
+      })}
       {PLACEHOLDER_ITEMS.map((label) => (
         <div
           key={label}
