@@ -1,6 +1,37 @@
+import { loadEnv } from "@dravonix/config";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 
 export const dynamic = "force-dynamic";
+
+interface EmailDeliveryDiagnostics {
+  zeptoMailTokenPresent: boolean;
+  emailFromAddressPresent: boolean;
+  emailFromNamePresent: boolean;
+  appUrlPresent: boolean;
+  emailConfigured: boolean;
+}
+
+/**
+ * Presence-only diagnostic for the invitation-email provider config
+ * (packages/config/src/env.ts). Reports whether each required value is
+ * bound to *this* running Worker -- never the value itself -- so a
+ * Cloudflare secret/var added after the last deploy (or added to the wrong
+ * environment/script) can be confirmed or ruled out without any Cloudflare
+ * account access. Diagnosed need: a real staging invitation attempt failed
+ * with error_code "not_configured" (audit_logs), meaning emailConfigured
+ * was false, but nothing in this codebase could previously answer *which*
+ * of the four values was missing without reading a secret.
+ */
+function getEmailDeliveryDiagnostics(): EmailDeliveryDiagnostics {
+  const env = loadEnv(process.env);
+  return {
+    zeptoMailTokenPresent: Boolean(env.emailApiToken),
+    emailFromAddressPresent: Boolean(env.EMAIL_FROM_ADDRESS),
+    emailFromNamePresent: Boolean(env.EMAIL_FROM_NAME),
+    appUrlPresent: Boolean(env.APP_URL),
+    emailConfigured: env.emailConfigured,
+  };
+}
 
 interface PlatformCounts {
   totalCompanies: number;
@@ -53,8 +84,20 @@ function StatTile({ label, value }: { label: string; value: number }) {
   );
 }
 
+function PresenceRow({ label, present }: { label: string; present: boolean }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}>
+      <span style={{ fontSize: "0.85rem" }}>{label}</span>
+      <span className={`dvx-badge dvx-badge--${present ? "success" : "danger"}`}>
+        {present ? "Present" : "Missing"}
+      </span>
+    </div>
+  );
+}
+
 export default async function AdminDashboardPage() {
   const counts = await loadPlatformCounts();
+  const emailDiagnostics = getEmailDeliveryDiagnostics();
 
   return (
     <div>
@@ -68,6 +111,36 @@ export default async function AdminDashboardPage() {
         <StatTile label="Active Companies" value={counts.activeCompanies} />
         <StatTile label="Platform Users" value={counts.platformUsers} />
         <StatTile label="Open Handovers" value={counts.openHandovers} />
+      </div>
+
+      <div className="dvx-card" style={{ marginTop: "1.5rem", maxWidth: 640 }}>
+        <h2 style={{ fontSize: "0.95rem", margin: "0 0 0.25rem" }}>Email delivery configuration</h2>
+        <p className="dvx-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
+          Presence of the invitation-email provider config on this running Worker. Never shows the
+          actual value of any secret.
+        </p>
+        <PresenceRow label="ZeptoMail API token" present={emailDiagnostics.zeptoMailTokenPresent} />
+        <PresenceRow
+          label="Sender address (EMAIL_FROM_ADDRESS)"
+          present={emailDiagnostics.emailFromAddressPresent}
+        />
+        <PresenceRow
+          label="Sender name (EMAIL_FROM_NAME)"
+          present={emailDiagnostics.emailFromNamePresent}
+        />
+        <PresenceRow label="App URL (APP_URL)" present={emailDiagnostics.appUrlPresent} />
+        <div
+          style={{
+            borderTop: "1px solid var(--border-default)",
+            marginTop: "0.5rem",
+            paddingTop: "0.5rem",
+          }}
+        >
+          <PresenceRow
+            label="Overall: invitation email delivery configured"
+            present={emailDiagnostics.emailConfigured}
+          />
+        </div>
       </div>
 
       <div className="dvx-card" style={{ marginTop: "1.5rem", maxWidth: 640 }}>
