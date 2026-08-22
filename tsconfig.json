@@ -11,6 +11,7 @@
       "@dravonix/tenant": ["packages/tenant/src/index.ts"],
       "@dravonix/handover": ["packages/handover/src/index.ts"],
       "@dravonix/whatsapp": ["packages/whatsapp/src/index.ts"],
+      "@dravonix/email": ["packages/email/src/index.ts"],
       "@dravonix/ai": ["packages/ai/src/index.ts"],
       "@dravonix/speech": ["packages/speech/src/index.ts"],
       "@dravonix/billing": ["packages/billing/src/index.ts"],

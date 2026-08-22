@@ -44,12 +44,19 @@
       "name": "dravonix-dashboard-staging",
       "vars": {
         "APP_ENV": "staging",
+        // Non-secret public URL -- used to build invitation accept links
+        // (lib/actions/invitations.ts) and password-reset redirects. Real,
+        // already-deployed staging Worker URL, not invented.
+        "APP_URL": "https://dravonix-dashboard-staging.muddy-smoke-afe4.workers.dev",
       },
     },
     "production": {
       "name": "dravonix-dashboard",
       "vars": {
         "APP_ENV": "production",
+        // Left unset deliberately -- the production custom domain isn't
+        // confirmed here; set via `wrangler deploy --env production` once
+        // known, kept fully independent of the staging value above.
       },
     },
   },

@@ -42,12 +42,46 @@ status=0
 resolved="$(node --input-type=module -e "
 import { readFileSync } from 'node:fs';
 const raw = readFileSync('$CONFIG_FILE', 'utf8');
-// Strip // line comments -- JSONC, not JSON. No string value in this file
-// contains '//', so this simple strip is safe (verified by inspection).
+// Strip // line comments -- JSONC, not JSON -- but only outside string
+// literals: a var value (e.g. APP_URL) can itself legitimately contain
+// '//' (https://...), so a plain /\/\/.*\$/ regex would truncate that
+// string mid-line. This scans char-by-char, tracking quoted-string state
+// (respecting backslash escapes), and only treats '//' as a comment start
+// when not inside a string.
+function stripJsoncComments(text) {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (inString) {
+      out += ch;
+      if (ch === '\\\\') {
+        out += next ?? '';
+        i++;
+      } else if (ch === '\"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '\"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
 // Also strip trailing commas before a closing bracket/brace -- Prettier
 // formats .jsonc with them (valid JSONC/JSON5, and wrangler itself parses
 // this fine), but JSON.parse does not accept them.
-const stripped = raw.replace(/\/\/.*$/gm, '').replace(/,(\s*[}\]])/g, '\$1');
+const stripped = stripJsoncComments(raw).replace(/,(\s*[}\]])/g, '\$1');
 const config = JSON.parse(stripped);
 const target = config.env?.['$ENVIRONMENT'];
 if (!target) {

@@ -98,4 +98,45 @@ describe("loadEnv", () => {
   it("rejects an invalid VOICE_REPLY_MODE value", () => {
     expect(() => loadEnv({ ...base, VOICE_REPLY_MODE: "audio_only" })).toThrow(EnvValidationError);
   });
+
+  it("defaults EMAIL_FROM_NAME and marks emailConfigured false when no email provider is set", () => {
+    const env = loadEnv(base);
+    expect(env.EMAIL_FROM_NAME).toBe("DRAIVA by Dravonix Media");
+    expect(env.emailConfigured).toBe(false);
+  });
+
+  it("marks emailConfigured true only when both ZEPTOMAIL_API_TOKEN and EMAIL_FROM_ADDRESS are present", () => {
+    expect(loadEnv({ ...base, ZEPTOMAIL_API_TOKEN: "zm_test" }).emailConfigured).toBe(false);
+    expect(loadEnv({ ...base, EMAIL_FROM_ADDRESS: "invites@dravonix.test" }).emailConfigured).toBe(
+      false,
+    );
+    expect(
+      loadEnv({
+        ...base,
+        ZEPTOMAIL_API_TOKEN: "zm_test",
+        EMAIL_FROM_ADDRESS: "invites@dravonix.test",
+      }).emailConfigured,
+    ).toBe(true);
+  });
+
+  it("resolves emailApiToken from ZEPTOMAIL_API_TOKEN, preferring it over the transitional EMAIL_API_KEY fallback", () => {
+    expect(loadEnv({ ...base, ZEPTOMAIL_API_TOKEN: "zm_test" }).emailApiToken).toBe("zm_test");
+    expect(
+      loadEnv({ ...base, ZEPTOMAIL_API_TOKEN: "zm_test", EMAIL_API_KEY: "old_key" }).emailApiToken,
+    ).toBe("zm_test");
+  });
+
+  it("falls back to the transitional EMAIL_API_KEY when ZEPTOMAIL_API_TOKEN is unset, for both emailApiToken and emailConfigured", () => {
+    expect(loadEnv({ ...base, EMAIL_API_KEY: "old_key" }).emailApiToken).toBe("old_key");
+    expect(
+      loadEnv({ ...base, EMAIL_API_KEY: "old_key", EMAIL_FROM_ADDRESS: "invites@dravonix.test" })
+        .emailConfigured,
+    ).toBe(true);
+  });
+
+  it("rejects an invalid EMAIL_FROM_ADDRESS value", () => {
+    expect(() => loadEnv({ ...base, EMAIL_FROM_ADDRESS: "not-an-email" })).toThrow(
+      EnvValidationError,
+    );
+  });
 });

@@ -14,10 +14,13 @@ const ROLES = [
 ];
 
 /**
- * No email is sent yet -- creating an invitation returns a one-time accept
- * URL that the inviter copies and delivers out of band (Slack, personal
- * email, phone). See the final report's "remaining email-delivery
- * dependency."
+ * Invitation delivery is handled server-side by the shared
+ * lib/email/sendInvitationEmail.ts service (same one the Super Admin invite
+ * form uses) -- when a real email provider is configured, this form never
+ * sees or displays the raw invite link. The manual-copy fallback only
+ * appears when email delivery didn't happen (no provider configured yet, or
+ * a non-production send failure) -- acceptUrl is otherwise omitted by the
+ * server response entirely, never just hidden client-side.
  */
 export function InviteMemberForm({
   companyId,
@@ -27,7 +30,11 @@ export function InviteMemberForm({
   defaultRole?: string;
 }) {
   const [isPending, startTransition] = useTransition();
-  const [result, setResult] = useState<{ acceptUrl: string; email: string } | null>(null);
+  const [result, setResult] = useState<{
+    email: string;
+    emailSent: boolean;
+    acceptUrl?: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   return (
@@ -39,7 +46,11 @@ export function InviteMemberForm({
           startTransition(async () => {
             try {
               const invitation = await createCompanyInvitationAction(companyId, formData);
-              setResult({ acceptUrl: invitation.acceptUrl, email: invitation.email });
+              setResult({
+                email: invitation.email,
+                emailSent: invitation.emailSent,
+                acceptUrl: invitation.acceptUrl,
+              });
             } catch (err) {
               setError(err instanceof Error ? err.message : "Failed to create invitation");
             }
@@ -82,11 +93,26 @@ export function InviteMemberForm({
 
       {result ? (
         <div className="dvx-card" style={{ marginTop: "0.75rem", padding: "0.75rem" }}>
-          <p style={{ fontSize: "0.8rem", margin: "0 0 0.4rem" }}>
-            Invitation created for {result.email}. Copy this link and send it to them -- it
-            hasn&apos;t been emailed automatically:
-          </p>
-          <code style={{ fontSize: "0.75rem", wordBreak: "break-all" }}>{result.acceptUrl}</code>
+          {result.emailSent ? (
+            <p style={{ fontSize: "0.8rem", margin: 0 }}>
+              Invite sent to <strong>{result.email}</strong>.
+            </p>
+          ) : result.acceptUrl ? (
+            <>
+              <p style={{ fontSize: "0.8rem", margin: "0 0 0.4rem" }}>
+                Invitation created for {result.email}, but no email could be delivered
+                automatically. Copy this link and send it to them:
+              </p>
+              <code style={{ fontSize: "0.75rem", wordBreak: "break-all" }}>
+                {result.acceptUrl}
+              </code>
+            </>
+          ) : (
+            <p style={{ fontSize: "0.8rem", margin: 0, color: "#dc2626" }}>
+              Invitation created for {result.email}, but the invitation email could not be
+              delivered. Please try Resend shortly, or contact support if this continues.
+            </p>
+          )}
         </div>
       ) : null}
     </div>

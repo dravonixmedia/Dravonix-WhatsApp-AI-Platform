@@ -9,26 +9,90 @@
  * authorization logic of their own beyond requiring *some* authenticated
  * session before making the call.
  *
- * No email is ever sent from here: create/resend return the raw invite
- * token/URL to the caller (Super Admin or company admin), who is responsible
- * for delivering it out of band until a transactional email provider is
- * wired up -- see the final report's "remaining email-delivery dependency."
+ * Invitation email delivery (migration 19's record_invitation_email_event +
+ * lib/email/sendInvitationEmail.ts, shared by both this Super Admin path and
+ * the client-side Team page -- there is only ever this one call site for
+ * each RPC) is best-effort and never corrupts the invitation record: the
+ * company_invitations row is already committed by the RPC before the email
+ * is attempted, so an email failure can only ever fail to notify, never
+ * roll back or invalidate the invitation itself. When no email provider is
+ * configured (env.emailConfigured === false), acceptUrl is still returned so
+ * the existing manual-copy fallback keeps working -- this only happens
+ * outside of a fully configured production deploy.
  */
 
+import { loadEnv } from "@dravonix/config";
 import { revalidatePath } from "next/cache";
+import { maskEmail, sendInvitationEmail } from "../email/sendInvitationEmail.js";
 import { createServerSupabaseClient } from "../supabase/server.js";
+
+const ROLE_LABELS: Record<string, string> = {
+  company_owner: "Owner",
+  company_admin: "Admin",
+  manager: "Manager",
+  agent: "Agent",
+  knowledge_editor: "Knowledge Editor",
+  billing_viewer: "Billing Viewer",
+  viewer: "Viewer",
+};
 
 export interface CreatedInvitation {
   id: string;
   email: string;
   role: string;
   expiresAt: string;
-  acceptUrl: string;
+  emailSent: boolean;
+  /** Only ever populated when email delivery didn't happen (not configured, or failed) -- never shown by default once a real provider is configured. */
+  acceptUrl?: string;
 }
 
 function buildAcceptUrl(rawToken: string): string {
-  const base = process.env.APP_URL ?? "";
-  return `${base}/invite/${rawToken}`;
+  const env = loadEnv(process.env);
+  return `${env.APP_URL}/invite/${rawToken}`;
+}
+
+async function deliverInvitationEmail(params: {
+  invitationId: string;
+  companyId: string;
+  email: string;
+  role: string;
+  acceptUrl: string;
+  expiresAt: string;
+}): Promise<{ emailSent: boolean; acceptUrl?: string }> {
+  const supabase = await createServerSupabaseClient();
+
+  const { data: company } = await supabase
+    .from("companies")
+    .select("name")
+    .eq("id", params.companyId)
+    .maybeSingle();
+
+  const result = await sendInvitationEmail({
+    email: params.email,
+    companyName: company?.name ?? "your workspace",
+    roleLabel: ROLE_LABELS[params.role] ?? params.role,
+    acceptUrl: params.acceptUrl,
+    expiresAt: new Date(params.expiresAt),
+  });
+
+  const masked = maskEmail(params.email);
+  await supabase.rpc("record_invitation_email_event", {
+    p_invitation_id: params.invitationId,
+    p_event: result.success ? "sent" : "failed",
+    p_masked_recipient: masked,
+    p_provider_message_id: result.success ? (result.providerMessageId ?? null) : null,
+    p_error_code: result.success ? null : (result.errorCode ?? null),
+  });
+
+  // acceptUrl is only ever surfaced back to the caller when email delivery
+  // didn't happen AND the environment is not production -- a production
+  // failure must never leak the raw invite link into the UI; it surfaces as
+  // a plain delivery-failure message instead (see the UI layer). Outside
+  // production (no provider configured yet, or a staging debugging need),
+  // the existing manual-copy fallback keeps working.
+  if (result.success) return { emailSent: true };
+  const isProduction = loadEnv(process.env).isProduction;
+  return { emailSent: false, acceptUrl: isProduction ? undefined : params.acceptUrl };
 }
 
 export async function createCompanyInvitationAction(
@@ -53,6 +117,16 @@ export async function createCompanyInvitationAction(
     raw_token: string;
   };
 
+  const acceptUrl = buildAcceptUrl(row.raw_token);
+  const delivery = await deliverInvitationEmail({
+    invitationId: row.id,
+    companyId,
+    email: row.invitation_email,
+    role: row.role,
+    acceptUrl,
+    expiresAt: row.expires_at,
+  });
+
   revalidatePath("/dashboard/team");
   revalidatePath(`/admin/companies/${companyId}`);
 
@@ -61,12 +135,14 @@ export async function createCompanyInvitationAction(
     email: row.invitation_email,
     role: row.role,
     expiresAt: row.expires_at,
-    acceptUrl: buildAcceptUrl(row.raw_token),
+    emailSent: delivery.emailSent,
+    acceptUrl: delivery.acceptUrl,
   };
 }
 
 export async function resendCompanyInvitationAction(invitationId: string): Promise<{
-  acceptUrl: string;
+  emailSent: boolean;
+  acceptUrl?: string;
   expiresAt: string;
 }> {
   const supabase = await createServerSupabaseClient();
@@ -76,8 +152,31 @@ export async function resendCompanyInvitationAction(invitationId: string): Promi
   if (error) throw error;
 
   const row = data as { id: string; expires_at: string; raw_token: string };
+
+  const { data: invitation } = await supabase
+    .from("company_invitations")
+    .select("company_id, email, role")
+    .eq("id", invitationId)
+    .maybeSingle();
+
+  const acceptUrl = buildAcceptUrl(row.raw_token);
+  const delivery = invitation
+    ? await deliverInvitationEmail({
+        invitationId: row.id,
+        companyId: invitation.company_id,
+        email: invitation.email,
+        role: invitation.role,
+        acceptUrl,
+        expiresAt: row.expires_at,
+      })
+    : { emailSent: false, acceptUrl };
+
   revalidatePath("/dashboard/team");
-  return { acceptUrl: buildAcceptUrl(row.raw_token), expiresAt: row.expires_at };
+  return {
+    emailSent: delivery.emailSent,
+    acceptUrl: delivery.acceptUrl,
+    expiresAt: row.expires_at,
+  };
 }
 
 export async function revokeCompanyInvitationAction(invitationId: string): Promise<void> {

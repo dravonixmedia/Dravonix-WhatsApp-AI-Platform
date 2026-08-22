@@ -148,17 +148,52 @@ other Worker in this repo — a staging deploy cannot collide with production.
 
 ### Required environment variables
 
-| Variable                                                 | Where it's set                                                  | Browser-exposed? |
-| -------------------------------------------------------- | --------------------------------------------------------------- | ---------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`                               | **Build-time only** — the CI job's own `env:` (see below)       | Yes (by design)  |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY`                          | **Build-time only** — the CI job's own `env:` (see below)       | Yes (by design)  |
-| `SUPABASE_URL`                                           | `wrangler secret put SUPABASE_URL --env <env>`                  | No               |
-| `SUPABASE_ANON_KEY`                                      | `wrangler secret put SUPABASE_ANON_KEY --env <env>`             | No               |
-| `SUPABASE_SERVICE_ROLE_KEY`                              | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`     | **Never**        |
-| `META_ACCESS_TOKEN`                                      | `wrangler secret put META_ACCESS_TOKEN --env <env>`             | No               |
-| `META_GRAPH_API_VERSION` (optional, defaults to `v21.0`) | `wrangler.jsonc` `vars` if overriding the default               | No               |
-| `APP_ENV`                                                | `wrangler.jsonc` `vars` (already set: `staging` / `production`) | No               |
-| `PLATFORM_*` (branding, optional)                        | `wrangler.jsonc` `vars` if overriding the default brand         | No               |
+| Variable                                                                                         | Where it's set                                                                                                          | Browser-exposed? |
+| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`                                                                       | **Build-time only** — the CI job's own `env:` (see below)                                                               | Yes (by design)  |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY`                                                                  | **Build-time only** — the CI job's own `env:` (see below)                                                               | Yes (by design)  |
+| `SUPABASE_URL`                                                                                   | `wrangler secret put SUPABASE_URL --env <env>`                                                                          | No               |
+| `SUPABASE_ANON_KEY`                                                                              | `wrangler secret put SUPABASE_ANON_KEY --env <env>`                                                                     | No               |
+| `SUPABASE_SERVICE_ROLE_KEY`                                                                      | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`                                                             | **Never**        |
+| `META_ACCESS_TOKEN`                                                                              | `wrangler secret put META_ACCESS_TOKEN --env <env>`                                                                     | No               |
+| `META_GRAPH_API_VERSION` (optional, defaults to `v21.0`)                                         | `wrangler.jsonc` `vars` if overriding the default                                                                       | No               |
+| `APP_ENV`                                                                                        | `wrangler.jsonc` `vars` (already set: `staging` / `production`)                                                         | No               |
+| `APP_URL`                                                                                        | `wrangler.jsonc` `vars` (already set for staging; **production not yet set** -- see below)                              | No               |
+| `ZEPTOMAIL_API_TOKEN` (Zoho ZeptoMail Send Mail token -- required for invitation email delivery) | `wrangler secret put ZEPTOMAIL_API_TOKEN --env <env>`                                                                   | No               |
+| `EMAIL_API_KEY` (transitional alias for `ZEPTOMAIL_API_TOKEN` -- see below)                      | `wrangler secret put EMAIL_API_KEY --env <env>` -- **staging already has this secret set, holding the ZeptoMail token** | No               |
+| `EMAIL_FROM_ADDRESS` (must be on a domain verified with ZeptoMail)                               | `wrangler secret put EMAIL_FROM_ADDRESS --env <env>` -- `admin@dravonixmedia.com`                                       | No               |
+| `EMAIL_FROM_NAME` (optional, defaults to `DRAIVA by Dravonix Media`)                             | `wrangler.jsonc` `vars` if overriding the default                                                                       | No               |
+| `PLATFORM_*` (branding, optional)                                                                | `wrangler.jsonc` `vars` if overriding the default brand                                                                 | No               |
+
+**Invitation email delivery uses Zoho ZeptoMail** (`packages/email`'s
+`ZeptoMailEmailProvider`, calling ZeptoMail's HTTPS Send Mail API directly --
+never SMTP). `dravonixmedia.com` is already verified as a sending domain in
+ZeptoMail, and the sender is always `admin@dravonixmedia.com` /
+"DRAIVA by Dravonix Media" -- never a different address. To (re)provision a
+Cloudflare Worker environment:
+
+1. **Staging already has a working secret**: `env.staging`'s `EMAIL_API_KEY`
+   secret already holds a valid ZeptoMail Send Mail token (provisioned before
+   the provider name changed from `EMAIL_API_KEY` to `ZEPTOMAIL_API_TOKEN`;
+   see `packages/config/src/env.ts` for the transitional fallback that reads
+   it under either name). It is **not** a Resend key and must never be used
+   against the Resend API -- this codebase has no Resend client left, so
+   there is nothing left for it to be misrouted to. Do not remove this
+   secret until `ZEPTOMAIL_API_TOKEN` has been provisioned with the same
+   value.
+2. `wrangler secret put ZEPTOMAIL_API_TOKEN --env staging` with the same
+   ZeptoMail Send Mail token (and again for `production` once ready), then
+   remove the now-redundant `EMAIL_API_KEY` secret in a later, separate step.
+3. `wrangler secret put EMAIL_FROM_ADDRESS --env staging` (and `production`)
+   with `admin@dravonixmedia.com`.
+4. Set `APP_URL` for `production` in `apps/web/wrangler.jsonc` once the
+   production custom domain is confirmed (staging's is already set above).
+
+If neither `ZEPTOMAIL_API_TOKEN` nor `EMAIL_API_KEY` (plus
+`EMAIL_FROM_ADDRESS`) is configured for an environment, `apps/web`
+automatically falls back to its existing manual-copy-link flow (see
+`apps/web/lib/email/sendInvitationEmail.ts`) -- a safe, working degraded
+mode, not a broken feature.
 
 **`META_ACCESS_TOKEN` is required for the human-reply Server Action
 specifically** (`sendHumanReplyAction`, `apps/web/lib/actions/handover.ts`) —
