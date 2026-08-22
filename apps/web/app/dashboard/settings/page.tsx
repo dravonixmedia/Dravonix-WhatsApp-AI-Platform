@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { maskPhoneNumber } from "@dravonix/handover";
 import { listSupportedCurrencies } from "../../../lib/currencyList.js";
+import { updateCompanyProfileAction } from "../../../lib/actions/companyProfile.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
@@ -76,7 +77,9 @@ export default async function SettingsPage() {
     capabilities.canManageSettings
       ? supabase
           .from("companies")
-          .select("name, status, timezone, default_currency, created_at")
+          .select(
+            "name, industry, country, status, is_demo, timezone, default_currency, created_at",
+          )
           .eq("id", session.activeCompanyId)
           .single()
       : Promise.resolve({ data: null }),
@@ -88,6 +91,20 @@ export default async function SettingsPage() {
           .maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
+
+  const subscriptionResult = capabilities.canManageBilling
+    ? await supabase
+        .from("subscriptions")
+        .select("state, plan_versions (plans (name))")
+        .eq("company_id", session.activeCompanyId)
+        .maybeSingle()
+    : { data: null };
+  const subscriptionRow = subscriptionResult.data as {
+    state: string;
+    plan_versions: { plans: { name: string } | { name: string }[] | null } | null;
+  } | null;
+  const planVersion = subscriptionRow?.plan_versions;
+  const planInfo = Array.isArray(planVersion?.plans) ? planVersion?.plans[0] : planVersion?.plans;
 
   const company = companyResult.data;
   const whatsappAccount = whatsappAccountResult.data as {
@@ -114,7 +131,61 @@ export default async function SettingsPage() {
       <div className="dvx-card-grid dvx-card-grid--wide" style={{ marginTop: "1.5rem" }}>
         {capabilities.canManageSettings ? (
           <SectionCard id="company-details" title="Company details">
-            <SettingsRow label="Company name" value={company?.name ?? null} />
+            {company?.is_demo ? (
+              <div
+                className="dvx-badge dvx-badge--neutral"
+                style={{ marginBottom: "0.75rem", display: "inline-block" }}
+              >
+                Demo / Test Account
+              </div>
+            ) : null}
+            <form
+              action={updateCompanyProfileAction}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.6rem",
+                marginBottom: "1rem",
+              }}
+            >
+              <label style={{ fontSize: "0.8rem" }}>
+                Company name
+                <input
+                  className="dvx-input"
+                  name="name"
+                  defaultValue={company?.name ?? ""}
+                  required
+                  style={{ marginTop: "0.3rem" }}
+                />
+              </label>
+              <label style={{ fontSize: "0.8rem" }}>
+                Industry
+                <input
+                  className="dvx-input"
+                  name="industry"
+                  defaultValue={company?.industry ?? ""}
+                  placeholder="e.g. Interior Fit-Out"
+                  style={{ marginTop: "0.3rem" }}
+                />
+              </label>
+              <label style={{ fontSize: "0.8rem" }}>
+                Country
+                <input
+                  className="dvx-input"
+                  name="country"
+                  defaultValue={company?.country ?? ""}
+                  placeholder="e.g. India"
+                  style={{ marginTop: "0.3rem" }}
+                />
+              </label>
+              <button
+                className="dvx-button dvx-button--secondary"
+                type="submit"
+                style={{ alignSelf: "flex-start", fontSize: "0.85rem" }}
+              >
+                Save profile
+              </button>
+            </form>
             <SettingsRow
               label="Account status"
               value={company?.status ? company.status.replace(/_/g, " ") : null}
@@ -143,10 +214,16 @@ export default async function SettingsPage() {
 
         {capabilities.canManageBilling ? (
           <SectionCard title="Subscription status">
-            <SettingsRow label="Current plan" value="Not configured" />
-            <SettingsRow label="Subscription status" value="Not active" />
+            <SettingsRow label="Current plan" value={planInfo?.name ?? "Not assigned"} />
+            <SettingsRow
+              label="Subscription status"
+              value={
+                subscriptionRow?.state ? subscriptionRow.state.replace(/_/g, " ") : "Not active"
+              }
+            />
             <p className="dvx-muted" style={{ fontSize: "0.8rem", marginTop: "0.5rem" }}>
-              Subscription management will be available soon.
+              Plan assignment and billing changes are managed by Dravonix -- contact your account
+              representative to change plans.
             </p>
           </SectionCard>
         ) : null}

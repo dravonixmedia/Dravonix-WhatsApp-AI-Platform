@@ -45,9 +45,11 @@ function withoutComments(text: string): string {
 }
 
 describe("dashboard sidebar navigation", () => {
-  it("never constructs a Knowledge Base nav entry -- no client-ready management module exists", () => {
-    expect(layoutSource).not.toMatch(/label:\s*"Knowledge Base"/);
-    expect(layoutSource).not.toMatch(/href:\s*"\/dashboard\/knowledge"/);
+  it("gates the Knowledge Base nav entry behind capabilities.canViewKnowledge, never a hardcoded email or role", () => {
+    const block = layoutSource.match(/if \(capabilities\.canViewKnowledge\) \{[\s\S]*?\}/);
+    expect(block).not.toBeNull();
+    expect(block?.[0]).toContain('label: "Knowledge Base"');
+    expect(block?.[0]).toContain('href: "/dashboard/knowledge"');
   });
 
   it("never constructs a Billing nav entry -- no client-ready subscription system exists yet", () => {
@@ -162,12 +164,14 @@ describe("dashboard sidebar navigation", () => {
     expect(layoutSource).not.toMatch(/["'][\w.+-]+@[\w.-]+\.\w+["']/);
   });
 
-  it("the Knowledge Base route itself redirects rather than rendering a developer placeholder", () => {
+  it("the Knowledge Base route renders a real, company-scoped source list gated on canViewKnowledge -- not a redirect", () => {
     const knowledgeRouteSource = readFileSync(
       join(webRoot, "app/dashboard/knowledge/page.tsx"),
       "utf8",
     );
-    expect(knowledgeRouteSource).toContain('redirect("/dashboard")');
+    expect(knowledgeRouteSource).not.toContain('redirect("/dashboard")');
+    expect(knowledgeRouteSource).toContain("canViewKnowledge");
+    expect(knowledgeRouteSource).toContain("knowledge_sources");
   });
 
   it("renders DRAIVA as a two-line card with a title span and a subtitle span, never a single truncated line", () => {

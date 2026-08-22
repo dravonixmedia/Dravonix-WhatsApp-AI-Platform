@@ -125,6 +125,7 @@ export interface DashboardCapabilities {
   canViewWhatsapp: boolean;
   canManageAiSettings: boolean;
   canViewAiSettings: boolean;
+  canViewKnowledge: boolean;
   canManageKnowledge: boolean;
   canViewBilling: boolean;
   canManageBilling: boolean;
@@ -156,6 +157,7 @@ export function getDashboardCapabilities(role: CompanyRole | null): DashboardCap
     canViewWhatsapp: hasPermission(role, "whatsapp.view"),
     canManageAiSettings: hasPermission(role, "ai_settings.manage"),
     canViewAiSettings: hasPermission(role, "ai_settings.view"),
+    canViewKnowledge: hasPermission(role, "knowledge.view"),
     canManageKnowledge: hasPermission(role, "knowledge.manage"),
     canViewBilling: hasPermission(role, "billing.view"),
     canManageBilling: hasPermission(role, "billing.manage"),

@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { computeOnboardingChecklist } from "../../../../lib/onboarding.js";
 import {
   assignPlanAction,
   changeCompanyMemberRoleAction,
@@ -82,6 +83,8 @@ export default async function AdminCompanyDetailPage({
     whatsappAccountsResult,
     whatsappPhoneNumbersResult,
     supportSessionsResult,
+    companySettingsResult,
+    knowledgeSourcesResult,
   ] = await Promise.all([
     supabase
       .from("company_members")
@@ -121,6 +124,16 @@ export default async function AdminCompanyDetailPage({
       .eq("company_id", id)
       .order("started_at", { ascending: false })
       .limit(10),
+    supabase
+      .from("company_settings")
+      .select("bot_name, welcome_message")
+      .eq("company_id", id)
+      .maybeSingle(),
+    supabase
+      .from("knowledge_sources")
+      .select("id", { count: "exact", head: true })
+      .eq("company_id", id)
+      .eq("is_enabled", true),
   ]);
 
   const members = membersResult.data ?? [];
@@ -146,6 +159,24 @@ export default async function AdminCompanyDetailPage({
 
   const planRow = subscription?.plan_versions;
   const planInfo = Array.isArray(planRow?.plans) ? planRow?.plans[0] : planRow?.plans;
+
+  const companySettings = companySettingsResult.data;
+  const activeOwnerOrAdminCount = members.filter(
+    (m) => m.is_active && (m.role === "company_owner" || m.role === "company_admin"),
+  ).length;
+  const whatsappConnected = whatsappAccounts.some((a) => a.status === "connected");
+  const checklist = computeOnboardingChecklist({
+    hasIndustry: Boolean(company.industry),
+    hasCountry: Boolean(company.country),
+    aiSettingsConfigured: Boolean(
+      (companySettings?.bot_name && companySettings.bot_name !== "Assistant") ||
+      companySettings?.welcome_message,
+    ),
+    enabledKnowledgeSourceCount: knowledgeSourcesResult.count ?? 0,
+    activeOwnerOrAdminCount,
+    hasSubscription: subscription !== null,
+    whatsappConnected,
+  });
 
   const suspendCompanyWithId = suspendCompanyAction.bind(null, id);
   const closeCompanyWithId = closeCompanyAction.bind(null, id);
@@ -311,6 +342,48 @@ export default async function AdminCompanyDetailPage({
             </form>
           ) : null}
         </div>
+      </div>
+
+      {/* Onboarding & Readiness */}
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Onboarding &amp; readiness</span>
+          <span
+            className={`dvx-badge ${checklist.readyToActivate ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+            style={{ fontSize: "0.7rem" }}
+          >
+            {checklist.readyToActivate ? "Ready to activate" : "In progress"}
+          </span>
+        </div>
+        <div className="dvx-team-member-list">
+          {checklist.steps.map((step) => (
+            <div key={step.key} className="dvx-team-member-row">
+              <span className="dvx-team-member-name">
+                {step.label}
+                <span className="dvx-muted" style={{ display: "block", fontSize: "0.78rem" }}>
+                  {step.detail}
+                </span>
+              </span>
+              <span
+                className={`dvx-badge ${step.complete ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                style={{ fontSize: "0.7rem" }}
+              >
+                {step.complete ? "Complete" : "Pending"}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="dvx-muted" style={{ fontSize: "0.75rem", marginTop: "0.75rem" }}>
+          This reflects real database state. Activation stays a separate, explicit action -- the
+          checklist being complete does not change company.status by itself.
+        </p>
       </div>
 
       {/* Members */}

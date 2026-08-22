@@ -194,6 +194,12 @@ begin
       where company_id = v_id and action = 'company_created' and actor_user_id = '50000001-0000-0000-0000-000000000001'
     )
   );
+  perform test_assert(
+    'admin_create_company also creates default company_settings/ai_settings/voice_settings rows -- otherwise the owner could never save AI Settings for the first time (company_settings has no INSERT RLS policy)',
+    exists (select 1 from company_settings where company_id = v_id)
+    and exists (select 1 from ai_settings where company_id = v_id)
+    and exists (select 1 from voice_settings where company_id = v_id)
+  );
 
   -- stash for later statements via a temp table (plpgsql vars don't survive
   -- across separate top-level statements in this script).

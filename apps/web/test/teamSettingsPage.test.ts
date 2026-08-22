@@ -14,6 +14,10 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, "..");
 const source = readFileSync(join(webRoot, "app/dashboard/team/page.tsx"), "utf8");
+const inviteFormSource = readFileSync(
+  join(webRoot, "app/dashboard/team/InviteMemberForm.tsx"),
+  "utf8",
+);
 
 describe("Team Settings page", () => {
   it("has the exact required heading and supporting text", () => {
@@ -60,16 +64,12 @@ describe("Team Settings page", () => {
     expect(source).not.toContain('.from("companies")');
   });
 
-  it("does not invent invite/role-change/revoke actions the backend doesn't support -- read-only member list only", () => {
-    for (const notYetSupported of [
-      "inviteAction",
-      "InviteMember",
-      "changeRoleAction",
-      "revokeAction",
-      "removeMemberAction",
-    ]) {
-      expect(source).not.toContain(notYetSupported);
-    }
+  it("invite/role-change/deactivate actions are wired to the real client onboarding foundation RPCs, not invented client-only handlers", () => {
+    expect(source).toContain("InviteMemberForm");
+    expect(inviteFormSource).toContain("createCompanyInvitationAction");
+    expect(source).toContain("revokeCompanyInvitationAction");
+    expect(source).toContain("companyChangeMemberRoleAction");
+    expect(source).toContain("companyDeactivateMemberAction");
   });
 
   it("shows role and active/inactive status for each member, same real data as before", () => {
