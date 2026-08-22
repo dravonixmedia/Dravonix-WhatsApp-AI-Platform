@@ -112,6 +112,17 @@ const rawEnvSchema = z.object({
 
   ENCRYPTION_KEY: z.string().optional(),
   SENTRY_DSN: z.string().optional(),
+
+  // Transactional email (client/team invitation delivery -- apps/web's
+  // create_company_invitation/admin_resend_company_invitation Server Action
+  // wiring). Resend's HTTP API is the only supported real provider (no SMTP
+  // support exists anywhere in this codebase's Worker/edge runtimes). Both
+  // EMAIL_API_KEY and EMAIL_FROM_ADDRESS must be present for emailConfigured
+  // to be true; with either missing, invitation delivery falls back to the
+  // existing manual-copy-link flow rather than silently failing.
+  EMAIL_API_KEY: z.string().optional(),
+  EMAIL_FROM_ADDRESS: z.string().email().optional(),
+  EMAIL_FROM_NAME: z.string().default("DRAIVA by Dravonix Media"),
 });
 
 export type RawEnv = z.infer<typeof rawEnvSchema>;
@@ -126,6 +137,7 @@ export interface PlatformEnv extends RawEnv {
   elevenLabsConfigured: boolean;
   razorpayConfigured: boolean;
   r2Configured: boolean;
+  emailConfigured: boolean;
 }
 
 export class EnvValidationError extends Error {
@@ -191,5 +203,6 @@ export function loadEnv(source: Record<string, string | undefined>): PlatformEnv
     elevenLabsConfigured: Boolean(raw.ELEVENLABS_API_KEY),
     razorpayConfigured: Boolean(raw.RAZORPAY_KEY_ID && raw.RAZORPAY_KEY_SECRET),
     r2Configured: Boolean(raw.R2_ACCOUNT_ID && raw.R2_ACCESS_KEY_ID && raw.R2_SECRET_ACCESS_KEY),
+    emailConfigured: Boolean(raw.EMAIL_API_KEY && raw.EMAIL_FROM_ADDRESS),
   };
 }

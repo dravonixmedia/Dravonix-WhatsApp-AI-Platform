@@ -479,9 +479,9 @@ export default async function AdminCompanyDetailPage({
           className="dvx-muted"
           style={{ fontSize: "0.8rem", marginTop: 0, marginBottom: "0.75rem" }}
         >
-          The invited person does not need an existing DRAIVA account -- the link below lets them
-          create one and accept in a single step. No email is sent automatically yet; copy the link
-          and deliver it out of band.
+          The invited person does not need an existing DRAIVA account -- an email is sent to them
+          with a link to create one and accept in a single step. If email delivery isn&apos;t
+          configured yet, a manual-copy link is shown instead.
         </p>
         <InviteMemberForm companyId={id} defaultRole="company_owner" />
       </div>

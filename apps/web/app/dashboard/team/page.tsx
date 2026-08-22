@@ -1,6 +1,7 @@
 import {
   companyChangeMemberRoleAction,
   companyDeactivateMemberAction,
+  resendCompanyInvitationAction,
   revokeCompanyInvitationAction,
 } from "../../../lib/actions/invitations.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
@@ -98,21 +99,37 @@ export default async function TeamSettingsPage() {
             {invitations.map((invitation) => (
               <div key={invitation.id} className="dvx-team-member-row">
                 <span className="dvx-team-member-name">
-                  {invitation.email}
+                  Invite sent to {invitation.email}
                   <span className="dvx-muted" style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}>
-                    {ROLE_LABELS[invitation.role] ?? invitation.role} · expires{" "}
-                    {new Date(invitation.expires_at).toLocaleDateString()}
+                    {ROLE_LABELS[invitation.role] ?? invitation.role} · {invitation.status} ·
+                    expires {new Date(invitation.expires_at).toLocaleDateString()}
                   </span>
                 </span>
-                <form action={revokeCompanyInvitationAction.bind(null, invitation.id)}>
-                  <button
-                    className="dvx-button dvx-button--secondary"
-                    type="submit"
-                    style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                <span style={{ display: "flex", gap: "0.4rem" }}>
+                  <form
+                    action={async () => {
+                      "use server";
+                      await resendCompanyInvitationAction(invitation.id);
+                    }}
                   >
-                    Revoke
-                  </button>
-                </form>
+                    <button
+                      className="dvx-button dvx-button--secondary"
+                      type="submit"
+                      style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                    >
+                      Resend
+                    </button>
+                  </form>
+                  <form action={revokeCompanyInvitationAction.bind(null, invitation.id)}>
+                    <button
+                      className="dvx-button dvx-button--secondary"
+                      type="submit"
+                      style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                    >
+                      Revoke
+                    </button>
+                  </form>
+                </span>
               </div>
             ))}
           </div>

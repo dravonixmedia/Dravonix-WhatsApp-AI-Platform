@@ -98,4 +98,27 @@ describe("loadEnv", () => {
   it("rejects an invalid VOICE_REPLY_MODE value", () => {
     expect(() => loadEnv({ ...base, VOICE_REPLY_MODE: "audio_only" })).toThrow(EnvValidationError);
   });
+
+  it("defaults EMAIL_FROM_NAME and marks emailConfigured false when no email provider is set", () => {
+    const env = loadEnv(base);
+    expect(env.EMAIL_FROM_NAME).toBe("DRAIVA by Dravonix Media");
+    expect(env.emailConfigured).toBe(false);
+  });
+
+  it("marks emailConfigured true only when both EMAIL_API_KEY and EMAIL_FROM_ADDRESS are present", () => {
+    expect(loadEnv({ ...base, EMAIL_API_KEY: "re_test" }).emailConfigured).toBe(false);
+    expect(loadEnv({ ...base, EMAIL_FROM_ADDRESS: "invites@dravonix.test" }).emailConfigured).toBe(
+      false,
+    );
+    expect(
+      loadEnv({ ...base, EMAIL_API_KEY: "re_test", EMAIL_FROM_ADDRESS: "invites@dravonix.test" })
+        .emailConfigured,
+    ).toBe(true);
+  });
+
+  it("rejects an invalid EMAIL_FROM_ADDRESS value", () => {
+    expect(() => loadEnv({ ...base, EMAIL_FROM_ADDRESS: "not-an-email" })).toThrow(
+      EnvValidationError,
+    );
+  });
 });

@@ -105,6 +105,9 @@ importers:
       '@dravonix/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@dravonix/email':
+        specifier: workspace:*
+        version: link:../../packages/email
       '@dravonix/handover':
         specifier: workspace:*
         version: link:../../packages/handover
@@ -330,6 +333,16 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.47.10
         version: 2.111.0
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/email:
+    dependencies:
+      '@dravonix/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       typescript:
         specifier: ^5.7.2

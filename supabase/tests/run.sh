@@ -93,6 +93,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_super_admin.s
 echo "Running client onboarding foundation (migration 18) RLS/RPC hardening assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_client_onboarding.sql"
 
+echo "Running invitation email audit (migration 19) RLS/RPC hardening assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_invitation_email_audit.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
