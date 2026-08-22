@@ -96,10 +96,10 @@ begin
     raise exception 'member_already_active';
   end if;
 
-  v_token := encode(public.gen_random_bytes(32), 'hex');
+  v_token := encode(extensions.gen_random_bytes(32), 'hex');
 
   insert into public.company_invitations (company_id, email, role, token_hash, invited_by, expires_at)
-    values (p_company_id, v_normalized_email, p_role, encode(public.digest(v_token, 'sha256'), 'hex'), auth.uid(), now() + interval '7 days')
+    values (p_company_id, v_normalized_email, p_role, encode(extensions.digest(v_token, 'sha256'), 'hex'), auth.uid(), now() + interval '7 days')
     on conflict (company_id, lower(email)) where status = 'pending' do update
       set role = excluded.role,
           token_hash = excluded.token_hash,
@@ -141,10 +141,10 @@ begin
   end if;
   if v_row.status <> 'pending' then raise exception 'invitation_not_pending'; end if;
 
-  v_token := encode(public.gen_random_bytes(32), 'hex');
+  v_token := encode(extensions.gen_random_bytes(32), 'hex');
 
   update public.company_invitations
-    set token_hash = encode(public.digest(v_token, 'sha256'), 'hex'),
+    set token_hash = encode(extensions.digest(v_token, 'sha256'), 'hex'),
         expires_at = now() + interval '7 days'
     where public.company_invitations.id = p_invitation_id
     returning * into v_row;
@@ -209,7 +209,7 @@ begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
 
   select * into v_invitation from public.company_invitations
-    where public.company_invitations.token_hash = encode(public.digest(p_token, 'sha256'), 'hex')
+    where public.company_invitations.token_hash = encode(extensions.digest(p_token, 'sha256'), 'hex')
     for update;
   if not found then raise exception 'invitation_not_found'; end if;
   if v_invitation.status <> 'pending' then raise exception 'invitation_not_pending'; end if;
@@ -268,7 +268,7 @@ as $$
   select c.name, ci.email, ci.role, ci.status, ci.expires_at
   from public.company_invitations ci
   join public.companies c on c.id = ci.company_id
-  where ci.token_hash = encode(public.digest(p_token, 'sha256'), 'hex');
+  where ci.token_hash = encode(extensions.digest(p_token, 'sha256'), 'hex');
 $$;
 
 revoke all on function get_invitation_preview(text) from public;
