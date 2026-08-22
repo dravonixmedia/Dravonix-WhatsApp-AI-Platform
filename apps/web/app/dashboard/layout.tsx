@@ -40,11 +40,14 @@ export const dynamic = "force-dynamic";
  * Live Conversations, Human Handover, Leads, Notifications, DRAIVA, Team
  * Settings, Company Settings, WhatsApp Connection.
  *
- * Knowledge Base is omitted entirely (no client-ready management module
- * exists yet -- see app/dashboard/knowledge/page.tsx). Billing is also
- * omitted: it has no client-ready subscription system yet either (its route
- * now redirects to Settings, which shows an honest "not configured"
- * subscription-status card instead -- see app/dashboard/billing/page.tsx).
+ * AI Settings (canViewAiSettings) and Knowledge Base (canViewKnowledge) are
+ * real, client-ready dashboard destinations added during the client
+ * onboarding foundation pass -- see app/dashboard/ai-settings/page.tsx and
+ * app/dashboard/knowledge/page.tsx. Setup Checklist is unconditional (every
+ * dashboard user can see their own onboarding progress). Billing is still
+ * omitted: it has no client-ready subscription system yet (its route
+ * redirects to Settings, which shows the real plan/subscription state
+ * instead -- see app/dashboard/billing/page.tsx).
  *
  * The former single "Settings" entry is split into two nav cards pointing at
  * two genuinely distinct routes -- Team Settings (/dashboard/team, people
@@ -104,6 +107,28 @@ export function buildNavItems(
     entries.push({ kind: "draiva", href: "/dashboard/draiva" });
   }
 
+  if (capabilities.canViewAiSettings) {
+    entries.push({
+      kind: "link",
+      href: "/dashboard/ai-settings",
+      label: "AI Settings",
+      icon: <SettingsIcon />,
+    });
+  }
+  if (capabilities.canViewKnowledge) {
+    entries.push({
+      kind: "link",
+      href: "/dashboard/knowledge",
+      label: "Knowledge Base",
+      icon: <SettingsIcon />,
+    });
+  }
+  entries.push({
+    kind: "link",
+    href: "/dashboard/onboarding",
+    label: "Setup Checklist",
+    icon: <SettingsIcon />,
+  });
   if (capabilities.canManageTeam) {
     entries.push({
       kind: "link",

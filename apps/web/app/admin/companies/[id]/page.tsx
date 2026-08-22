@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { InviteMemberForm } from "../../../dashboard/team/InviteMemberForm.js";
 import {
   assignPlanAction,
   changeCompanyMemberRoleAction,
@@ -6,12 +7,16 @@ import {
   closeCompanyAction,
   deactivateCompanyMemberAction,
   endSupportAccessAction,
-  inviteCompanyMemberAction,
   reactivateCompanyAction,
   setCompanyEntitlementAction,
   startSupportAccessAction,
   suspendCompanyAction,
 } from "../../../../lib/actions/admin.js";
+import {
+  resendCompanyInvitationAction,
+  revokeCompanyInvitationAction,
+} from "../../../../lib/actions/invitations.js";
+import { computeOnboardingChecklist } from "../../../../lib/onboarding.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 
 export const dynamic = "force-dynamic";
@@ -75,6 +80,7 @@ export default async function AdminCompanyDetailPage({
 
   const [
     membersResult,
+    invitationsResult,
     plansResult,
     subscriptionResult,
     entitlementsResult,
@@ -82,12 +88,20 @@ export default async function AdminCompanyDetailPage({
     whatsappAccountsResult,
     whatsappPhoneNumbersResult,
     supportSessionsResult,
+    companySettingsResult,
+    knowledgeSourcesResult,
   ] = await Promise.all([
     supabase
       .from("company_members")
       .select("id, user_id, role, is_active, created_at")
       .eq("company_id", id)
       .order("created_at", { ascending: true }),
+    supabase
+      .from("company_invitations")
+      .select("id, email, role, status, expires_at, created_at")
+      .eq("company_id", id)
+      .order("created_at", { ascending: false })
+      .limit(20),
     supabase.from("plans").select("key, name").eq("is_active", true).order("name"),
     supabase
       .from("subscriptions")
@@ -121,9 +135,20 @@ export default async function AdminCompanyDetailPage({
       .eq("company_id", id)
       .order("started_at", { ascending: false })
       .limit(10),
+    supabase
+      .from("company_settings")
+      .select("bot_name, welcome_message")
+      .eq("company_id", id)
+      .maybeSingle(),
+    supabase
+      .from("knowledge_sources")
+      .select("id", { count: "exact", head: true })
+      .eq("company_id", id)
+      .eq("is_enabled", true),
   ]);
 
   const members = membersResult.data ?? [];
+  const invitations = invitationsResult.data ?? [];
   const plans = plansResult.data ?? [];
   const subscription = subscriptionResult.data as {
     id: string;
@@ -147,9 +172,26 @@ export default async function AdminCompanyDetailPage({
   const planRow = subscription?.plan_versions;
   const planInfo = Array.isArray(planRow?.plans) ? planRow?.plans[0] : planRow?.plans;
 
+  const companySettings = companySettingsResult.data;
+  const activeOwnerOrAdminCount = members.filter(
+    (m) => m.is_active && (m.role === "company_owner" || m.role === "company_admin"),
+  ).length;
+  const whatsappConnected = whatsappAccounts.some((a) => a.status === "connected");
+  const checklist = computeOnboardingChecklist({
+    hasIndustry: Boolean(company.industry),
+    hasCountry: Boolean(company.country),
+    aiSettingsConfigured: Boolean(
+      (companySettings?.bot_name && companySettings.bot_name !== "Assistant") ||
+      companySettings?.welcome_message,
+    ),
+    enabledKnowledgeSourceCount: knowledgeSourcesResult.count ?? 0,
+    activeOwnerOrAdminCount,
+    hasSubscription: subscription !== null,
+    whatsappConnected,
+  });
+
   const suspendCompanyWithId = suspendCompanyAction.bind(null, id);
   const closeCompanyWithId = closeCompanyAction.bind(null, id);
-  const inviteCompanyMemberWithId = inviteCompanyMemberAction.bind(null, id);
   const changeCompanyMemberRoleWithId = changeCompanyMemberRoleAction.bind(null, id);
   const deactivateCompanyMemberWithId = deactivateCompanyMemberAction.bind(null, id);
   const assignPlanWithId = assignPlanAction.bind(null, id);
@@ -313,6 +355,48 @@ export default async function AdminCompanyDetailPage({
         </div>
       </div>
 
+      {/* Onboarding & Readiness */}
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Onboarding &amp; readiness</span>
+          <span
+            className={`dvx-badge ${checklist.readyToActivate ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+            style={{ fontSize: "0.7rem" }}
+          >
+            {checklist.readyToActivate ? "Ready to activate" : "In progress"}
+          </span>
+        </div>
+        <div className="dvx-team-member-list">
+          {checklist.steps.map((step) => (
+            <div key={step.key} className="dvx-team-member-row">
+              <span className="dvx-team-member-name">
+                {step.label}
+                <span className="dvx-muted" style={{ display: "block", fontSize: "0.78rem" }}>
+                  {step.detail}
+                </span>
+              </span>
+              <span
+                className={`dvx-badge ${step.complete ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                style={{ fontSize: "0.7rem" }}
+              >
+                {step.complete ? "Complete" : "Pending"}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="dvx-muted" style={{ fontSize: "0.75rem", marginTop: "0.75rem" }}>
+          This reflects real database state. Activation stays a separate, explicit action -- the
+          checklist being complete does not change company.status by itself.
+        </p>
+      </div>
+
       {/* Members */}
       <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
         <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
@@ -384,38 +468,87 @@ export default async function AdminCompanyDetailPage({
             ))}
           </div>
         )}
+      </div>
 
-        <form
-          action={inviteCompanyMemberWithId}
-          style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}
+      {/* Invite a new customer */}
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+          Invite a new customer
+        </div>
+        <p
+          className="dvx-muted"
+          style={{ fontSize: "0.8rem", marginTop: 0, marginBottom: "0.75rem" }}
         >
-          <input
-            className="dvx-input"
-            name="email"
-            type="email"
-            placeholder="Existing Auth user's email"
-            required
-          />
-          <select
-            className="dvx-input"
-            name="role"
-            defaultValue="company_owner"
-            style={{ maxWidth: 200 }}
-          >
-            {COMPANY_ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
-          <button className="dvx-button" type="submit">
-            Invite
-          </button>
-        </form>
-        <p className="dvx-muted" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
-          The invited person must already have a DRAIVA Auth account -- this does not send an email
-          yet.
+          The invited person does not need an existing DRAIVA account -- the link below lets them
+          create one and accept in a single step. No email is sent automatically yet; copy the link
+          and deliver it out of band.
         </p>
+        <InviteMemberForm companyId={id} defaultRole="company_owner" />
+      </div>
+
+      {/* Invitations */}
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+          Invitations
+        </div>
+        {invitations.length === 0 ? (
+          <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+            No invitations yet.
+          </p>
+        ) : (
+          <div className="dvx-team-member-list">
+            {invitations.map((invitation) => (
+              <div key={invitation.id} className="dvx-team-member-row">
+                <span className="dvx-team-member-name">
+                  {invitation.email}
+                  <span className="dvx-muted" style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}>
+                    {invitation.role.replace(/_/g, " ")} · invited{" "}
+                    {new Date(invitation.created_at).toLocaleDateString()} · expires{" "}
+                    {new Date(invitation.expires_at).toLocaleDateString()}
+                  </span>
+                </span>
+                <span
+                  className="dvx-team-member-badges"
+                  style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                >
+                  <span
+                    className={`dvx-badge ${invitation.status === "pending" ? "dvx-badge--warning" : invitation.status === "accepted" ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                    style={{ fontSize: "0.7rem" }}
+                  >
+                    {invitation.status}
+                  </span>
+                  {invitation.status === "pending" ? (
+                    <>
+                      <form
+                        action={async () => {
+                          "use server";
+                          await resendCompanyInvitationAction(invitation.id);
+                        }}
+                      >
+                        <button
+                          className="dvx-button dvx-button--secondary"
+                          type="submit"
+                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                        >
+                          Resend
+                        </button>
+                      </form>
+                      <form action={revokeCompanyInvitationAction.bind(null, invitation.id)}>
+                        <button
+                          className="dvx-button dvx-button--secondary"
+                          type="submit"
+                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                        >
+                          Revoke
+                        </button>
+                      </form>
+                    </>
+                  ) : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Entitlements */}

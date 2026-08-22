@@ -96,11 +96,11 @@ describe("Settings page: permission gating", () => {
   });
 });
 
-describe("Settings page: honest subscription placeholder", () => {
-  it("never fabricates a plan name, renewal date, or usage figure", () => {
-    expect(source).toContain('label="Current plan" value="Not configured"');
-    expect(source).toContain('label="Subscription status" value="Not active"');
-    expect(source).not.toMatch(/Starter|Growth|Professional/);
+describe("Settings page: real, read-only subscription display", () => {
+  it("renders the company's real assigned plan name and subscription state, falling back honestly when unset", () => {
+    expect(source).toContain('label="Current plan" value={planInfo?.name ?? "Not assigned"}');
+    expect(source).toContain('label="Subscription status"');
+    expect(source).not.toMatch(/["']Starter["']|["']Growth["']|["']Professional["']/);
   });
 
   it("renders no functional Subscribe/Upgrade/Downgrade/Cancel control", () => {
@@ -125,16 +125,13 @@ describe("Settings page: honest subscription placeholder", () => {
     expect(subscriptionCardMatch?.[0]).not.toContain("<form");
   });
 
-  it("never queries a subscriptions/plans/entitlements table", () => {
-    for (const table of [
-      "subscriptions",
-      "plans",
-      "plan_versions",
-      "company_entitlements",
-      "invoices",
-    ]) {
+  it("queries only the subscriptions table (via its embedded plan_versions/plans relation), and never company_entitlements or invoices -- plan/subscription mutation stays Super Admin-only", () => {
+    expect(source).toContain('.from("subscriptions")');
+    for (const table of ["company_entitlements", "invoices"]) {
       expect(source).not.toContain(`.from("${table}")`);
     }
+    // Read-only: no plan/subscription mutation form on this client-facing page.
+    expect(source).not.toMatch(/assignPlanAction|changeSubscriptionStateAction/);
   });
 });
 

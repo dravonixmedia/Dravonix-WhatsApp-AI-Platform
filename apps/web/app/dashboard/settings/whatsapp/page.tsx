@@ -101,9 +101,17 @@ export default async function WhatsAppConnectionPage() {
         <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
           <EmptyState
             icon={<WhatsAppIcon size={28} />}
-            title="No WhatsApp account connected"
-            description="This company has no whatsapp_accounts record yet."
+            title="WhatsApp connection will be available after Meta App Review approval"
+            description="Meta App Review is currently in progress. Once approved, you'll be able to connect your WhatsApp Business Account here."
           />
+          <button
+            className="dvx-button dvx-button--secondary"
+            type="button"
+            disabled
+            style={{ marginTop: "1rem", opacity: 0.6, cursor: "not-allowed" }}
+          >
+            Connect WhatsApp — Meta App Review in progress
+          </button>
         </div>
       ) : (
         <div className="dvx-card-grid dvx-card-grid--wide" style={{ marginTop: "1.5rem" }}>
