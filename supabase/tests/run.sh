@@ -45,6 +45,9 @@ run_file() {
   }
 }
 
+echo "Applying extensions schema shim (mirrors hosted Supabase's pre-provisioned extensions schema)..."
+run_file "$DB_URL" "$ROOT_DIR/supabase/tests/support/extensions_schema_shim.sql"
+
 echo "Applying extensions..."
 run_file "$DB_URL" "$MIGRATIONS_DIR/00000000000001_extensions.sql"
 
@@ -107,6 +110,9 @@ echo "Creating legacy-upgrade scratch database ${LEGACY_DB_NAME}..."
 psql_admin -c "create database ${LEGACY_DB_NAME};"
 
 LEGACY_DB_URL="${ADMIN_URL%/*}/${LEGACY_DB_NAME}"
+
+echo "[legacy-upgrade] Applying extensions schema shim..."
+run_file "$LEGACY_DB_URL" "$ROOT_DIR/supabase/tests/support/extensions_schema_shim.sql"
 
 echo "[legacy-upgrade] Applying extensions..."
 run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000001_extensions.sql"
@@ -177,6 +183,8 @@ echo "Creating media-duplicate-safe scratch database ${MEDIA_DUP_SAFE_DB_NAME}..
 psql_admin -c "create database ${MEDIA_DUP_SAFE_DB_NAME};"
 MEDIA_DUP_SAFE_DB_URL="${ADMIN_URL%/*}/${MEDIA_DUP_SAFE_DB_NAME}"
 
+echo "[media-dup-safe] Applying extensions schema shim..."
+run_file "$MEDIA_DUP_SAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/extensions_schema_shim.sql"
 echo "[media-dup-safe] Applying extensions..."
 run_file "$MEDIA_DUP_SAFE_DB_URL" "$MIGRATIONS_DIR/00000000000001_extensions.sql"
 echo "[media-dup-safe] Applying local auth shim..."
@@ -212,6 +220,8 @@ echo "Creating media-duplicate-unsafe scratch database ${MEDIA_DUP_UNSAFE_DB_NAM
 psql_admin -c "create database ${MEDIA_DUP_UNSAFE_DB_NAME};"
 MEDIA_DUP_UNSAFE_DB_URL="${ADMIN_URL%/*}/${MEDIA_DUP_UNSAFE_DB_NAME}"
 
+echo "[media-dup-unsafe] Applying extensions schema shim..."
+run_file "$MEDIA_DUP_UNSAFE_DB_URL" "$ROOT_DIR/supabase/tests/support/extensions_schema_shim.sql"
 echo "[media-dup-unsafe] Applying extensions..."
 run_file "$MEDIA_DUP_UNSAFE_DB_URL" "$MIGRATIONS_DIR/00000000000001_extensions.sql"
 echo "[media-dup-unsafe] Applying local auth shim..."
