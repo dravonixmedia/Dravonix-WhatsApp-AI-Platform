@@ -115,11 +115,25 @@ const rawEnvSchema = z.object({
 
   // Transactional email (client/team invitation delivery -- apps/web's
   // create_company_invitation/admin_resend_company_invitation Server Action
-  // wiring). Resend's HTTP API is the only supported real provider (no SMTP
-  // support exists anywhere in this codebase's Worker/edge runtimes). Both
-  // EMAIL_API_KEY and EMAIL_FROM_ADDRESS must be present for emailConfigured
-  // to be true; with either missing, invitation delivery falls back to the
-  // existing manual-copy-link flow rather than silently failing.
+  // wiring). Zoho ZeptoMail's HTTPS Send Mail API is the only supported real
+  // provider (no SMTP support exists anywhere in this codebase's Worker/edge
+  // runtimes). ZEPTOMAIL_API_TOKEN is the current secret name.
+  //
+  // EMAIL_API_KEY is kept, read-only, as a TRANSITIONAL fallback: the
+  // already-deployed staging Cloudflare Worker secret was provisioned under
+  // this older name before it was renamed. It is resolved into
+  // `emailApiToken` below (ZEPTOMAIL_API_TOKEN takes precedence) and that
+  // resolved value is wired to exactly one place -- ZeptoMailEmailProvider
+  // (packages/email). This codebase has no Resend (or any other email
+  // provider) client left, so there is no other endpoint this value could
+  // ever reach. Remove EMAIL_API_KEY entirely once the staging secret has
+  // been re-provisioned under ZEPTOMAIL_API_TOKEN.
+  //
+  // Both a resolved token (either name) and EMAIL_FROM_ADDRESS must be
+  // present for emailConfigured to be true; with either missing, invitation
+  // delivery falls back to the existing manual-copy-link flow rather than
+  // silently failing.
+  ZEPTOMAIL_API_TOKEN: z.string().optional(),
   EMAIL_API_KEY: z.string().optional(),
   EMAIL_FROM_ADDRESS: z.string().email().optional(),
   EMAIL_FROM_NAME: z.string().default("DRAIVA by Dravonix Media"),
@@ -137,6 +151,8 @@ export interface PlatformEnv extends RawEnv {
   elevenLabsConfigured: boolean;
   razorpayConfigured: boolean;
   r2Configured: boolean;
+  /** Resolved email-provider token: ZEPTOMAIL_API_TOKEN, falling back to the transitional EMAIL_API_KEY name. */
+  emailApiToken: string | undefined;
   emailConfigured: boolean;
 }
 
@@ -203,6 +219,9 @@ export function loadEnv(source: Record<string, string | undefined>): PlatformEnv
     elevenLabsConfigured: Boolean(raw.ELEVENLABS_API_KEY),
     razorpayConfigured: Boolean(raw.RAZORPAY_KEY_ID && raw.RAZORPAY_KEY_SECRET),
     r2Configured: Boolean(raw.R2_ACCOUNT_ID && raw.R2_ACCESS_KEY_ID && raw.R2_SECRET_ACCESS_KEY),
-    emailConfigured: Boolean(raw.EMAIL_API_KEY && raw.EMAIL_FROM_ADDRESS),
+    emailApiToken: raw.ZEPTOMAIL_API_TOKEN ?? raw.EMAIL_API_KEY,
+    emailConfigured: Boolean(
+      (raw.ZEPTOMAIL_API_TOKEN ?? raw.EMAIL_API_KEY) && raw.EMAIL_FROM_ADDRESS,
+    ),
   };
 }

@@ -4,7 +4,7 @@ import { loadEnv, platformBrand } from "@dravonix/config";
 import {
   MockEmailProvider,
   renderInvitationEmail,
-  ResendEmailProvider,
+  ZeptoMailEmailProvider,
   type EmailProvider,
 } from "@dravonix/email";
 
@@ -35,8 +35,8 @@ function getEmailProvider(): { provider: EmailProvider; configured: boolean } {
   const env = loadEnv(process.env);
   if (env.emailConfigured) {
     return {
-      provider: new ResendEmailProvider({
-        apiKey: env.EMAIL_API_KEY!,
+      provider: new ZeptoMailEmailProvider({
+        apiToken: env.emailApiToken!,
         fromAddress: env.EMAIL_FROM_ADDRESS!,
         fromName: env.EMAIL_FROM_NAME,
       }),

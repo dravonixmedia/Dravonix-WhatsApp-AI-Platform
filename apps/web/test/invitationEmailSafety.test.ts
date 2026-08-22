@@ -135,24 +135,47 @@ describe("The email provider secret never reaches browser code", () => {
     expect(source).not.toContain('"use client"');
   });
 
-  it("EMAIL_API_KEY never appears in any client component, and never in a NEXT_PUBLIC_ variable", () => {
+  it("no ZeptoMail/email secret name ever appears in any client component, and never in a NEXT_PUBLIC_ variable", () => {
     const emailAction = readSource("lib/actions/invitations.ts");
     const emailService = readSource("lib/email/sendInvitationEmail.ts");
     const inviteForm = readSource("app/dashboard/team/InviteMemberForm.tsx");
     for (const source of [emailAction, inviteForm]) {
+      expect(source).not.toContain("ZEPTOMAIL_API_TOKEN");
       expect(source).not.toContain("EMAIL_API_KEY");
+      expect(source).not.toContain("emailApiToken");
     }
-    expect(emailService).toContain("env.EMAIL_API_KEY");
+    expect(emailService).toContain("env.emailApiToken");
     expect(emailService).not.toMatch(/NEXT_PUBLIC_.*EMAIL/);
   });
 
-  it("the wrangler.jsonc config never sets EMAIL_API_KEY/EMAIL_FROM_ADDRESS as a plaintext var (they must be secrets)", () => {
+  it("the wrangler.jsonc config never sets ZEPTOMAIL_API_TOKEN/EMAIL_API_KEY/EMAIL_FROM_ADDRESS as a plaintext var (they must be secrets)", () => {
     const wranglerSource = readSource("wrangler.jsonc");
     const varsBlocks = wranglerSource.match(/"vars":\s*\{[^}]*\}/g) ?? [];
     for (const block of varsBlocks) {
+      expect(block).not.toContain("ZEPTOMAIL_API_TOKEN");
       expect(block).not.toContain("EMAIL_API_KEY");
       expect(block).not.toContain("EMAIL_FROM_ADDRESS");
     }
+  });
+
+  it("packages/config never hardcodes a real ZeptoMail token -- only the secret names/fallback logic", () => {
+    const envSource = readFileSync(join(webRoot, "..", "..", "packages/config/src/env.ts"), "utf8");
+    expect(envSource).toContain("ZEPTOMAIL_API_TOKEN: z.string().optional()");
+    expect(envSource).not.toMatch(/Zoho-enczapikey [A-Za-z0-9._-]{10,}/);
+  });
+
+  it("the real ZeptoMail provider never uses the Resend endpoint, and no Resend client remains in the codebase", () => {
+    const providerSource = readFileSync(
+      join(webRoot, "..", "..", "packages/email/src/providers/zeptoMailProvider.ts"),
+      "utf8",
+    );
+    expect(providerSource).toContain("api.zeptomail.com");
+    expect(providerSource).not.toContain("resend.com");
+    const indexSource = readFileSync(
+      join(webRoot, "..", "..", "packages/email/src/index.ts"),
+      "utf8",
+    );
+    expect(indexSource).not.toContain("Resend");
   });
 });
 
