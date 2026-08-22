@@ -184,3 +184,37 @@ describe("New client onboarding RPCs are hardened the same way as every other RP
     }
   });
 });
+
+describe("Super Admin can invite a customer who has no existing DRAIVA Auth account", () => {
+  it("the company detail page no longer requires an existing Auth account to invite someone", () => {
+    const source = readSource("app/admin/companies/[id]/page.tsx");
+    expect(source).not.toContain("Existing Auth user's email");
+    expect(source).not.toContain("The invited person must already have a DRAIVA Auth account");
+    expect(source).not.toContain("inviteCompanyMemberAction");
+  });
+
+  it("reuses the same InviteMemberForm/create_company_invitation flow as the client dashboard's Team Settings page, rather than a second invitation system", () => {
+    const source = readSource("app/admin/companies/[id]/page.tsx");
+    expect(source).toContain(
+      'import { InviteMemberForm } from "../../../dashboard/team/InviteMemberForm.js"',
+    );
+    expect(source).toContain("<InviteMemberForm");
+    expect(source).toContain('defaultRole="company_owner"');
+  });
+
+  it("lists invitations with status, created date, expiry, and resend/revoke for pending ones", () => {
+    const source = readSource("app/admin/companies/[id]/page.tsx");
+    expect(source).toContain('.from("company_invitations")');
+    expect(source).toContain("invitation.status");
+    expect(source).toContain("invitation.created_at");
+    expect(source).toContain("invitation.expires_at");
+    expect(source).toContain("resendCompanyInvitationAction");
+    expect(source).toContain("revokeCompanyInvitationAction");
+  });
+
+  it("existing member management (role change, deactivate) is untouched -- only the invite mechanism changed", () => {
+    const source = readSource("app/admin/companies/[id]/page.tsx");
+    expect(source).toContain("changeCompanyMemberRoleAction");
+    expect(source).toContain("deactivateCompanyMemberAction");
+  });
+});

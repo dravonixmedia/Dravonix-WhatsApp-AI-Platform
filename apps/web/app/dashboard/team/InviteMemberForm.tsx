@@ -19,7 +19,13 @@ const ROLES = [
  * email, phone). See the final report's "remaining email-delivery
  * dependency."
  */
-export function InviteMemberForm({ companyId }: { companyId: string }) {
+export function InviteMemberForm({
+  companyId,
+  defaultRole = "agent",
+}: {
+  companyId: string;
+  defaultRole?: string;
+}) {
   const [isPending, startTransition] = useTransition();
   const [result, setResult] = useState<{ acceptUrl: string; email: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +54,12 @@ export function InviteMemberForm({ companyId }: { companyId: string }) {
           placeholder="Email to invite"
           required
         />
-        <select className="dvx-input" name="role" defaultValue="agent" style={{ maxWidth: 180 }}>
+        <select
+          className="dvx-input"
+          name="role"
+          defaultValue={defaultRole}
+          style={{ maxWidth: 180 }}
+        >
           {ROLES.map((role) => (
             <option key={role} value={role}>
               {role.replace(/_/g, " ")}
