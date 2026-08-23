@@ -1,37 +1,7 @@
-import { loadEnv } from "@dravonix/config";
+import { getEmailDeliveryDiagnostics } from "../../lib/emailDeliveryDiagnostics.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 
 export const dynamic = "force-dynamic";
-
-interface EmailDeliveryDiagnostics {
-  zeptoMailTokenPresent: boolean;
-  emailFromAddressPresent: boolean;
-  emailFromNamePresent: boolean;
-  appUrlPresent: boolean;
-  emailConfigured: boolean;
-}
-
-/**
- * Presence-only diagnostic for the invitation-email provider config
- * (packages/config/src/env.ts). Reports whether each required value is
- * bound to *this* running Worker -- never the value itself -- so a
- * Cloudflare secret/var added after the last deploy (or added to the wrong
- * environment/script) can be confirmed or ruled out without any Cloudflare
- * account access. Diagnosed need: a real staging invitation attempt failed
- * with error_code "not_configured" (audit_logs), meaning emailConfigured
- * was false, but nothing in this codebase could previously answer *which*
- * of the four values was missing without reading a secret.
- */
-function getEmailDeliveryDiagnostics(): EmailDeliveryDiagnostics {
-  const env = loadEnv(process.env);
-  return {
-    zeptoMailTokenPresent: Boolean(env.emailApiToken),
-    emailFromAddressPresent: Boolean(env.EMAIL_FROM_ADDRESS),
-    emailFromNamePresent: Boolean(env.EMAIL_FROM_NAME),
-    appUrlPresent: Boolean(env.APP_URL),
-    emailConfigured: env.emailConfigured,
-  };
-}
 
 interface PlatformCounts {
   totalCompanies: number;
@@ -97,7 +67,7 @@ function PresenceRow({ label, present }: { label: string; present: boolean }) {
 
 export default async function AdminDashboardPage() {
   const counts = await loadPlatformCounts();
-  const emailDiagnostics = getEmailDeliveryDiagnostics();
+  const emailDiagnostics = getEmailDeliveryDiagnostics(process.env);
 
   return (
     <div>
