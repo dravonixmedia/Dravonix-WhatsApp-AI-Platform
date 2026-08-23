@@ -356,6 +356,63 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- 12. admin_resend_company_invitation rotates the token/expiry each call and
+-- is rejected once the invitation is no longer pending -- the only
+-- server-side guard behind the Super Admin / Team Settings "Resend" button
+-- (diagnosed: the button itself previously discarded this RPC's result and
+-- showed no feedback either way, fixed in apps/web/components/InvitationActions.tsx;
+-- this proves the RPC it calls is itself correct).
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  v_invitation_id uuid;
+  v_first_token text;
+  v_first_hash text;
+  v_second_token text;
+  v_second_hash text;
+  v_expires_before timestamptz;
+  v_expires_after timestamptz;
+begin
+  select id, raw_token into v_invitation_id, v_first_token
+    from create_company_invitation('90000001-0000-0000-0000-000000000001', 'resend-target@example.test', 'viewer');
+
+  select token_hash, expires_at into v_first_hash, v_expires_before
+    from company_invitations where id = v_invitation_id;
+
+  select expires_at, raw_token into v_expires_after, v_second_token
+    from admin_resend_company_invitation(v_invitation_id);
+
+  select token_hash into v_second_hash from company_invitations where id = v_invitation_id;
+
+  perform test_assert(
+    'admin_resend_company_invitation issues a new raw token, different from the original',
+    v_second_token is not null and v_second_token <> v_first_token
+  );
+  perform test_assert(
+    'the stored token_hash changes on resend -- the previous token is invalidated, not merely re-issued',
+    v_second_hash <> v_first_hash
+  );
+  -- now() is frozen for the lifetime of this transaction, so both calls'
+  -- `now() + interval '7 days'` land on the identical instant here --
+  -- >= (not >) is the correct, transaction-safe invariant to check.
+  perform test_assert('resend does not move expires_at backward', v_expires_after >= v_expires_before);
+  perform test_assert(
+    'invitation_resent audit row was written',
+    exists (select 1 from audit_logs where action = 'invitation_resent' and target_id = v_invitation_id::text)
+  );
+
+  perform admin_revoke_company_invitation(v_invitation_id);
+end;
+$$;
+
+select test_assert_raises(
+  'resending a revoked (non-pending) invitation is rejected -- Resend has no effect once an invitation is no longer pending',
+  $sql$ select admin_resend_company_invitation((select id from company_invitations where email = 'resend-target@example.test')) $sql$,
+  'invitation_not_pending'
+);
+
 reset role;
 
 rollback;

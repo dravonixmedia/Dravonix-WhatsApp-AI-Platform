@@ -67,7 +67,9 @@ describe("Team Settings page", () => {
   it("invite/role-change/deactivate actions are wired to the real client onboarding foundation RPCs, not invented client-only handlers", () => {
     expect(source).toContain("InviteMemberForm");
     expect(inviteFormSource).toContain("createCompanyInvitationAction");
-    expect(source).toContain("revokeCompanyInvitationAction");
+    // Resend/Revoke live in the shared InvitationActions component (see
+    // invitationResendFeedback.test.ts), not as bare action calls here.
+    expect(source).toMatch(/<InvitationActions\s+invitationId=\{invitation\.id\}\s*\/>/);
     expect(source).toContain("companyChangeMemberRoleAction");
     expect(source).toContain("companyDeactivateMemberAction");
   });
