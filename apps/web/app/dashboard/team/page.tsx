@@ -2,7 +2,10 @@ import {
   companyChangeMemberRoleAction,
   companyDeactivateMemberAction,
 } from "../../../lib/actions/invitations.js";
+import { updateMemberDisplayNameAction } from "../../../lib/actions/memberIdentity.js";
+import { EditDisplayNameControl } from "../../../components/EditDisplayNameControl.js";
 import { InvitationActions } from "../../../components/InvitationActions.js";
+import { resolveMemberIdentity } from "../../../lib/memberIdentity.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
@@ -21,18 +24,6 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const COMPANY_ROLES = Object.keys(ROLE_LABELS);
-
-/**
- * Masks a company_members.user_id down to its last 4 characters -- the only
- * per-member identifier this dashboard can safely show for a teammate other
- * than the signed-in caller. There is no public-schema profiles/email table
- * mirroring auth.users in this codebase, so a real name or email for anyone
- * but the caller genuinely isn't resolvable without a new, unapproved data
- * path -- this shows real derived data instead of fabricating a name.
- */
-function maskMemberId(userId: string): string {
-  return `Member ••${userId.slice(-4)}`;
-}
 
 /**
  * Team Settings -- people and access. Invite (migration 18's
@@ -72,6 +63,21 @@ export default async function TeamSettingsPage() {
       .eq("status", "pending")
       .order("created_at", { ascending: false }),
   ]);
+
+  const { data: memberIdentityRows } = await supabase.rpc("list_company_member_identities", {
+    p_company_id: session.activeCompanyId,
+  });
+  type MemberIdentityRow = {
+    member_id: string;
+    email: string | null;
+    display_name: string | null;
+  };
+  const memberIdentityById = new Map(
+    ((memberIdentityRows ?? []) as MemberIdentityRow[]).map((row) => [
+      row.member_id,
+      { email: row.email, displayName: row.display_name },
+    ]),
+  );
 
   const members = membersResult.data ?? [];
   const invitations = invitationsResult.data ?? [];
@@ -121,72 +127,95 @@ export default async function TeamSettingsPage() {
           </p>
         ) : (
           <div className="dvx-team-member-list">
-            {members.map((member) => (
-              <div key={member.id} className="dvx-team-member-row">
-                <span className="dvx-team-member-name">
-                  {member.id === session.activeMemberId
-                    ? (session.email ?? "You")
-                    : maskMemberId(member.user_id)}
-                  {member.id === session.activeMemberId ? (
-                    <span className="dvx-muted"> (You)</span>
-                  ) : null}
-                </span>
-                <span
-                  className="dvx-team-member-badges"
-                  style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
-                >
-                  <span
-                    className={`dvx-badge ${member.is_active ? "dvx-badge--success" : "dvx-badge--neutral"}`}
-                    style={{ fontSize: "0.7rem" }}
-                  >
-                    {member.is_active ? "Active" : "Disabled"}
-                  </span>
-                  {member.is_active && member.id !== session.activeMemberId ? (
-                    <>
-                      <form
-                        action={companyChangeMemberRoleAction}
-                        style={{ display: "flex", gap: "0.3rem" }}
-                      >
-                        <input type="hidden" name="member_id" value={member.id} />
-                        <select
-                          className="dvx-input"
-                          name="new_role"
-                          defaultValue={member.role}
-                          style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem" }}
-                        >
-                          {COMPANY_ROLES.map((role) => (
-                            <option key={role} value={role}>
-                              {ROLE_LABELS[role]}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className="dvx-button dvx-button--secondary"
-                          type="submit"
-                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                        >
-                          Change role
-                        </button>
-                      </form>
-                      <form action={companyDeactivateMemberAction}>
-                        <input type="hidden" name="member_id" value={member.id} />
-                        <button
-                          className="dvx-button dvx-button--secondary"
-                          type="submit"
-                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                        >
-                          Deactivate
-                        </button>
-                      </form>
-                    </>
-                  ) : (
-                    <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
-                      {ROLE_LABELS[member.role] ?? member.role}
+            {members.map((member) => {
+              const isSelf = member.id === session.activeMemberId;
+              const memberIdentity = memberIdentityById.get(member.id);
+              const identity = resolveMemberIdentity({
+                name: memberIdentity?.displayName ?? null,
+                email: (isSelf ? session.email : memberIdentity?.email) ?? null,
+                userId: member.user_id,
+              });
+              const updateDisplayNameWithMember = updateMemberDisplayNameAction.bind(
+                null,
+                member.user_id,
+              );
+              return (
+                <div key={member.id} className="dvx-team-member-row">
+                  <span className="dvx-team-member-name">
+                    <span style={{ display: "block" }}>
+                      {identity.primary}
+                      {isSelf ? <span className="dvx-muted"> (You)</span> : null}
                     </span>
-                  )}
-                </span>
-              </div>
-            ))}
+                    {identity.secondary ? (
+                      <span
+                        className="dvx-muted"
+                        style={{ display: "block", fontSize: "0.78rem", fontWeight: 400 }}
+                      >
+                        {identity.secondary}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span
+                    className="dvx-team-member-badges"
+                    style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                  >
+                    <span
+                      className={`dvx-badge ${member.is_active ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                      style={{ fontSize: "0.7rem" }}
+                    >
+                      {member.is_active ? "Active" : "Disabled"}
+                    </span>
+                    <EditDisplayNameControl
+                      currentDisplayName={memberIdentity?.displayName ?? null}
+                      onSave={updateDisplayNameWithMember}
+                    />
+                    {member.is_active && member.id !== session.activeMemberId ? (
+                      <>
+                        <form
+                          action={companyChangeMemberRoleAction}
+                          style={{ display: "flex", gap: "0.3rem" }}
+                        >
+                          <input type="hidden" name="member_id" value={member.id} />
+                          <select
+                            className="dvx-input"
+                            name="new_role"
+                            defaultValue={member.role}
+                            style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem" }}
+                          >
+                            {COMPANY_ROLES.map((role) => (
+                              <option key={role} value={role}>
+                                {ROLE_LABELS[role]}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="dvx-button dvx-button--secondary"
+                            type="submit"
+                            style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                          >
+                            Change role
+                          </button>
+                        </form>
+                        <form action={companyDeactivateMemberAction}>
+                          <input type="hidden" name="member_id" value={member.id} />
+                          <button
+                            className="dvx-button dvx-button--secondary"
+                            type="submit"
+                            style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                          >
+                            Deactivate
+                          </button>
+                        </form>
+                      </>
+                    ) : (
+                      <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
+                        {ROLE_LABELS[member.role] ?? member.role}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
         <div

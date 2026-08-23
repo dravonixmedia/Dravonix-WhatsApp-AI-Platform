@@ -16,6 +16,15 @@ export interface DashboardMembership {
 export interface DashboardSession {
   userId: string;
   email: string | null;
+  /**
+   * The caller's own editable display name (migration 21's
+   * user_profiles.display_name), read directly via user_profiles'
+   * user_id = auth.uid() RLS policy -- null until the user or an
+   * authorized admin sets one, in which case email remains the identity
+   * shown everywhere via resolveMemberIdentity's name -> email -> masked-id
+   * priority.
+   */
+  displayName: string | null;
   memberships: DashboardMembership[];
   activeCompanyId: string;
   activeMemberId: string;
@@ -85,6 +94,13 @@ export const getDashboardSession = cache(async (): Promise<DashboardSession | nu
     .eq("is_active", true);
   if (error) throw error;
 
+  const { data: profileRow } = await supabase
+    .from("user_profiles")
+    .select("display_name")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const displayName = (profileRow?.display_name as string | null | undefined) ?? null;
+
   const memberships: DashboardMembership[] = (memberRows ?? []).map((row) => {
     const company = Array.isArray(row.companies) ? row.companies[0] : row.companies;
     return {
@@ -122,6 +138,7 @@ export const getDashboardSession = cache(async (): Promise<DashboardSession | nu
   return {
     userId: user.id,
     email: user.email ?? null,
+    displayName,
     memberships,
     activeCompanyId: active.companyId,
     activeMemberId: active.memberId,

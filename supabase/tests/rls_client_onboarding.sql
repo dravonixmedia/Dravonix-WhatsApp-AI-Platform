@@ -77,7 +77,8 @@ declare
   fns text[] := array[
     'create_company_invitation', 'admin_resend_company_invitation', 'admin_revoke_company_invitation',
     'accept_company_invitation', 'company_change_member_role', 'company_deactivate_member',
-    'update_company_profile'
+    'update_company_profile', 'list_company_member_identities', 'update_user_display_name',
+    'admin_update_user_display_name'
   ];
 begin
   foreach fn in array fns loop
@@ -411,6 +412,198 @@ select test_assert_raises(
   'resending a revoked (non-pending) invitation is rejected -- Resend has no effect once an invitation is no longer pending',
   $sql$ select admin_resend_company_invitation((select id from company_invitations where email = 'resend-target@example.test')) $sql$,
   'invitation_not_pending'
+);
+
+-- ---------------------------------------------------------------------------
+-- 13. list_company_member_identities (human-friendly Users & Roles / Team
+-- page display) mirrors the exact visibility boundary of the existing
+-- company_members_select_same_company RLS policy -- same-company member or
+-- platform staff, never a cross-tenant read.
+-- ---------------------------------------------------------------------------
+
+select test_set_current_user('80000001-0000-0000-0000-000000000002'); -- owner-a, Company A
+
+do $$
+declare
+  v_count int;
+begin
+  select count(*) into v_count
+    from list_company_member_identities('90000001-0000-0000-0000-000000000001')
+    where email = 'owner-a@example.test';
+
+  perform test_assert(
+    'Company A owner resolves their own email for Company A''s member list',
+    v_count = 1
+  );
+end;
+$$;
+
+select test_set_current_user('80000001-0000-0000-0000-000000000004'); -- owner-b, Company B
+
+do $$
+declare
+  v_count int;
+begin
+  select count(*) into v_count from list_company_member_identities('90000001-0000-0000-0000-000000000001');
+
+  perform test_assert(
+    'Company B owner gets zero rows querying Company A''s member identities (cross-tenant read denied)',
+    v_count = 0
+  );
+end;
+$$;
+
+select test_set_current_user('80000001-0000-0000-0000-000000000001'); -- super_admin, no membership anywhere
+
+do $$
+declare
+  v_count int;
+begin
+  select count(*) into v_count
+    from list_company_member_identities('90000001-0000-0000-0000-000000000001')
+    where email = 'owner-a@example.test';
+
+  perform test_assert(
+    'Platform staff can resolve member identities for a company they are not a member of',
+    v_count = 1
+  );
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 14. Editable display names (update_user_display_name /
+-- admin_update_user_display_name). Fixtures reused: owner-a (company_owner,
+-- Company A), viewer-a (viewer, Company A -- no team.manage), new-teammate
+-- (company_admin, Company A, accepted earlier in this file), owner-b
+-- (company_owner, Company B), super_admin, and unrelated (no membership
+-- anywhere).
+-- ---------------------------------------------------------------------------
+
+select test_set_current_user('80000001-0000-0000-0000-000000000002'); -- owner-a, Company A
+
+do $$
+declare
+  v_member_id uuid;
+  v_display_name_before text;
+  v_name text;
+begin
+  -- user_profiles has no cross-user SELECT policy (see the migration's own
+  -- comment: every cross-user read goes through list_company_member_identities
+  -- so the company-membership/platform-staff boundary is enforced in one
+  -- place) -- so "no profile row yet" is observed the same way the app
+  -- observes it, through that RPC, not a direct table query.
+  v_member_id := (select id from company_members where user_id = '80000001-0000-0000-0000-000000000003');
+  select display_name into v_display_name_before
+    from list_company_member_identities('90000001-0000-0000-0000-000000000001')
+    where member_id = v_member_id;
+  perform test_assert('no display name is set for viewer-a before the first edit (lazy creation, not backfilled)', v_display_name_before is null);
+
+  select display_name into v_name from update_user_display_name('80000001-0000-0000-0000-000000000003', 'Viewer A Name');
+  perform test_assert('company owner can set a member display name in their own company', v_name = 'Viewer A Name');
+
+  perform test_assert(
+    'the shared identity lookup RPC now resolves the newly-created display name (lazy creation confirmed via the authorized read path)',
+    (select display_name from list_company_member_identities('90000001-0000-0000-0000-000000000001') where member_id = v_member_id) = 'Viewer A Name'
+  );
+  perform test_assert(
+    'the edit did not change viewer-a''s auth.users.email',
+    (select email from auth.users where id = '80000001-0000-0000-0000-000000000003') = 'viewer-a@example.test'
+  );
+  perform test_assert(
+    'the edit did not change viewer-a''s company role or membership',
+    exists (select 1 from company_members where user_id = '80000001-0000-0000-0000-000000000003' and company_id = '90000001-0000-0000-0000-000000000001' and role = 'viewer' and is_active = true)
+  );
+  perform test_assert(
+    'user_display_name_changed audit row was written for the admin edit, actor-attributed and not a self-edit',
+    exists (
+      select 1 from audit_logs
+      where action = 'user_display_name_changed' and target_id = '80000001-0000-0000-0000-000000000003'
+        and actor_user_id = '80000001-0000-0000-0000-000000000002'
+        and (metadata->>'self_edit')::boolean = false
+    )
+  );
+end;
+$$;
+
+select test_set_current_user('80000001-0000-0000-0000-000000000006'); -- new-teammate, company_admin, Company A
+
+do $$
+declare
+  v_name text;
+begin
+  select display_name into v_name from update_user_display_name('80000001-0000-0000-0000-000000000003', '  Renée O''Malley-García  ');
+  perform test_assert('company admin can also set a member display name in their own company', v_name = 'Renée O''Malley-García');
+  perform test_assert('the stored name is trimmed and accepts non-English/Unicode characters unchanged', v_name = 'Renée O''Malley-García');
+end;
+$$;
+
+select test_set_current_user('80000001-0000-0000-0000-000000000003'); -- viewer-a, no team.manage
+
+select test_assert_raises(
+  'a viewer (no team.manage) cannot rename another member',
+  $sql$ select update_user_display_name('80000001-0000-0000-0000-000000000002', 'Hijacked Name') $sql$,
+  'permission_denied'
+);
+
+do $$
+declare
+  v_name text;
+begin
+  select display_name into v_name from update_user_display_name('80000001-0000-0000-0000-000000000003', 'My Own Name');
+  perform test_assert('a user without team.manage can still edit their own display name (self-edit bypass)', v_name = 'My Own Name');
+end;
+$$;
+
+select test_assert_raises(
+  'an empty display name is rejected',
+  $sql$ select update_user_display_name('80000001-0000-0000-0000-000000000003', '   ') $sql$,
+  'invalid_display_name'
+);
+
+select test_assert_raises(
+  'an overlong display name (>150 chars) is rejected',
+  $sql$ select update_user_display_name('80000001-0000-0000-0000-000000000003', repeat('x', 151)) $sql$,
+  'display_name_too_long'
+);
+
+select test_set_current_user('80000001-0000-0000-0000-000000000004'); -- owner-b, Company B
+
+select test_assert_raises(
+  'cross-tenant name edit is rejected -- Company B''s owner cannot rename a Company A member',
+  $sql$ select update_user_display_name('80000001-0000-0000-0000-000000000003', 'Cross Tenant Rename') $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises(
+  'a company owner (not platform staff) cannot call the Super Admin-only admin_update_user_display_name RPC',
+  $sql$ select admin_update_user_display_name('80000001-0000-0000-0000-000000000003', 'Should Not Work') $sql$,
+  'permission_denied'
+);
+
+select test_set_current_user('80000001-0000-0000-0000-000000000001'); -- super_admin
+
+do $$
+declare
+  v_name text;
+begin
+  select display_name into v_name from admin_update_user_display_name('80000001-0000-0000-0000-000000000003', 'Renamed By Admin');
+  perform test_assert('Super Admin can rename any DRAIVA member via the dedicated admin RPC', v_name = 'Renamed By Admin');
+  perform test_assert(
+    'the Super Admin edit is audited as a platform_staff actor, not a self-edit',
+    exists (
+      select 1 from audit_logs
+      where action = 'user_display_name_changed' and target_id = '80000001-0000-0000-0000-000000000003'
+        and actor_type = 'platform_staff' and actor_user_id = '80000001-0000-0000-0000-000000000001'
+        and (metadata->>'self_edit')::boolean = false
+    )
+  );
+end;
+$$;
+
+select test_assert_raises(
+  'renaming a nonexistent user is rejected',
+  $sql$ select admin_update_user_display_name('00000000-0000-0000-0000-000000000999', 'Nobody') $sql$,
+  'target_user_not_found'
 );
 
 reset role;
