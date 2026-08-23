@@ -82,6 +82,7 @@ async function deliverInvitationEmail(params: {
     p_masked_recipient: masked,
     p_provider_message_id: result.success ? (result.providerMessageId ?? null) : null,
     p_error_code: result.success ? null : (result.errorCode ?? null),
+    p_error_message: result.success ? null : (result.errorMessage ?? null),
   });
 
   // acceptUrl is only ever surfaced back to the caller when email delivery

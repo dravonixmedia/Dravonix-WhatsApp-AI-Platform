@@ -22,6 +22,8 @@ export interface SendInvitationEmailResult {
   success: boolean;
   providerMessageId?: string;
   errorCode?: string;
+  /** The provider's own sanitized error message (e.g. "Bad Syntax") -- safe to persist alongside errorCode; never the raw request/response body or any credential. */
+  errorMessage?: string;
 }
 
 /** `x***@domain.com` -- safe to write to audit_logs; never the full address or the raw invitation token. */
@@ -83,7 +85,12 @@ export async function sendInvitationEmail(
     if (result.success) {
       return { attempted: true, success: true, providerMessageId: result.providerMessageId };
     }
-    return { attempted: true, success: false, errorCode: result.errorCode };
+    return {
+      attempted: true,
+      success: false,
+      errorCode: result.errorCode,
+      errorMessage: result.errorMessage,
+    };
   } catch {
     return { attempted: true, success: false, errorCode: "unexpected_error" };
   }

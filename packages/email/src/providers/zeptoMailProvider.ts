@@ -14,6 +14,7 @@ interface ZeptoMailSuccessBody {
 }
 
 interface ZeptoMailErrorBody {
+  data?: Array<{ code?: string; message?: string }>;
   error?: {
     code?: string;
     message?: string;
@@ -71,11 +72,20 @@ export class ZeptoMailEmailProvider implements EmailProvider {
 
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as ZeptoMailErrorBody;
+      // ZeptoMail's documented error shape is `{ error: { code, message, details } }`.
+      // A real staging failure returned only the generic `http_<status>`
+      // fallback below (audit_logs error_code = "http_500"), meaning the
+      // actual response body did not match that shape -- it is not yet known
+      // whether ZeptoMail sometimes reports the same `data: [{ code, message }]`
+      // shape used on success for some non-2xx rejection categories too, so
+      // this is checked defensively as a fallback rather than assumed.
       return {
         success: false,
-        errorCode: body.error?.code ?? `http_${response.status}`,
+        errorCode: body.error?.code ?? body.data?.[0]?.code ?? `http_${response.status}`,
         errorMessage:
-          body.error?.message ?? `ZeptoMail request failed with status ${response.status}`,
+          body.error?.message ??
+          body.data?.[0]?.message ??
+          `ZeptoMail request failed with status ${response.status}`,
       };
     }
 
