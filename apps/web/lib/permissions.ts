@@ -11,67 +11,70 @@ import type { CompanyRole } from "@dravonix/database";
  * button that's wrongly shown/hidden, never a bypassed authorization check.
  */
 export type PermissionKey =
-  | "ai_settings.manage"
   | "ai_settings.view"
   | "audit.view"
-  | "billing.manage"
   | "billing.view"
   | "conversations.assign"
   | "conversations.reassign"
   | "conversations.reconcile"
   | "conversations.reply"
   | "conversations.view"
-  | "knowledge.manage"
   | "knowledge.view"
   | "leads.manage"
   | "leads.view"
-  | "settings.manage"
-  | "team.manage"
+  | "settings.view"
+  | "team.display_name.manage"
+  | "team.view"
   | "usage.view"
-  | "whatsapp.manage"
   | "whatsapp.view";
 
+/**
+ * Client Dashboard Permission Hardening (migration 00000000000022): every
+ * *.manage permission that let a client role write configuration Dravonix
+ * now owns exclusively (ai_settings.manage, knowledge.manage,
+ * settings.manage, team.manage, whatsapp.manage, billing.manage) has been
+ * removed from every company role at the database level -- this mirror
+ * reflects that; it is not merely a UI-hiding change. team.view/
+ * team.display_name.manage/settings.view are new, narrower permissions:
+ * only company_owner/company_admin hold them (the same two roles that used
+ * to hold team.manage/settings.manage), so no role gains new visibility it
+ * didn't already effectively have.
+ */
 const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
   company_owner: new Set([
-    "ai_settings.manage",
     "ai_settings.view",
     "audit.view",
-    "billing.manage",
     "billing.view",
     "conversations.assign",
     "conversations.reassign",
     "conversations.reconcile",
     "conversations.reply",
     "conversations.view",
-    "knowledge.manage",
     "knowledge.view",
     "leads.manage",
     "leads.view",
-    "settings.manage",
-    "team.manage",
+    "settings.view",
+    "team.display_name.manage",
+    "team.view",
     "usage.view",
-    "whatsapp.manage",
     "whatsapp.view",
   ]),
   company_admin: new Set([
-    "ai_settings.manage",
     "ai_settings.view",
     "audit.view",
-    "billing.manage",
     "billing.view",
     "conversations.assign",
     "conversations.reassign",
     "conversations.reconcile",
     "conversations.reply",
     "conversations.view",
-    "knowledge.manage",
     "knowledge.view",
     "leads.manage",
     "leads.view",
-    "settings.manage",
-    "team.manage",
+    "settings.view",
+    "team.display_name.manage",
+    "team.view",
     "usage.view",
-    "whatsapp.manage",
     "whatsapp.view",
   ]),
   manager: new Set([
@@ -94,7 +97,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "leads.manage",
     "leads.view",
   ]),
-  knowledge_editor: new Set(["ai_settings.view", "knowledge.manage", "knowledge.view"]),
+  knowledge_editor: new Set(["ai_settings.view", "knowledge.view"]),
   billing_viewer: new Set(["billing.view"]),
   viewer: new Set([
     "ai_settings.view",
@@ -119,16 +122,13 @@ export interface DashboardCapabilities {
   canReassignConversations: boolean;
   canReconcileOutbound: boolean;
   canPauseResumeAi: boolean;
-  canManageTeam: boolean;
-  canManageSettings: boolean;
-  canManageWhatsapp: boolean;
+  canViewTeam: boolean;
+  canManageDisplayNames: boolean;
+  canViewSettings: boolean;
   canViewWhatsapp: boolean;
-  canManageAiSettings: boolean;
   canViewAiSettings: boolean;
   canViewKnowledge: boolean;
-  canManageKnowledge: boolean;
   canViewBilling: boolean;
-  canManageBilling: boolean;
   canViewLeads: boolean;
   canManageLeads: boolean;
   canViewUsage: boolean;
@@ -141,7 +141,16 @@ export interface DashboardCapabilities {
  * Pause/Resume AI and every assignment action are gated on
  * conversations.assign, matching exactly what handover_pause_ai/
  * handover_resume_ai/handover_assign_to_me check server-side in
- * migration 12.
+ * migration 12 -- unchanged by client permission hardening (migration 22),
+ * which never touches conversations.assign or any conversation-level
+ * permission.
+ *
+ * Every *.manage capability that used to let a client write company
+ * configuration directly (canManageTeam, canManageSettings,
+ * canManageWhatsapp, canManageAiSettings, canManageKnowledge,
+ * canManageBilling) is gone: that configuration is now Dravonix-only,
+ * managed from Super Admin. canManageDisplayNames (team.display_name.manage)
+ * is the one narrow write capability clients keep on the Team page.
  */
 export function getDashboardCapabilities(role: CompanyRole | null): DashboardCapabilities {
   return {
@@ -151,16 +160,13 @@ export function getDashboardCapabilities(role: CompanyRole | null): DashboardCap
     canReassignConversations: hasPermission(role, "conversations.reassign"),
     canReconcileOutbound: hasPermission(role, "conversations.reconcile"),
     canPauseResumeAi: hasPermission(role, "conversations.assign"),
-    canManageTeam: hasPermission(role, "team.manage"),
-    canManageSettings: hasPermission(role, "settings.manage"),
-    canManageWhatsapp: hasPermission(role, "whatsapp.manage"),
+    canViewTeam: hasPermission(role, "team.view"),
+    canManageDisplayNames: hasPermission(role, "team.display_name.manage"),
+    canViewSettings: hasPermission(role, "settings.view"),
     canViewWhatsapp: hasPermission(role, "whatsapp.view"),
-    canManageAiSettings: hasPermission(role, "ai_settings.manage"),
     canViewAiSettings: hasPermission(role, "ai_settings.view"),
     canViewKnowledge: hasPermission(role, "knowledge.view"),
-    canManageKnowledge: hasPermission(role, "knowledge.manage"),
     canViewBilling: hasPermission(role, "billing.view"),
-    canManageBilling: hasPermission(role, "billing.manage"),
     canViewLeads: hasPermission(role, "leads.view"),
     canManageLeads: hasPermission(role, "leads.manage"),
     canViewUsage: hasPermission(role, "usage.view"),

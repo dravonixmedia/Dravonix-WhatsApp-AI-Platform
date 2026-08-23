@@ -87,10 +87,20 @@ set local role authenticated;
 
 select test_set_current_user('1a111111-0000-0000-0000-000000000001');
 
-select update_company_timezone('1aaaaaaa-1000-0000-0000-000000000001', 'Asia/Dubai');
+-- The client permission-hardening migration (00000000000022) revokes
+-- settings.manage from company_owner/company_admin entirely -- company
+-- timezone is now Super Admin-only, via admin_update_company_profile.
+-- update_company_timezone itself is unchanged and still correctly checks
+-- settings.manage; it is simply unreachable by any client role now.
+select test_assert_raises(
+  'Company A owner (no settings.manage after client permission hardening) cannot set Company A''s timezone via the client RPC',
+  $$ select update_company_timezone('1aaaaaaa-1000-0000-0000-000000000001', 'Asia/Dubai') $$,
+  'permission_denied'
+);
+
 select test_assert(
-  'Company A owner (settings.manage) can set Company A''s timezone to a real IANA identifier',
-  (select timezone from companies where id = '1aaaaaaa-1000-0000-0000-000000000001') = 'Asia/Dubai'
+  'the rejected owner attempt above never actually changed Company A''s timezone from its default',
+  (select timezone from companies where id = '1aaaaaaa-1000-0000-0000-000000000001') = 'Asia/Kolkata'
 );
 
 select test_assert_raises(
@@ -123,7 +133,7 @@ select test_assert_raises(
 
 select test_assert(
   'The rejected cross-tenant attempt above never actually changed Company A''s timezone',
-  (select timezone from companies where id = '1aaaaaaa-1000-0000-0000-000000000001') = 'Asia/Dubai'
+  (select timezone from companies where id = '1aaaaaaa-1000-0000-0000-000000000001') = 'Asia/Kolkata'
 );
 
 select test_set_current_user('1a111111-0000-0000-0000-000000000004');

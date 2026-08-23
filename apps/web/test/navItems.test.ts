@@ -97,27 +97,27 @@ describe("dashboard sidebar navigation", () => {
     expect(layoutSource).toContain('kind: "draiva", href: "/dashboard/draiva"');
   });
 
-  it("gates Team Settings behind capabilities.canManageTeam alone, never a hardcoded email or role", () => {
-    const block = layoutSource.match(/if \(capabilities\.canManageTeam\) \{[\s\S]*?\}/);
+  it("gates Team Settings behind capabilities.canViewTeam alone, never a hardcoded email or role", () => {
+    const block = layoutSource.match(/if \(capabilities\.canViewTeam\) \{[\s\S]*?\}/);
     expect(block).not.toBeNull();
     expect(block?.[0]).toContain('label: "Team Settings"');
     expect(block?.[0]).toContain('href: "/dashboard/team"');
   });
 
-  it("gates Company Settings so its union with Team Settings reproduces the original combined Settings gate (canManageSettings || canManageTeam || canManageBilling) -- no role loses sidebar access", () => {
+  it("gates Company Settings so its union with Team Settings reproduces the original combined Settings gate (canViewSettings || canViewTeam || canViewBilling) -- no role loses sidebar access", () => {
     const block = layoutSource.match(
-      /if \(\s*capabilities\.canManageSettings[\s\S]*?\) \{[\s\S]*?\}/,
+      /if \(\s*capabilities\.canViewSettings[\s\S]*?\) \{[\s\S]*?\}/,
     );
     expect(block).not.toBeNull();
-    expect(block?.[0]).toContain("capabilities.canManageBilling");
+    expect(block?.[0]).toContain("capabilities.canViewBilling");
     expect(block?.[0]).toContain('label: "Company Settings"');
     expect(block?.[0]).toContain('href: "/dashboard/settings"');
   });
 
   it("Team Settings and Company Settings point at two genuinely distinct routes, not the same route with different anchors", () => {
-    const teamBlock = layoutSource.match(/if \(capabilities\.canManageTeam\) \{[\s\S]*?\}/)?.[0];
+    const teamBlock = layoutSource.match(/if \(capabilities\.canViewTeam\) \{[\s\S]*?\}/)?.[0];
     const companyBlock = layoutSource.match(
-      /if \(\s*capabilities\.canManageSettings[\s\S]*?\) \{[\s\S]*?\}/,
+      /if \(\s*capabilities\.canViewSettings[\s\S]*?\) \{[\s\S]*?\}/,
     )?.[0];
     expect(teamBlock).not.toContain("#");
     expect(companyBlock).not.toContain("#");
@@ -128,7 +128,7 @@ describe("dashboard sidebar navigation", () => {
 
   it("marks Company Settings exact-match only, so it never highlights while viewing the nested WhatsApp Connection sub-route", () => {
     const companyBlock = layoutSource.match(
-      /if \(\s*capabilities\.canManageSettings[\s\S]*?\) \{[\s\S]*?\}/,
+      /if \(\s*capabilities\.canViewSettings[\s\S]*?\) \{[\s\S]*?\}/,
     );
     expect(companyBlock).not.toBeNull();
     expect(companyBlock?.[0]).toContain("exact: true");
@@ -144,9 +144,9 @@ describe("dashboard sidebar navigation", () => {
     expect(rendered).not.toContain("Starter (trial)");
   });
 
-  it("gates the WhatsApp Connection nav entry behind capabilities.canManageWhatsapp, never a hardcoded email or role", () => {
+  it("gates the WhatsApp Connection nav entry behind capabilities.canViewWhatsapp, never a hardcoded email or role", () => {
     const whatsappBlockMatch = layoutSource.match(
-      /if \(capabilities\.canManageWhatsapp\) \{[\s\S]*?\}/,
+      /if \(capabilities\.canViewWhatsapp\) \{[\s\S]*?\}/,
     );
     expect(whatsappBlockMatch).not.toBeNull();
     expect(whatsappBlockMatch?.[0]).toContain('href: "/dashboard/settings/whatsapp"');

@@ -1,24 +1,8 @@
-import {
-  addKnowledgeSourceAction,
-  removeKnowledgeSourceAction,
-  toggleKnowledgeSourceAction,
-} from "../../../lib/actions/knowledge.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
 
 export const dynamic = "force-dynamic";
-
-const SOURCE_TYPES = [
-  "company_profile",
-  "service",
-  "product",
-  "faq",
-  "pricing",
-  "location",
-  "policy",
-  "document",
-];
 
 const STATUS_BADGE: Record<string, string> = {
   ready: "dvx-badge--success",
@@ -29,10 +13,13 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 /**
- * Real Knowledge Base management: list/add/enable-disable/remove sources
- * over the existing knowledge_sources/knowledge_chunks schema -- no parallel
- * knowledge system. Company-scoped throughout (every query/action is scoped
- * to session.activeCompanyId, never a client-supplied id).
+ * Client Dashboard Permission Hardening (migration 00000000000022) made
+ * this page fully read-only: knowledge.manage was revoked from every
+ * client role (including knowledge_editor) at the database level, so
+ * add/toggle/remove would now be rejected even if this page still
+ * rendered those controls. Knowledge sources are managed by Dravonix from
+ * Super Admin -> Companies -> [Company] over this same knowledge_sources/
+ * knowledge_chunks schema -- no parallel knowledge system.
  */
 export default async function KnowledgePage() {
   const session = await getDashboardSession();
@@ -63,52 +50,9 @@ export default async function KnowledgePage() {
     <div>
       <h1 className="dvx-page-title">Knowledge Base</h1>
       <p className="dvx-muted">
-        The information your AI assistant draws on when answering customers.
+        The information your AI assistant draws on when answering customers. Sources are managed by
+        Dravonix.
       </p>
-
-      {capabilities.canManageKnowledge ? (
-        <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
-          <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
-            Add a knowledge source
-          </div>
-          <form
-            action={addKnowledgeSourceAction}
-            style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}
-          >
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <input
-                className="dvx-input"
-                name="title"
-                placeholder="Title"
-                required
-                style={{ flex: 1, minWidth: 180 }}
-              />
-              <select
-                className="dvx-input"
-                name="source_type"
-                defaultValue="faq"
-                style={{ maxWidth: 200 }}
-              >
-                {SOURCE_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {type.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <textarea
-              className="dvx-input"
-              name="content"
-              placeholder="Content the assistant should know (optional -- can add later)"
-              rows={3}
-              style={{ resize: "vertical" }}
-            />
-            <button className="dvx-button" type="submit" style={{ alignSelf: "flex-start" }}>
-              Add source
-            </button>
-          </form>
-        </div>
-      ) : null}
 
       <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
         {sources.length === 0 ? (
@@ -139,35 +83,6 @@ export default async function KnowledgePage() {
                   >
                     {source.is_enabled ? "Enabled" : "Disabled"}
                   </span>
-                  {capabilities.canManageKnowledge ? (
-                    <>
-                      <form action={toggleKnowledgeSourceAction}>
-                        <input type="hidden" name="source_id" value={source.id} />
-                        <input
-                          type="hidden"
-                          name="next_enabled"
-                          value={(!source.is_enabled).toString()}
-                        />
-                        <button
-                          className="dvx-button dvx-button--secondary"
-                          type="submit"
-                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                        >
-                          {source.is_enabled ? "Disable" : "Enable"}
-                        </button>
-                      </form>
-                      <form action={removeKnowledgeSourceAction}>
-                        <input type="hidden" name="source_id" value={source.id} />
-                        <button
-                          className="dvx-button dvx-button--secondary"
-                          type="submit"
-                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                        >
-                          Remove
-                        </button>
-                      </form>
-                    </>
-                  ) : null}
                 </span>
               </div>
             ))}

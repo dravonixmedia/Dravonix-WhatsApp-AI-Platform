@@ -92,14 +92,9 @@ describe("human-friendly member identity wiring", () => {
     expect(teamPageSource).toMatch(/<EditDisplayNameControl/);
   });
 
-  it("the dashboard layout's self-edit control uses the company-scoped RPC (self-edit is authorized by that RPC's own is_self bypass)", () => {
-    expect(dashboardLayoutSource).toMatch(
-      /import\s*\{\s*updateMemberDisplayNameAction\s*\}\s*from\s*["'].*memberIdentity\.js["']/,
-    );
-    expect(dashboardLayoutSource).toMatch(
-      /updateMemberDisplayNameAction\.bind\(\s*null,\s*session\.userId\s*\)/,
-    );
-    expect(dashboardLayoutSource).toMatch(/<EditDisplayNameControl/);
+  it("the dashboard layout no longer renders a personal self-edit display-name control -- Client Dashboard Permission Hardening (migration 00000000000022) removed the unrestricted self-edit bypass; self-editing is now only possible via team.display_name.manage on the Team page", () => {
+    expect(dashboardLayoutSource).not.toContain("updateMemberDisplayNameAction");
+    expect(dashboardLayoutSource).not.toContain("EditDisplayNameControl");
   });
 
   it("the dashboard layout never interpolates session.userId directly into rendered markup", () => {

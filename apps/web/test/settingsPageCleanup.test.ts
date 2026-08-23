@@ -4,37 +4,31 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Settings simplification pass (client-facing account settings only --
- * subscription/team-management system deferred to
- * claude/subscriptions-team-management). Static source assertions rather
- * than importing app/dashboard/settings/page.tsx directly: it transitively
- * imports lib/session.ts, whose getDashboardSession() is wrapped in React's
- * cache() and throws outside Next's server-component runtime (see
- * navItems.test.ts's identical note).
+ * Company Settings page -- static source assertions rather than importing
+ * app/dashboard/settings/page.tsx directly: it transitively imports
+ * lib/session.ts, whose getDashboardSession() is wrapped in React's cache()
+ * and throws outside Next's server-component runtime (see navItems.test.ts's
+ * identical note).
+ *
+ * Client Dashboard Permission Hardening (migration 00000000000022) made
+ * this page fully read-only: settings.manage was revoked from every client
+ * role at the database level, so update_company_profile/
+ * update_company_timezone/update_company_currency would now be rejected
+ * even if this page still rendered forms for them. Company profile,
+ * timezone and currency are Dravonix-managed now.
  */
-
-const here = dirname(fileURLToPath(import.meta.url));
-const webRoot = join(here, "..");
-const source = readFileSync(join(webRoot, "app/dashboard/settings/page.tsx"), "utf8");
-const timezoneComboboxSource = readFileSync(
-  join(webRoot, "app/dashboard/settings/TimezoneCombobox.tsx"),
-  "utf8",
-);
-const currencySelectSource = readFileSync(
-  join(webRoot, "app/dashboard/settings/CurrencySelect.tsx"),
-  "utf8",
-);
 
 function withoutComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+const here = dirname(fileURLToPath(import.meta.url));
+const webRoot = join(here, "..");
+const source = readFileSync(join(webRoot, "app/dashboard/settings/page.tsx"), "utf8");
+
 describe("Settings page: Company Settings identity", () => {
-  it("has the exact required heading and supporting text", () => {
+  it("has the exact required heading", () => {
     expect(source).toContain(">Company Settings<");
-    expect(source).toContain(
-      "Manage your company profile, business preferences and workspace configuration.",
-    );
   });
 
   it("never renders Team Settings content -- no member list, role, or team-member badges", () => {
@@ -47,9 +41,6 @@ describe("Settings page: Company Settings identity", () => {
 describe("Settings page: tenant scoping", () => {
   it("resolves the company via the server-derived session, never a client-supplied companyId", () => {
     expect(source).toContain('.eq("id", session.activeCompanyId)');
-    // No other company-id-shaped literal is ever compared against "id" or
-    // "company_id" -- every such filter in this file must read from
-    // session.activeCompanyId specifically.
     const idFilters = [...source.matchAll(/\.eq\("(?:id|company_id)",\s*([\w.]+)\)/g)].map(
       (m) => m[1],
     );
@@ -67,32 +58,70 @@ describe("Settings page: tenant scoping", () => {
 });
 
 describe("Settings page: permission gating", () => {
-  it("gates the company-details query and card behind capabilities.canManageSettings", () => {
-    expect(source).toMatch(
-      /capabilities\.canManageSettings\s*\?\s*supabase\s*\.from\("companies"\)/,
-    );
-    expect(source).toContain("capabilities.canManageSettings ? (");
+  it("gates the company-details query and card behind capabilities.canViewSettings", () => {
+    expect(source).toMatch(/capabilities\.canViewSettings\s*\?\s*supabase\s*\.from\("companies"\)/);
+    expect(source).toContain("capabilities.canViewSettings ? (");
   });
 
-  it("never queries company_members -- team management moved to its own /dashboard/team route", () => {
+  it("never queries company_members -- team management lives on its own /dashboard/team route", () => {
     expect(source).not.toContain('.from("company_members")');
     expect(source).not.toContain("canManageTeam");
+    expect(source).not.toContain("canViewTeam");
   });
 
-  it("gates the subscription-status card behind capabilities.canManageBilling", () => {
-    expect(source).toContain("capabilities.canManageBilling ? (");
+  it("gates the subscription-status card behind capabilities.canViewBilling", () => {
+    expect(source).toContain("capabilities.canViewBilling ? (");
   });
 
-  it("gates the WhatsApp connection query and shortcut card behind capabilities.canManageWhatsapp", () => {
+  it("gates the WhatsApp connection query and shortcut card behind capabilities.canViewWhatsapp", () => {
     expect(source).toMatch(
-      /capabilities\.canManageWhatsapp\s*\?\s*supabase\s*\.from\("whatsapp_accounts"\)/,
+      /capabilities\.canViewWhatsapp\s*\?\s*supabase\s*\.from\("whatsapp_accounts"\)/,
     );
-    expect(source).toContain("capabilities.canManageWhatsapp ? (");
+    expect(source).toContain("capabilities.canViewWhatsapp ? (");
+  });
+
+  it("never references a removed *.manage capability", () => {
+    for (const forbidden of [
+      "canManageSettings",
+      "canManageWhatsapp",
+      "canManageBilling",
+      "canManageAiSettings",
+      "canManageKnowledge",
+    ]) {
+      expect(source).not.toContain(forbidden);
+    }
   });
 
   it('never hardcodes an email address or the literal role label "Admin" as an access check', () => {
     expect(source).not.toMatch(/["'][\w.+-]+@[\w.-]+\.\w+["']/);
     expect(source).not.toMatch(/role\s*===?\s*["']Admin["']/);
+  });
+});
+
+describe("Settings page: read-only company details", () => {
+  it("renders company name, industry, country, timezone and currency as read-only rows, never editable inputs", () => {
+    expect(source).toContain('label="Company name"');
+    expect(source).toContain('label="Industry"');
+    expect(source).toContain('label="Country"');
+    expect(source).toContain('label="Business timezone"');
+    expect(source).toContain('label="Business currency"');
+    expect(source).not.toContain("<form");
+    expect(source).not.toContain("<input");
+    expect(source).not.toContain("<textarea");
+  });
+
+  it("no longer imports or renders TimezoneCombobox or CurrencySelect", () => {
+    for (const forbidden of ["TimezoneCombobox", "CurrencySelect"]) {
+      expect(source).not.toContain(forbidden);
+    }
+  });
+
+  it("no longer imports or calls updateCompanyProfileAction", () => {
+    expect(source).not.toContain("updateCompanyProfileAction");
+  });
+
+  it("explains that company profile changes are made by Dravonix", () => {
+    expect(source).toMatch(/managed by Dravonix/);
   });
 });
 
@@ -113,16 +142,6 @@ describe("Settings page: real, read-only subscription display", () => {
     ]) {
       expect(source).not.toContain(forbidden);
     }
-    // Scoped to the subscription-status card specifically -- the Company
-    // Details card legitimately gained a real Business Timezone form
-    // (Global Timezone + Daypart Awareness), so a whole-file "no <form>"
-    // check would no longer distinguish "no fake subscription UI" from
-    // "no forms anywhere on the page" at all.
-    const subscriptionCardMatch = source.match(
-      /<SectionCard title="Subscription status">[\s\S]*?<\/SectionCard>/,
-    );
-    expect(subscriptionCardMatch).not.toBeNull();
-    expect(subscriptionCardMatch?.[0]).not.toContain("<form");
   });
 
   it("queries only the subscriptions table (via its embedded plan_versions/plans relation), and never company_entitlements or invoices -- plan/subscription mutation stays Super Admin-only", () => {
@@ -130,97 +149,7 @@ describe("Settings page: real, read-only subscription display", () => {
     for (const table of ["company_entitlements", "invoices"]) {
       expect(source).not.toContain(`.from("${table}")`);
     }
-    // Read-only: no plan/subscription mutation form on this client-facing page.
     expect(source).not.toMatch(/assignPlanAction|changeSubscriptionStateAction/);
-  });
-});
-
-describe("Settings page: Business Timezone selector", () => {
-  it("renders TimezoneCombobox with the exact required label and supporting text", () => {
-    expect(source).toContain('label="Business Timezone"');
-    expect(source).toContain(
-      'helpText="Used for business hours, operational dates and company-local scheduling context."',
-    );
-    expect(source).toContain('saveLabel="Save Timezone"');
-  });
-
-  it("sources its options from listSupportedTimezones(), never a hardcoded list", () => {
-    expect(source).toContain("options={listSupportedTimezones()}");
-  });
-
-  it("pre-fills the current company timezone from the server-resolved company row", () => {
-    expect(source).toContain('initialValue={company?.timezone ?? ""}');
-  });
-
-  it("saves through the existing updateCompanyTimezoneAction Server Action, not a new duplicate one", () => {
-    // The Server Action is imported directly inside TimezoneCombobox.tsx
-    // itself (not passed down as a prop from page.tsx) -- passing it as a
-    // prop from a Server Component was the confirmed cause of the
-    // deployed "Failed to fetch" bug; see timezoneCombobox.test.ts.
-    expect(source).not.toContain("updateCompanyTimezoneAction");
-    expect(timezoneComboboxSource).toContain(
-      'import { updateCompanyTimezoneAction } from "../../../lib/actions/timezone.js";',
-    );
-  });
-
-  it("no longer uses the native <input list>+<datalist> pattern", () => {
-    expect(source).not.toContain("<datalist");
-    expect(source).not.toContain('list="timezone-options"');
-  });
-});
-
-describe("Settings page: Business Currency selector", () => {
-  it("renders CurrencySelect with the exact required label and supporting text", () => {
-    expect(source).toContain('label="Business Currency"');
-    expect(source).toContain(
-      'helpText="Used for financial values, billing displays and business-level monetary settings."',
-    );
-    expect(source).toContain('saveLabel="Save Currency"');
-  });
-
-  it("sources its options from listSupportedCurrencies(), never a hardcoded inline list", () => {
-    expect(source).toContain("currencies={listSupportedCurrencies()}");
-  });
-
-  it("pre-fills the current company currency from the server-resolved company row", () => {
-    expect(source).toMatch(/initialValue=\{company\?\.default_currency\s*\?\?\s*"INR"\}/);
-  });
-
-  it("saves through a dedicated updateCompanyCurrencyAction Server Action, reusing the existing default_currency column", () => {
-    // Imported directly inside CurrencySelect.tsx, not passed as a prop --
-    // see the identical note above for TimezoneCombobox.
-    expect(source).not.toContain("updateCompanyCurrencyAction");
-    expect(currencySelectSource).toContain(
-      'import { updateCompanyCurrencyAction } from "../../../lib/actions/currency.js";',
-    );
-  });
-
-  it("is no longer a read-only SettingsRow", () => {
-    expect(source).not.toContain('SettingsRow label="Currency"');
-  });
-});
-
-describe("Settings page: Business Timezone and Business Currency are independent", () => {
-  it("the two selectors are wired to two distinct Server Actions, never a shared handler", () => {
-    expect(timezoneComboboxSource).toContain("updateCompanyTimezoneAction");
-    expect(currencySelectSource).toContain("updateCompanyCurrencyAction");
-    expect(timezoneComboboxSource).not.toContain("updateCompanyCurrencyAction");
-    expect(currencySelectSource).not.toContain("updateCompanyTimezoneAction");
-  });
-
-  it("the currency selector's initialValue never derives from the timezone field, and vice versa", () => {
-    function extractSelfClosingTag(tag: string): string {
-      const start = source.indexOf(`<${tag}`);
-      expect(start).toBeGreaterThan(-1);
-      const end = source.indexOf("/>", start);
-      expect(end).toBeGreaterThan(start);
-      return source.slice(start, end);
-    }
-
-    const timezoneBlock = extractSelfClosingTag("TimezoneCombobox");
-    const currencyBlock = extractSelfClosingTag("CurrencySelect");
-    expect(timezoneBlock).not.toContain("default_currency");
-    expect(currencyBlock).not.toContain("company?.timezone");
   });
 });
 
@@ -258,7 +187,6 @@ describe("Settings page: removed technical cards and fields", () => {
       "confidence_threshold",
       "ai_active",
       "enabled_languages",
-      "is_enabled",
       "provider",
       "retention_days",
       "fallback_behavior",

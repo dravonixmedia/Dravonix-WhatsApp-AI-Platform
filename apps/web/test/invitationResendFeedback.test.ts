@@ -73,21 +73,22 @@ describe("InvitationActions surfaces the resend/revoke result instead of discard
   });
 });
 
-describe("Both pages use the shared InvitationActions component instead of a discarded inline action", () => {
-  for (const [label, source] of [
-    ["Super Admin company page", adminPageSource],
-    ["Team Settings page", teamPageSource],
-  ] as const) {
-    it(`${label} renders <InvitationActions invitationId={...} /> for a pending invitation`, () => {
-      expect(source).toMatch(/<InvitationActions\s+invitationId=\{invitation\.id\}\s*\/>/);
-    });
+describe("The Super Admin company page uses the shared InvitationActions component instead of a discarded inline action", () => {
+  it("renders <InvitationActions invitationId={...} /> for a pending invitation", () => {
+    expect(adminPageSource).toMatch(/<InvitationActions\s+invitationId=\{invitation\.id\}\s*\/>/);
+  });
 
-    it(`${label} no longer contains the old discarded-result inline resend action`, () => {
-      expect(source).not.toMatch(/"use server";\s*\n\s*await resendCompanyInvitationAction/);
-    });
+  it("no longer contains the old discarded-result inline resend action", () => {
+    expect(adminPageSource).not.toMatch(/"use server";\s*\n\s*await resendCompanyInvitationAction/);
+  });
 
-    it(`${label} imports InvitationActions from the shared components directory`, () => {
-      expect(source).toMatch(/from ".*components\/InvitationActions\.js"/);
-    });
-  }
+  it("imports InvitationActions from the shared components directory", () => {
+    expect(adminPageSource).toMatch(/from ".*components\/InvitationActions\.js"/);
+  });
+});
+
+describe("The client Team page no longer renders invitation actions -- inviting/resending/revoking is Dravonix-only now", () => {
+  it("does not render InvitationActions (team.manage was revoked from every client role, migration 00000000000022)", () => {
+    expect(teamPageSource).not.toContain("InvitationActions");
+  });
 });

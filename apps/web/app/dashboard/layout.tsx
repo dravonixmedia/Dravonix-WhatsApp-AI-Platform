@@ -2,7 +2,6 @@ import { handoverItemNeedsAttention, SupabaseHandoverRepository } from "@dravoni
 import { getDashboardCapabilities } from "../../lib/permissions.js";
 import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
-import { updateMemberDisplayNameAction } from "../../lib/actions/memberIdentity.js";
 import { resolveMemberIdentity } from "../../lib/memberIdentity.js";
 import { RealtimeRefreshBoundary } from "../../lib/realtime/RealtimeRefreshBoundary.js";
 import { DASHBOARD_SHELL_WATCHES } from "../../lib/realtime/watchConfigs.js";
@@ -11,7 +10,6 @@ import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js"
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
-import { EditDisplayNameControl } from "../../components/EditDisplayNameControl.js";
 import { GlobalSearch } from "./GlobalSearch.js";
 import {
   BellIcon,
@@ -53,16 +51,18 @@ export const dynamic = "force-dynamic";
  * instead -- see app/dashboard/billing/page.tsx).
  *
  * The former single "Settings" entry is split into two nav cards pointing at
- * two genuinely distinct routes -- Team Settings (/dashboard/team, people
- * and access; requires canManageTeam) and Company Settings (/dashboard/settings,
- * company configuration; requires canManageSettings or canManageBilling), so
- * their union exactly reproduces the original combined gate: no role that
- * could see Settings before loses sidebar access now (e.g. billing_viewer,
- * canManageBilling only, still sees Company Settings). An earlier version of
- * this split pointed both entries at the same /dashboard/settings route with
- * different URL anchors only, which made the two sidebar destinations render
- * as the same page -- see app/dashboard/team/page.tsx's docstring. WhatsApp
- * Connection keeps its own gate/route unchanged.
+ * two genuinely distinct routes -- Team Settings (/dashboard/team, view +
+ * display-name-edit only; requires canViewTeam) and Company Settings
+ * (/dashboard/settings, view-only company configuration; requires
+ * canViewSettings or canViewBilling). Client Dashboard Permission Hardening
+ * (migration 00000000000022) revoked every *.manage permission these used
+ * to check (team.manage/settings.manage/billing.manage) from every client
+ * role -- team.view/settings.view are new, narrower view permissions held
+ * by exactly the same two roles (company_owner/company_admin) that used to
+ * hold the *.manage versions, so no role loses or gains sidebar access here.
+ * WhatsApp Connection is gated on canViewWhatsapp (view-only) for the same
+ * reason -- the page itself has always been read-only; only the permission
+ * key it checked has changed.
  *
  * Notifications and DRAIVA are both real, dedicated dashboard destinations
  * (/dashboard/notifications, /dashboard/draiva) -- plain links, like every
@@ -132,7 +132,7 @@ export function buildNavItems(
     label: "Setup Checklist",
     icon: <SettingsIcon />,
   });
-  if (capabilities.canManageTeam) {
+  if (capabilities.canViewTeam) {
     entries.push({
       kind: "link",
       href: "/dashboard/team",
@@ -140,7 +140,7 @@ export function buildNavItems(
       icon: <SettingsIcon />,
     });
   }
-  if (capabilities.canManageSettings || capabilities.canManageBilling) {
+  if (capabilities.canViewSettings || capabilities.canViewBilling) {
     entries.push({
       kind: "link",
       href: "/dashboard/settings",
@@ -149,7 +149,7 @@ export function buildNavItems(
       exact: true,
     });
   }
-  if (capabilities.canManageWhatsapp) {
+  if (capabilities.canViewWhatsapp) {
     entries.push({
       kind: "link",
       href: "/dashboard/settings/whatsapp",
@@ -252,8 +252,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
     email: session.email,
     userId: session.userId,
   });
-  const updateOwnDisplayNameAction = updateMemberDisplayNameAction.bind(null, session.userId);
-
   return (
     <NotificationPanelProvider>
       <div style={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
@@ -480,23 +478,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
                     }}
                   >
                     {roleLabel} · {session.email}
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "flex-start",
-                      gap: "0.5rem",
-                      marginBottom: "0.75rem",
-                    }}
-                  >
-                    <span className="dvx-muted" style={{ fontSize: "0.78rem" }}>
-                      Display name
-                    </span>
-                    <EditDisplayNameControl
-                      currentDisplayName={session.displayName}
-                      onSave={updateOwnDisplayNameAction}
-                    />
                   </div>
                   <form action={logoutAction}>
                     <button

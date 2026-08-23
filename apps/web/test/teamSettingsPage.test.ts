@@ -6,27 +6,27 @@ import { describe, expect, it } from "vitest";
 /**
  * Team Settings (app/dashboard/team/page.tsx) -- static source assertions,
  * same pattern as settingsPageCleanup.test.ts (see that file's note on why
- * this can't import the page directly). This is the "people and access"
- * half of the former combined Settings page; Company Settings
- * (app/dashboard/settings/page.tsx) is the "company configuration" half.
+ * this can't import the page directly).
+ *
+ * Client Dashboard Permission Hardening (migration 00000000000022) reduced
+ * this page to view + display-name-edit only: team.manage was revoked from
+ * every client role at the database level, so invite/resend/revoke/
+ * change-role/deactivate are no longer reachable by any client session --
+ * these tests assert the page's UI matches that, not merely that a
+ * capability flag is checked.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, "..");
 const source = readFileSync(join(webRoot, "app/dashboard/team/page.tsx"), "utf8");
-const inviteFormSource = readFileSync(
-  join(webRoot, "app/dashboard/team/InviteMemberForm.tsx"),
-  "utf8",
-);
 
 describe("Team Settings page", () => {
-  it("has the exact required heading and supporting text", () => {
+  it("has the exact required heading", () => {
     expect(source).toContain(">Team Settings<");
-    expect(source).toContain("Manage team members, roles and access to this workspace.");
   });
 
-  it("is gated behind capabilities.canManageTeam, never a hardcoded email or role", () => {
-    expect(source).toContain("capabilities.canManageTeam");
+  it("is gated behind capabilities.canViewTeam, never a hardcoded email or role", () => {
+    expect(source).toContain("capabilities.canViewTeam");
     expect(source).not.toMatch(/["'][\w.+-]+@[\w.-]+\.\w+["']/);
     expect(source).not.toMatch(/role\s*===?\s*["']Admin["']/);
   });
@@ -64,14 +64,26 @@ describe("Team Settings page", () => {
     expect(source).not.toContain('.from("companies")');
   });
 
-  it("invite/role-change/deactivate actions are wired to the real client onboarding foundation RPCs, not invented client-only handlers", () => {
-    expect(source).toContain("InviteMemberForm");
-    expect(inviteFormSource).toContain("createCompanyInvitationAction");
-    // Resend/Revoke live in the shared InvitationActions component (see
-    // invitationResendFeedback.test.ts), not as bare action calls here.
-    expect(source).toMatch(/<InvitationActions\s+invitationId=\{invitation\.id\}\s*\/>/);
-    expect(source).toContain("companyChangeMemberRoleAction");
-    expect(source).toContain("companyDeactivateMemberAction");
+  it("does not render invite, resend, revoke, change-role, or deactivate controls -- those are Dravonix-only now", () => {
+    for (const forbidden of [
+      "InviteMemberForm",
+      "InvitationActions",
+      "companyChangeMemberRoleAction",
+      "companyDeactivateMemberAction",
+      "createCompanyInvitationAction",
+    ]) {
+      expect(source).not.toContain(forbidden);
+    }
+  });
+
+  it("never queries company_invitations -- there is no invitation data path on this page", () => {
+    expect(source).not.toContain('.from("company_invitations")');
+  });
+
+  it("renders the display-name edit control only for canManageDisplayNames holders", () => {
+    expect(source).toContain("capabilities.canManageDisplayNames");
+    expect(source).toContain("EditDisplayNameControl");
+    expect(source).toContain("updateMemberDisplayNameAction");
   });
 
   it("shows role and active/inactive status for each member, same real data as before", () => {

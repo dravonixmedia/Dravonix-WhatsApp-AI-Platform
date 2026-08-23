@@ -78,7 +78,9 @@ declare
     'create_company_invitation', 'admin_resend_company_invitation', 'admin_revoke_company_invitation',
     'accept_company_invitation', 'company_change_member_role', 'company_deactivate_member',
     'update_company_profile', 'list_company_member_identities', 'update_user_display_name',
-    'admin_update_user_display_name'
+    'admin_update_user_display_name', 'admin_update_company_profile', 'admin_update_company_ai_settings',
+    'admin_update_company_voice_settings', 'admin_add_knowledge_source', 'admin_toggle_knowledge_source',
+    'admin_remove_knowledge_source'
   ];
 begin
   foreach fn in array fns loop
@@ -270,19 +272,69 @@ update company_members set is_active = true where id = '91000001-0000-0000-0000-
 set local role authenticated;
 select test_set_current_user('80000001-0000-0000-0000-000000000002'); -- owner of Company A
 
-select test_assert(
-  'the owner can update their own company''s name/industry/country',
-  (select name from update_company_profile('90000001-0000-0000-0000-000000000001', 'Onboard Co A Renamed', 'Interior Fit-Out', 'India')) = 'Onboard Co A Renamed'
+-- Client permission hardening (migration 00000000000022) revokes
+-- settings.manage from company_owner/company_admin entirely -- Company
+-- Profile is now Super Admin-only (view-only for clients), via
+-- admin_update_company_profile. update_company_profile itself is
+-- unchanged and still correctly checks settings.manage; it is simply
+-- unreachable by any client role now.
+select test_assert_raises(
+  'the owner can no longer update their own company''s profile via the client RPC after permission hardening',
+  $sql$ select update_company_profile('90000001-0000-0000-0000-000000000001', 'Onboard Co A Renamed', 'Interior Fit-Out', 'India') $sql$,
+  'permission_denied'
 );
 
 select test_assert(
-  'company_profile_changed audit row was written',
-  exists (select 1 from audit_logs where company_id = '90000001-0000-0000-0000-000000000001' and action = 'company_profile_changed')
+  'the rejected owner attempt above never actually changed Company A''s name',
+  (select name from companies where id = '90000001-0000-0000-0000-000000000001') = 'Onboard Co A'
 );
 
 select test_assert(
   'is_demo is untouched by update_company_profile -- it has no parameter for it',
   (select is_demo from companies where id = '90000001-0000-0000-0000-000000000001') = true
+);
+
+select test_set_current_user('80000001-0000-0000-0000-000000000001'); -- super_admin
+
+do $$
+declare
+  v_name text;
+  v_timezone text;
+  v_currency text;
+begin
+  select name, timezone, default_currency into v_name, v_timezone, v_currency
+    from admin_update_company_profile(
+      '90000001-0000-0000-0000-000000000001', 'Onboard Co A Renamed', 'Interior Fit-Out', 'India',
+      'Asia/Dubai', 'AED'
+    );
+  perform test_assert('Super Admin can rename Company A and set its industry/country/timezone/currency', v_name = 'Onboard Co A Renamed');
+  perform test_assert('Super Admin''s edit set the timezone to a real IANA identifier', v_timezone = 'Asia/Dubai');
+  perform test_assert('Super Admin''s edit set the currency to a supported ISO 4217 code', v_currency = 'AED');
+  perform test_assert(
+    'company_profile_changed audit row was written for the Super Admin edit',
+    exists (select 1 from audit_logs where company_id = '90000001-0000-0000-0000-000000000001' and action = 'company_profile_changed' and actor_type = 'platform_staff')
+  );
+end;
+$$;
+
+select test_assert_raises(
+  'admin_update_company_profile rejects an invalid timezone',
+  $sql$ select admin_update_company_profile('90000001-0000-0000-0000-000000000001', 'Onboard Co A Renamed', null, null, 'Not/A/Zone', null) $sql$,
+  'invalid_timezone'
+);
+
+select test_assert_raises(
+  'admin_update_company_profile rejects an unsupported currency code',
+  $sql$ select admin_update_company_profile('90000001-0000-0000-0000-000000000001', 'Onboard Co A Renamed', null, null, null, 'ABC') $sql$,
+  'invalid_currency'
+);
+
+select test_set_current_user('80000001-0000-0000-0000-000000000002'); -- owner of Company A
+
+select test_assert_raises(
+  'a company owner cannot call the Super Admin-only admin_update_company_profile',
+  $sql$ select admin_update_company_profile('90000001-0000-0000-0000-000000000001', 'Hijacked Name', null, null, null, null) $sql$,
+  'permission_denied'
 );
 
 -- 9/10: owner cannot assign a plan or alter entitlements -- those remain
@@ -300,39 +352,24 @@ select test_assert_raises(
 );
 
 -- ---------------------------------------------------------------------------
--- 11. Knowledge sources: owner/admin can manage (insert/update/delete) via
--- the existing knowledge.manage RLS policy -- no new RPC, direct writes.
+-- 11. Knowledge sources: after client permission hardening (migration
+-- 00000000000022), knowledge.manage is revoked from every client role --
+-- an owner/admin can no longer write knowledge_sources/knowledge_chunks
+-- directly (RLS now rejects it, exactly like the Company B cross-tenant
+-- case already covered below), and management moves to the Super Admin-only
+-- admin_add_knowledge_source/admin_toggle_knowledge_source/
+-- admin_remove_knowledge_source RPCs, which reuse the same tables (no
+-- parallel knowledge system) and are still covered by the existing
+-- knowledge_source_added/_changed/_removed audit triggers.
 -- ---------------------------------------------------------------------------
 
-do $$
-declare
-  v_source_id uuid;
-begin
-  insert into knowledge_sources (company_id, source_type, title)
-    values ('90000001-0000-0000-0000-000000000001', 'faq', 'Test FAQ')
-    returning id into v_source_id;
+select test_assert_raises(
+  'the owner can no longer insert a knowledge source directly -- knowledge.manage was revoked by client permission hardening',
+  $sql$ insert into knowledge_sources (company_id, source_type, title) values ('90000001-0000-0000-0000-000000000001', 'faq', 'Test FAQ') $sql$,
+  'new row violates row-level security policy for table "knowledge_sources"'
+);
 
-  perform test_assert('owner can insert a knowledge source into their own company', v_source_id is not null);
-  perform test_assert(
-    'knowledge_source_added audit row was written',
-    exists (select 1 from audit_logs where action = 'knowledge_source_added' and target_id = v_source_id::text)
-  );
-
-  update knowledge_sources set is_enabled = false where id = v_source_id;
-  perform test_assert(
-    'knowledge_source_changed audit row was written on update',
-    exists (select 1 from audit_logs where action = 'knowledge_source_changed' and target_id = v_source_id::text)
-  );
-
-  delete from knowledge_sources where id = v_source_id;
-  perform test_assert(
-    'knowledge_source_removed audit row was written on delete',
-    exists (select 1 from audit_logs where action = 'knowledge_source_removed' and target_id = v_source_id::text)
-  );
-end;
-$$;
-
-select test_set_current_user('80000001-0000-0000-0000-000000000004'); -- owner of Company B, no knowledge.manage on Company A
+select test_set_current_user('80000001-0000-0000-0000-000000000004'); -- owner of Company B, no knowledge.manage anywhere now
 
 select test_assert_raises(
   'Company B''s owner cannot insert a knowledge source into Company A (cross-tenant rejected by RLS)',
@@ -340,22 +377,93 @@ select test_assert_raises(
   'new row violates row-level security policy for table "knowledge_sources"'
 );
 
+select test_set_current_user('80000001-0000-0000-0000-000000000001'); -- super_admin
+
+do $$
+declare
+  v_source_id uuid;
+begin
+  select id into v_source_id from admin_add_knowledge_source('90000001-0000-0000-0000-000000000001', 'faq', 'Test FAQ', 'Some answer content');
+
+  perform test_assert('Super Admin can add a knowledge source for any company', v_source_id is not null);
+  perform test_assert(
+    'knowledge_source_added audit row was written for the Super Admin add',
+    exists (select 1 from audit_logs where action = 'knowledge_source_added' and target_id = v_source_id::text)
+  );
+  perform test_assert(
+    'the initial content was written to knowledge_chunks by the SECURITY DEFINER function, despite knowledge_chunks having no authenticated INSERT policy',
+    exists (select 1 from knowledge_chunks where knowledge_source_id = v_source_id and content = 'Some answer content')
+  );
+
+  perform admin_toggle_knowledge_source('90000001-0000-0000-0000-000000000001', v_source_id, false);
+  perform test_assert(
+    'knowledge_source_changed audit row was written for the Super Admin toggle',
+    exists (select 1 from audit_logs where action = 'knowledge_source_changed' and target_id = v_source_id::text)
+  );
+
+  perform admin_remove_knowledge_source('90000001-0000-0000-0000-000000000001', v_source_id);
+  perform test_assert(
+    'knowledge_source_removed audit row was written for the Super Admin remove',
+    exists (select 1 from audit_logs where action = 'knowledge_source_removed' and target_id = v_source_id::text)
+  );
+end;
+$$;
+
+select test_assert_raises(
+  'admin_add_knowledge_source rejects a nonexistent company',
+  $sql$ select admin_add_knowledge_source('00000000-0000-0000-0000-000000000999', 'faq', 'Nowhere') $sql$,
+  'company_not_found'
+);
+
 -- ---------------------------------------------------------------------------
--- ai_settings / company_settings writes are also audited via trigger.
+-- ai_settings / company_settings writes: same hardening -- an owner can no
+-- longer write ai_settings/company_settings directly (ai_settings.manage/
+-- settings.manage both revoked); admin_update_company_ai_settings is the
+-- Super Admin-only replacement path, still covered by the existing
+-- ai_settings_changed/company_settings_changed audit triggers.
 -- ---------------------------------------------------------------------------
 
 select test_set_current_user('80000001-0000-0000-0000-000000000002'); -- owner of Company A
 
+select test_assert_raises(
+  'the owner can no longer write ai_settings directly -- ai_settings.manage was revoked by client permission hardening',
+  $sql$ insert into ai_settings (company_id, reply_length) values ('90000001-0000-0000-0000-000000000001', 'short') on conflict (company_id) do update set reply_length = excluded.reply_length $sql$,
+  'new row violates row-level security policy for table "ai_settings"'
+);
+
+select test_set_current_user('80000001-0000-0000-0000-000000000001'); -- super_admin
+
 do $$
+declare
+  v_bot_name text;
 begin
-  insert into ai_settings (company_id, reply_length) values ('90000001-0000-0000-0000-000000000001', 'short')
-    on conflict (company_id) do update set reply_length = excluded.reply_length;
+  select updated_bot_name into v_bot_name from admin_update_company_ai_settings(
+    '90000001-0000-0000-0000-000000000001', 'Onboard Assistant', 'Hello!', 'formal',
+    array['en', 'ml'], 'auto', true, 'short', 'escalate'
+  );
+  perform test_assert('Super Admin can set a company''s AI Settings', v_bot_name = 'Onboard Assistant');
   perform test_assert(
-    'ai_settings_changed audit row was written',
+    'ai_settings_changed audit row was written for the Super Admin AI Settings update (ai_settings_audit_change fires on INSERT or UPDATE)',
     exists (select 1 from audit_logs where company_id = '90000001-0000-0000-0000-000000000001' and action = 'ai_settings_changed')
+  );
+  perform test_assert(
+    'the company_settings row now reflects the Super Admin''s values (company_settings_changed itself only fires on UPDATE, not this first-ever INSERT for this company -- covered separately by the earlier owner/admin direct-write audit assertions elsewhere in this suite)',
+    (select bot_name from company_settings where company_id = '90000001-0000-0000-0000-000000000001') = 'Onboard Assistant'
+  );
+
+  perform admin_update_company_voice_settings('90000001-0000-0000-0000-000000000001', false, 'text_only');
+  perform test_assert(
+    'Super Admin can set a company''s voice settings',
+    (select is_enabled from voice_settings where company_id = '90000001-0000-0000-0000-000000000001') = false
   );
 end;
 $$;
+
+select test_assert_raises(
+  'admin_update_company_ai_settings rejects a nonexistent company',
+  $sql$ select admin_update_company_ai_settings('00000000-0000-0000-0000-000000000999', 'X', null, null, null, null, true, null, null) $sql$,
+  'company_not_found'
+);
 
 -- ---------------------------------------------------------------------------
 -- 12. admin_resend_company_invitation rotates the token/expiry each call and
@@ -537,20 +645,53 @@ begin
 end;
 $$;
 
-select test_set_current_user('80000001-0000-0000-0000-000000000003'); -- viewer-a, no team.manage
+select test_set_current_user('80000001-0000-0000-0000-000000000003'); -- viewer-a, no team.display_name.manage
 
 select test_assert_raises(
-  'a viewer (no team.manage) cannot rename another member',
+  'a viewer (no team.display_name.manage) cannot rename another member',
   $sql$ select update_user_display_name('80000001-0000-0000-0000-000000000002', 'Hijacked Name') $sql$,
   'permission_denied'
 );
+
+-- Client permission hardening (migration 00000000000022) removes the
+-- unconditional self-edit bypass -- a member with no team.display_name.manage
+-- grant (every role except company_owner/company_admin) can no longer
+-- rename anyone, including themselves. This is the "no personal/account-
+-- profile display-name edit for normal clients" requirement enforced at the
+-- database layer, not just by removing the UI control.
+select test_assert_raises(
+  'a viewer (no team.display_name.manage) can no longer rename even themselves -- the unconditional self-edit bypass was removed',
+  $sql$ select update_user_display_name('80000001-0000-0000-0000-000000000003', 'My Own Name') $sql$,
+  'permission_denied'
+);
+
+select test_set_current_user('80000001-0000-0000-0000-000000000002'); -- owner-a, Company A
 
 do $$
 declare
   v_name text;
 begin
-  select display_name into v_name from update_user_display_name('80000001-0000-0000-0000-000000000003', 'My Own Name');
-  perform test_assert('a user without team.manage can still edit their own display name (self-edit bypass)', v_name = 'My Own Name');
+  -- A company_owner/company_admin holding team.display_name.manage CAN
+  -- still rename themselves -- the join in update_user_display_name matches
+  -- the caller's own membership row as both "caller" and "target" when
+  -- p_user_id = auth.uid(), so self-edit works without any special case,
+  -- exactly as long as the caller holds team.display_name.manage in that
+  -- company (this is the "may include their own user if they appear in the
+  -- Team list" carve-out -- not an unrestricted bypass).
+  select display_name into v_name from update_user_display_name('80000001-0000-0000-0000-000000000002', 'Owner A Self Name');
+  perform test_assert(
+    'a company owner with team.display_name.manage can rename themselves via the Team-page path (not an unrestricted personal-profile bypass)',
+    v_name = 'Owner A Self Name'
+  );
+  perform test_assert(
+    'the owner''s self-edit is recorded with self_edit = true in the audit metadata',
+    exists (
+      select 1 from audit_logs
+      where action = 'user_display_name_changed' and target_id = '80000001-0000-0000-0000-000000000002'
+        and actor_user_id = '80000001-0000-0000-0000-000000000002'
+        and (metadata->>'self_edit')::boolean = true
+    )
+  );
 end;
 $$;
 

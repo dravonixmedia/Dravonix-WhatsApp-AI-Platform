@@ -145,7 +145,12 @@ reset role;
 -- Invalid p_event value rejected.
 -- ---------------------------------------------------------------------------
 
-select test_set_current_user('82000001-0000-0000-0000-000000000002');
+-- Client permission hardening (migration 00000000000022) revokes team.manage
+-- from company_owner/company_admin entirely -- record_invitation_email_event
+-- (like the invitation RPCs it accompanies) is now only reachable by
+-- Super Admin in practice, so these calls use the super_admin fixture user
+-- instead of Company A's owner.
+select test_set_current_user('82000001-0000-0000-0000-000000000001');
 set local role authenticated;
 select test_assert_raises(
   'an invalid p_event value is rejected',
@@ -164,8 +169,8 @@ select test_assert_raises(
 );
 
 -- ---------------------------------------------------------------------------
--- Company A's owner (team.manage holder) can record a 'sent' event, which
--- writes a masked-recipient, no-raw-token audit_logs row.
+-- Super Admin can record a 'sent' event, which writes a masked-recipient,
+-- no-raw-token audit_logs row.
 -- ---------------------------------------------------------------------------
 
 select record_invitation_email_event('94000001-0000-0000-0000-000000000001', 'sent', 'i***@example.test', 'resend-msg-42', null);
@@ -222,7 +227,12 @@ $$;
 -- (positional callers unaware of the new trailing parameter) still works.
 -- ---------------------------------------------------------------------------
 
-select test_set_current_user('82000001-0000-0000-0000-000000000002');
+-- Client permission hardening (migration 00000000000022) revokes team.manage
+-- from company_owner/company_admin entirely -- record_invitation_email_event
+-- (like the invitation RPCs it accompanies) is now only reachable by
+-- Super Admin in practice, so these calls use the super_admin fixture user
+-- instead of Company A's owner.
+select test_set_current_user('82000001-0000-0000-0000-000000000001');
 set local role authenticated;
 select record_invitation_email_event('94000001-0000-0000-0000-000000000001', 'failed', 'i***@example.test', null, 'http_500', 'ZeptoMail request failed with status 500');
 reset role;
@@ -246,7 +256,12 @@ begin
 end;
 $$;
 
-select test_set_current_user('82000001-0000-0000-0000-000000000002');
+-- Client permission hardening (migration 00000000000022) revokes team.manage
+-- from company_owner/company_admin entirely -- record_invitation_email_event
+-- (like the invitation RPCs it accompanies) is now only reachable by
+-- Super Admin in practice, so these calls use the super_admin fixture user
+-- instead of Company A's owner.
+select test_set_current_user('82000001-0000-0000-0000-000000000001');
 set local role authenticated;
 select record_invitation_email_event('94000001-0000-0000-0000-000000000001', 'sent', 'i***@example.test', 'resend-msg-99', null);
 reset role;

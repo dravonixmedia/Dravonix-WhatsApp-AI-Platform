@@ -48,7 +48,7 @@ export default async function WhatsAppConnectionPage() {
   if (!session) return null;
 
   const capabilities = getDashboardCapabilities(session.activeRole);
-  if (!capabilities.canManageWhatsapp) return <PermissionDenied />;
+  if (!capabilities.canViewWhatsapp) return <PermissionDenied />;
 
   const supabase = await createServerSupabaseClient();
   const companyId = session.activeCompanyId;
