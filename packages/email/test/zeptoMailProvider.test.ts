@@ -125,4 +125,45 @@ describe("ZeptoMailEmailProvider", () => {
     const result = await new ZeptoMailEmailProvider(CONFIG).send(MESSAGE);
     expect(result).toMatchObject({ success: false, errorCode: "http_401" });
   });
+
+  it("falls back to the data[] shape for a non-2xx response with no error object", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ data: [{ code: "SM_128", message: "Account pending review" }] }),
+            {
+              status: 500,
+            },
+          ),
+      ),
+    );
+
+    const result = await new ZeptoMailEmailProvider(CONFIG).send(MESSAGE);
+    expect(result).toEqual({
+      success: false,
+      errorCode: "SM_128",
+      errorMessage: "Account pending review",
+    });
+  });
+
+  it("prefers the error{} shape over data[] when a non-2xx response somehow has both", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code: "TM_3301", message: "Bad Syntax" },
+              data: [{ code: "SM_999", message: "should not win" }],
+            }),
+            { status: 422 },
+          ),
+      ),
+    );
+
+    const result = await new ZeptoMailEmailProvider(CONFIG).send(MESSAGE);
+    expect(result).toEqual({ success: false, errorCode: "TM_3301", errorMessage: "Bad Syntax" });
+  });
 });

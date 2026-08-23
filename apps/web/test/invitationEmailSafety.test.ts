@@ -113,6 +113,13 @@ describe("The raw invitation token is never logged or persisted by the email-del
     expect(source).not.toMatch(/record_invitation_email_event[\s\S]{0,300}?raw_token/);
   });
 
+  it("record_invitation_email_event is passed the provider's sanitized error message, never a raw request/response body", () => {
+    const source = readSource("lib/actions/invitations.ts");
+    expect(source).toContain(
+      "p_error_message: result.success ? null : (result.errorMessage ?? null)",
+    );
+  });
+
   it("sendInvitationEmail.ts never logs the rendered email body or the accept URL to the console", () => {
     const source = readSource("lib/email/sendInvitationEmail.ts");
     expect(source).not.toMatch(/console\.(log|error|warn|info)/);

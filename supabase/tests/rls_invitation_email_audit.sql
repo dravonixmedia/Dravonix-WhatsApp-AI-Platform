@@ -1,4 +1,4 @@
--- Invitation email delivery audit RPC hardening tests (migration 19).
+-- Invitation email delivery audit RPC hardening tests (migrations 19 + 20).
 -- Run after rls_client_onboarding.sql (via supabase/tests/run.sh), against
 -- the same throwaway local Postgres database -- never a hosted Supabase
 -- project.
@@ -84,10 +84,22 @@ $$;
 
 do $$
 begin
-  if has_function_privilege('anon', 'record_invitation_email_event(uuid, text, text, text, text)', 'execute') then
+  if has_function_privilege('anon', 'record_invitation_email_event(uuid, text, text, text, text, text)', 'execute') then
     raise exception 'ASSERTION FAILED: anon must not be able to execute record_invitation_email_event';
   end if;
   raise notice 'OK: anon cannot execute record_invitation_email_event';
+end;
+$$;
+
+do $$
+begin
+  if exists (
+    select 1 from pg_proc where proname = 'record_invitation_email_event'
+      and pg_get_function_identity_arguments(oid) = 'p_invitation_id uuid, p_event text, p_masked_recipient text, p_provider_message_id text, p_error_code text'
+  ) then
+    raise exception 'ASSERTION FAILED: the old 5-arg record_invitation_email_event overload must not still exist (migration 20 must drop it, not merely add a 6-arg overload alongside it)';
+  end if;
+  raise notice 'OK: only the new 6-arg record_invitation_email_event signature exists';
 end;
 $$;
 
@@ -199,6 +211,57 @@ begin
         and action = 'invitation_email_failed'
         and target_id = '94000001-0000-0000-0000-000000000001'
         and metadata->>'error_code' = 'validation_error'
+    )
+  );
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Migration 20: a sanitized error_message and a fixed 'zeptomail' provider
+-- tag are recorded alongside error_code, and omitting p_error_message
+-- (positional callers unaware of the new trailing parameter) still works.
+-- ---------------------------------------------------------------------------
+
+select test_set_current_user('82000001-0000-0000-0000-000000000002');
+set local role authenticated;
+select record_invitation_email_event('94000001-0000-0000-0000-000000000001', 'failed', 'i***@example.test', null, 'http_500', 'ZeptoMail request failed with status 500');
+reset role;
+
+do $$
+declare
+  v_row audit_logs%rowtype;
+begin
+  select * into v_row from audit_logs
+    where company_id = '92000001-0000-0000-0000-000000000001'
+      and action = 'invitation_email_failed'
+      and target_id = '94000001-0000-0000-0000-000000000001'
+      and metadata->>'error_code' = 'http_500';
+
+  perform test_assert('the http_500 audit row was written', found);
+  perform test_assert(
+    'the audit row records the sanitized error_message and the provider tag',
+    v_row.metadata->>'error_message' = 'ZeptoMail request failed with status 500'
+    and v_row.metadata->>'provider' = 'zeptomail'
+  );
+end;
+$$;
+
+select test_set_current_user('82000001-0000-0000-0000-000000000002');
+set local role authenticated;
+select record_invitation_email_event('94000001-0000-0000-0000-000000000001', 'sent', 'i***@example.test', 'resend-msg-99', null);
+reset role;
+
+do $$
+begin
+  perform test_assert(
+    'omitting the new trailing p_error_message parameter still succeeds (backward-compatible positional call)',
+    exists (
+      select 1 from audit_logs
+      where company_id = '92000001-0000-0000-0000-000000000001'
+        and action = 'invitation_email_sent'
+        and target_id = '94000001-0000-0000-0000-000000000001'
+        and metadata->>'provider_message_id' = 'resend-msg-99'
+        and metadata->>'error_message' is null
     )
   );
 end;
