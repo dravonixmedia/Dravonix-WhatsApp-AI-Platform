@@ -13,6 +13,7 @@ import {
   suspendCompanyAction,
 } from "../../../../lib/actions/admin.js";
 import { InvitationActions } from "../../../../components/InvitationActions.js";
+import { resolveMemberIdentity } from "../../../../lib/memberIdentity.js";
 import { computeOnboardingChecklist } from "../../../../lib/onboarding.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 
@@ -143,6 +144,15 @@ export default async function AdminCompanyDetailPage({
       .eq("company_id", id)
       .eq("is_enabled", true),
   ]);
+
+  const { data: memberIdentityRows } = await supabase.rpc("list_company_member_identities", {
+    p_company_id: id,
+  });
+  const memberEmailById = new Map(
+    ((memberIdentityRows ?? []) as Array<{ member_id: string; email: string | null }>).map(
+      (row) => [row.member_id, row.email],
+    ),
+  );
 
   const members = membersResult.data ?? [];
   const invitations = invitationsResult.data ?? [];
@@ -405,64 +415,80 @@ export default async function AdminCompanyDetailPage({
           </p>
         ) : (
           <div className="dvx-team-member-list">
-            {members.map((member) => (
-              <div key={member.id} className="dvx-team-member-row">
-                <span className="dvx-team-member-name">{maskUserId(member.user_id)}</span>
-                <span
-                  className="dvx-team-member-badges"
-                  style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
-                >
-                  <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
-                    {member.role.replace(/_/g, " ")}
+            {members.map((member) => {
+              const identity = resolveMemberIdentity({
+                email: memberEmailById.get(member.id) ?? null,
+                userId: member.user_id,
+              });
+              return (
+                <div key={member.id} className="dvx-team-member-row">
+                  <span className="dvx-team-member-name">
+                    <span style={{ display: "block" }}>{identity.primary}</span>
+                    {identity.secondary ? (
+                      <span
+                        className="dvx-muted"
+                        style={{ display: "block", fontSize: "0.78rem", fontWeight: 400 }}
+                      >
+                        {identity.secondary}
+                      </span>
+                    ) : null}
                   </span>
                   <span
-                    className={`dvx-badge ${member.is_active ? "dvx-badge--success" : "dvx-badge--neutral"}`}
-                    style={{ fontSize: "0.7rem" }}
+                    className="dvx-team-member-badges"
+                    style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
                   >
-                    {member.is_active ? "Active" : "Disabled"}
+                    <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
+                      {member.role.replace(/_/g, " ")}
+                    </span>
+                    <span
+                      className={`dvx-badge ${member.is_active ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                      style={{ fontSize: "0.7rem" }}
+                    >
+                      {member.is_active ? "Active" : "Disabled"}
+                    </span>
+                    {member.is_active ? (
+                      <>
+                        <form
+                          action={changeCompanyMemberRoleWithId}
+                          style={{ display: "flex", gap: "0.3rem" }}
+                        >
+                          <input type="hidden" name="member_id" value={member.id} />
+                          <select
+                            className="dvx-input"
+                            name="new_role"
+                            defaultValue={member.role}
+                            style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem" }}
+                          >
+                            {COMPANY_ROLES.map((r) => (
+                              <option key={r} value={r}>
+                                {r.replace(/_/g, " ")}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="dvx-button dvx-button--secondary"
+                            type="submit"
+                            style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                          >
+                            Change role
+                          </button>
+                        </form>
+                        <form action={deactivateCompanyMemberWithId}>
+                          <input type="hidden" name="member_id" value={member.id} />
+                          <button
+                            className="dvx-button dvx-button--secondary"
+                            type="submit"
+                            style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                          >
+                            Deactivate
+                          </button>
+                        </form>
+                      </>
+                    ) : null}
                   </span>
-                  {member.is_active ? (
-                    <>
-                      <form
-                        action={changeCompanyMemberRoleWithId}
-                        style={{ display: "flex", gap: "0.3rem" }}
-                      >
-                        <input type="hidden" name="member_id" value={member.id} />
-                        <select
-                          className="dvx-input"
-                          name="new_role"
-                          defaultValue={member.role}
-                          style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem" }}
-                        >
-                          {COMPANY_ROLES.map((r) => (
-                            <option key={r} value={r}>
-                              {r.replace(/_/g, " ")}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className="dvx-button dvx-button--secondary"
-                          type="submit"
-                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                        >
-                          Change role
-                        </button>
-                      </form>
-                      <form action={deactivateCompanyMemberWithId}>
-                        <input type="hidden" name="member_id" value={member.id} />
-                        <button
-                          className="dvx-button dvx-button--secondary"
-                          type="submit"
-                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                        >
-                          Deactivate
-                        </button>
-                      </form>
-                    </>
-                  ) : null}
-                </span>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

@@ -77,7 +77,7 @@ declare
   fns text[] := array[
     'create_company_invitation', 'admin_resend_company_invitation', 'admin_revoke_company_invitation',
     'accept_company_invitation', 'company_change_member_role', 'company_deactivate_member',
-    'update_company_profile'
+    'update_company_profile', 'list_company_member_identities'
   ];
 begin
   foreach fn in array fns loop
@@ -412,6 +412,62 @@ select test_assert_raises(
   $sql$ select admin_resend_company_invitation((select id from company_invitations where email = 'resend-target@example.test')) $sql$,
   'invitation_not_pending'
 );
+
+-- ---------------------------------------------------------------------------
+-- 13. list_company_member_identities (human-friendly Users & Roles / Team
+-- page display) mirrors the exact visibility boundary of the existing
+-- company_members_select_same_company RLS policy -- same-company member or
+-- platform staff, never a cross-tenant read.
+-- ---------------------------------------------------------------------------
+
+select test_set_current_user('80000001-0000-0000-0000-000000000002'); -- owner-a, Company A
+
+do $$
+declare
+  v_count int;
+begin
+  select count(*) into v_count
+    from list_company_member_identities('90000001-0000-0000-0000-000000000001')
+    where email = 'owner-a@example.test';
+
+  perform test_assert(
+    'Company A owner resolves their own email for Company A''s member list',
+    v_count = 1
+  );
+end;
+$$;
+
+select test_set_current_user('80000001-0000-0000-0000-000000000004'); -- owner-b, Company B
+
+do $$
+declare
+  v_count int;
+begin
+  select count(*) into v_count from list_company_member_identities('90000001-0000-0000-0000-000000000001');
+
+  perform test_assert(
+    'Company B owner gets zero rows querying Company A''s member identities (cross-tenant read denied)',
+    v_count = 0
+  );
+end;
+$$;
+
+select test_set_current_user('80000001-0000-0000-0000-000000000001'); -- super_admin, no membership anywhere
+
+do $$
+declare
+  v_count int;
+begin
+  select count(*) into v_count
+    from list_company_member_identities('90000001-0000-0000-0000-000000000001')
+    where email = 'owner-a@example.test';
+
+  perform test_assert(
+    'Platform staff can resolve member identities for a company they are not a member of',
+    v_count = 1
+  );
+end;
+$$;
 
 reset role;
 
