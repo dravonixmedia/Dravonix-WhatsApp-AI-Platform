@@ -12,6 +12,14 @@ import {
   startSupportAccessAction,
   suspendCompanyAction,
 } from "../../../../lib/actions/admin.js";
+import {
+  adminAddKnowledgeSourceAction,
+  adminRemoveKnowledgeSourceAction,
+  adminToggleKnowledgeSourceAction,
+  adminUpdateCompanyAiSettingsAction,
+  adminUpdateCompanyProfileAction,
+  adminUpdateCompanyVoiceSettingsAction,
+} from "../../../../lib/actions/adminCompanyConfig.js";
 import { adminUpdateMemberDisplayNameAction } from "../../../../lib/actions/memberIdentity.js";
 import { EditDisplayNameControl } from "../../../../components/EditDisplayNameControl.js";
 import { InvitationActions } from "../../../../components/InvitationActions.js";
@@ -43,6 +51,25 @@ const SUBSCRIPTION_STATES = [
   "manually_suspended",
   "closed",
 ];
+
+const KNOWLEDGE_SOURCE_TYPES = [
+  "company_profile",
+  "service",
+  "product",
+  "faq",
+  "pricing",
+  "location",
+  "policy",
+  "document",
+];
+
+const KNOWLEDGE_STATUS_BADGE: Record<string, string> = {
+  ready: "dvx-badge--success",
+  processing: "dvx-badge--info",
+  pending: "dvx-badge--neutral",
+  failed: "dvx-badge--danger",
+  disabled: "dvx-badge--neutral",
+};
 
 const KNOWN_FEATURE_KEYS = [
   "web_research_enabled",
@@ -90,6 +117,9 @@ export default async function AdminCompanyDetailPage({
     supportSessionsResult,
     companySettingsResult,
     knowledgeSourcesResult,
+    aiSettingsResult,
+    voiceSettingsResult,
+    knowledgeSourcesListResult,
   ] = await Promise.all([
     supabase
       .from("company_members")
@@ -137,7 +167,7 @@ export default async function AdminCompanyDetailPage({
       .limit(10),
     supabase
       .from("company_settings")
-      .select("bot_name, welcome_message")
+      .select("bot_name, welcome_message, tone, enabled_languages, default_reply_mode, ai_active")
       .eq("company_id", id)
       .maybeSingle(),
     supabase
@@ -145,6 +175,21 @@ export default async function AdminCompanyDetailPage({
       .select("id", { count: "exact", head: true })
       .eq("company_id", id)
       .eq("is_enabled", true),
+    supabase
+      .from("ai_settings")
+      .select("reply_length, unknown_answer_behavior")
+      .eq("company_id", id)
+      .maybeSingle(),
+    supabase
+      .from("voice_settings")
+      .select("is_enabled, reply_mode")
+      .eq("company_id", id)
+      .maybeSingle(),
+    supabase
+      .from("knowledge_sources")
+      .select("id, source_type, title, is_enabled, ingestion_status, ingestion_error, created_at")
+      .eq("company_id", id)
+      .order("created_at", { ascending: false }),
   ]);
 
   const { data: memberIdentityRows } = await supabase.rpc("list_company_member_identities", {
@@ -188,6 +233,9 @@ export default async function AdminCompanyDetailPage({
   const planInfo = Array.isArray(planRow?.plans) ? planRow?.plans[0] : planRow?.plans;
 
   const companySettings = companySettingsResult.data;
+  const aiSettings = aiSettingsResult.data;
+  const voiceSettings = voiceSettingsResult.data;
+  const knowledgeSourcesList = knowledgeSourcesListResult.data ?? [];
   const activeOwnerOrAdminCount = members.filter(
     (m) => m.is_active && (m.role === "company_owner" || m.role === "company_admin"),
   ).length;
@@ -214,6 +262,15 @@ export default async function AdminCompanyDetailPage({
   const setCompanyEntitlementWithId = setCompanyEntitlementAction.bind(null, id);
   const startSupportAccessWithId = startSupportAccessAction.bind(null, id);
   const endSupportAccessWithId = endSupportAccessAction.bind(null, id);
+  const adminUpdateCompanyProfileWithId = adminUpdateCompanyProfileAction.bind(null, id);
+  const adminUpdateCompanyAiSettingsWithId = adminUpdateCompanyAiSettingsAction.bind(null, id);
+  const adminUpdateCompanyVoiceSettingsWithId = adminUpdateCompanyVoiceSettingsAction.bind(
+    null,
+    id,
+  );
+  const adminAddKnowledgeSourceWithId = adminAddKnowledgeSourceAction.bind(null, id);
+  const adminToggleKnowledgeSourceWithId = adminToggleKnowledgeSourceAction.bind(null, id);
+  const adminRemoveKnowledgeSourceWithId = adminRemoveKnowledgeSourceAction.bind(null, id);
 
   return (
     <div>
@@ -368,6 +425,74 @@ export default async function AdminCompanyDetailPage({
             </form>
           ) : null}
         </div>
+      </div>
+
+      {/* Company Profile edit -- Client Dashboard Permission Hardening
+          (migration 00000000000022) made the client-facing Company Settings
+          page read-only; this is the one place company profile/timezone/
+          currency can actually be changed now. */}
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+          Company profile
+        </div>
+        <form
+          action={adminUpdateCompanyProfileWithId}
+          style={{ display: "flex", flexDirection: "column", gap: "0.6rem", maxWidth: 480 }}
+        >
+          <label style={{ fontSize: "0.8rem" }}>
+            Company name
+            <input
+              className="dvx-input"
+              name="name"
+              defaultValue={company.name}
+              required
+              style={{ marginTop: "0.3rem" }}
+            />
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Industry
+            <input
+              className="dvx-input"
+              name="industry"
+              defaultValue={company.industry ?? ""}
+              style={{ marginTop: "0.3rem" }}
+            />
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Country
+            <input
+              className="dvx-input"
+              name="country"
+              defaultValue={company.country ?? ""}
+              style={{ marginTop: "0.3rem" }}
+            />
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Timezone (IANA identifier)
+            <input
+              className="dvx-input"
+              name="timezone"
+              defaultValue={company.timezone}
+              style={{ marginTop: "0.3rem" }}
+            />
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Currency (ISO 4217)
+            <input
+              className="dvx-input"
+              name="default_currency"
+              defaultValue={company.default_currency}
+              style={{ marginTop: "0.3rem" }}
+            />
+          </label>
+          <button
+            className="dvx-button dvx-button--secondary"
+            type="submit"
+            style={{ alignSelf: "flex-start" }}
+          >
+            Save company profile
+          </button>
+        </form>
       </div>
 
       {/* Onboarding & Readiness */}
@@ -567,6 +692,284 @@ export default async function AdminCompanyDetailPage({
             ))}
           </div>
         )}
+      </div>
+
+      {/* DRAIVA AI Settings -- Client Dashboard Permission Hardening
+          (migration 00000000000022) made /dashboard/ai-settings read-only;
+          this is the one place AI/voice configuration can actually be
+          changed now, over the same company_settings/ai_settings/
+          voice_settings schema (no duplicate settings system). */}
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+          DRAIVA AI settings
+        </div>
+        <form
+          action={adminUpdateCompanyAiSettingsWithId}
+          style={{ display: "flex", flexDirection: "column", gap: "0.6rem", maxWidth: 480 }}
+        >
+          <label style={{ fontSize: "0.8rem" }}>
+            Assistant name
+            <input
+              className="dvx-input"
+              name="bot_name"
+              defaultValue={companySettings?.bot_name ?? "Assistant"}
+              style={{ marginTop: "0.3rem" }}
+            />
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Welcome message
+            <textarea
+              className="dvx-input"
+              name="welcome_message"
+              defaultValue={companySettings?.welcome_message ?? ""}
+              rows={2}
+              style={{ marginTop: "0.3rem", resize: "vertical" }}
+            />
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Tone
+            <select
+              className="dvx-input"
+              name="tone"
+              defaultValue={companySettings?.tone ?? "friendly_professional"}
+              style={{ marginTop: "0.3rem" }}
+            >
+              <option value="friendly_professional">Friendly &amp; professional</option>
+              <option value="formal">Formal</option>
+              <option value="casual">Casual</option>
+            </select>
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Supported languages (comma-separated, e.g. en, ml)
+            <input
+              className="dvx-input"
+              name="enabled_languages"
+              defaultValue={(companySettings?.enabled_languages ?? ["en"]).join(", ")}
+              style={{ marginTop: "0.3rem" }}
+            />
+          </label>
+          <label
+            style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem" }}
+          >
+            <input
+              type="checkbox"
+              name="ai_active"
+              defaultChecked={companySettings?.ai_active ?? true}
+            />
+            AI replies are active
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Default reply mode
+            <select
+              className="dvx-input"
+              name="default_reply_mode"
+              defaultValue={companySettings?.default_reply_mode ?? "auto"}
+              style={{ marginTop: "0.3rem" }}
+            >
+              <option value="auto">Auto</option>
+              <option value="text_only">Text only</option>
+              <option value="voice_only">Voice only</option>
+              <option value="text_and_voice">Text and voice</option>
+            </select>
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Reply length
+            <select
+              className="dvx-input"
+              name="reply_length"
+              defaultValue={aiSettings?.reply_length ?? "medium"}
+              style={{ marginTop: "0.3rem" }}
+            >
+              <option value="short">Short</option>
+              <option value="medium">Medium</option>
+              <option value="long">Long</option>
+            </select>
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            When the assistant doesn&apos;t know an answer
+            <select
+              className="dvx-input"
+              name="unknown_answer_behavior"
+              defaultValue={aiSettings?.unknown_answer_behavior ?? "escalate"}
+              style={{ marginTop: "0.3rem" }}
+            >
+              <option value="escalate">Hand over to a human</option>
+              <option value="static_fallback">Use a fallback message</option>
+              <option value="best_effort">Best-effort answer</option>
+            </select>
+          </label>
+          <button
+            className="dvx-button dvx-button--secondary"
+            type="submit"
+            style={{ alignSelf: "flex-start" }}
+          >
+            Save AI settings
+          </button>
+        </form>
+
+        <form
+          action={adminUpdateCompanyVoiceSettingsWithId}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.6rem",
+            maxWidth: 480,
+            marginTop: "1.25rem",
+            paddingTop: "1rem",
+            borderTop: "1px solid var(--border-default)",
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>Voice</div>
+          <label
+            style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem" }}
+          >
+            <input
+              type="checkbox"
+              name="voice_enabled"
+              defaultChecked={voiceSettings?.is_enabled ?? true}
+            />
+            Voice replies enabled
+          </label>
+          <label style={{ fontSize: "0.8rem" }}>
+            Voice reply mode
+            <select
+              className="dvx-input"
+              name="voice_reply_mode"
+              defaultValue={voiceSettings?.reply_mode ?? "auto"}
+              style={{ marginTop: "0.3rem" }}
+            >
+              <option value="auto">Auto</option>
+              <option value="text_only">Text only</option>
+              <option value="voice_only">Voice only</option>
+              <option value="text_and_voice">Text and voice</option>
+            </select>
+          </label>
+          <button
+            className="dvx-button dvx-button--secondary"
+            type="submit"
+            style={{ alignSelf: "flex-start" }}
+          >
+            Save voice settings
+          </button>
+        </form>
+      </div>
+
+      {/* Knowledge Base -- Client Dashboard Permission Hardening (migration
+          00000000000022) made /dashboard/knowledge read-only; this is the
+          one place sources can be added/enabled/disabled/removed now, over
+          the same knowledge_sources/knowledge_chunks schema (no parallel
+          knowledge system, no upload/reindex/ingestion capability). */}
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+          Knowledge base
+        </div>
+        {knowledgeSourcesList.length === 0 ? (
+          <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+            No knowledge sources yet.
+          </p>
+        ) : (
+          <div className="dvx-team-member-list">
+            {knowledgeSourcesList.map((source) => {
+              return (
+                <div key={source.id} className="dvx-team-member-row">
+                  <span className="dvx-team-member-name">
+                    {source.title}
+                    <span
+                      className="dvx-muted"
+                      style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}
+                    >
+                      {source.source_type.replace(/_/g, " ")}
+                    </span>
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span
+                      className={`dvx-badge ${KNOWLEDGE_STATUS_BADGE[source.ingestion_status] ?? "dvx-badge--neutral"}`}
+                      style={{ fontSize: "0.7rem" }}
+                      title={source.ingestion_error ?? undefined}
+                    >
+                      {source.ingestion_status.replace(/_/g, " ")}
+                    </span>
+                    <span
+                      className={`dvx-badge ${source.is_enabled ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                      style={{ fontSize: "0.7rem" }}
+                    >
+                      {source.is_enabled ? "Enabled" : "Disabled"}
+                    </span>
+                    <form action={adminToggleKnowledgeSourceWithId}>
+                      <input type="hidden" name="source_id" value={source.id} />
+                      <input
+                        type="hidden"
+                        name="next_enabled"
+                        value={(!source.is_enabled).toString()}
+                      />
+                      <button
+                        className="dvx-button dvx-button--secondary"
+                        type="submit"
+                        style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                      >
+                        {source.is_enabled ? "Disable" : "Enable"}
+                      </button>
+                    </form>
+                    <form action={adminRemoveKnowledgeSourceWithId}>
+                      <input type="hidden" name="source_id" value={source.id} />
+                      <button
+                        className="dvx-button dvx-button--secondary"
+                        type="submit"
+                        style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                      >
+                        Remove
+                      </button>
+                    </form>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <form
+          action={adminAddKnowledgeSourceWithId}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.6rem",
+            marginTop: "1rem",
+            paddingTop: "1rem",
+            borderTop: "1px solid var(--border-default)",
+          }}
+        >
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <input
+              className="dvx-input"
+              name="title"
+              placeholder="Title"
+              required
+              style={{ flex: 1, minWidth: 180 }}
+            />
+            <select
+              className="dvx-input"
+              name="source_type"
+              defaultValue="faq"
+              style={{ maxWidth: 200 }}
+            >
+              {KNOWLEDGE_SOURCE_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {type.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+          <textarea
+            className="dvx-input"
+            name="content"
+            placeholder="Content the assistant should know (optional -- can add later)"
+            rows={3}
+            style={{ resize: "vertical" }}
+          />
+          <button className="dvx-button" type="submit" style={{ alignSelf: "flex-start" }}>
+            Add source
+          </button>
+        </form>
       </div>
 
       {/* Entitlements */}

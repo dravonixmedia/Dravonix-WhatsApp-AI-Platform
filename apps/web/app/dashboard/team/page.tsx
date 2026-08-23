@@ -1,15 +1,9 @@
-import {
-  companyChangeMemberRoleAction,
-  companyDeactivateMemberAction,
-} from "../../../lib/actions/invitations.js";
 import { updateMemberDisplayNameAction } from "../../../lib/actions/memberIdentity.js";
 import { EditDisplayNameControl } from "../../../components/EditDisplayNameControl.js";
-import { InvitationActions } from "../../../components/InvitationActions.js";
 import { resolveMemberIdentity } from "../../../lib/memberIdentity.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
-import { InviteMemberForm } from "./InviteMemberForm.js";
 
 export const dynamic = "force-dynamic";
 
@@ -23,14 +17,22 @@ const ROLE_LABELS: Record<string, string> = {
   viewer: "Viewer",
 };
 
-const COMPANY_ROLES = Object.keys(ROLE_LABELS);
-
 /**
- * Team Settings -- people and access. Invite (migration 18's
- * create_company_invitation), pending-invitation management (resend/revoke),
- * role changes and deactivation now go through real, team.manage-gated RPCs
- * (company_change_member_role/company_deactivate_member) -- this page no
- * longer only reads company_members.
+ * Team Settings -- client Dashboard Permission Hardening (migration
+ * 00000000000022): the client Team page is now view + display-name-edit
+ * only. Inviting teammates, resending/revoking invitations, changing
+ * roles, and activating/deactivating members are Dravonix-only now,
+ * managed from Super Admin -> Companies -> [Company] -- team.manage was
+ * revoked from every client role at the database level, so those RPCs
+ * (create_company_invitation, admin_resend_company_invitation,
+ * admin_revoke_company_invitation, company_change_member_role,
+ * company_deactivate_member) are no longer reachable by any client
+ * session even if this page still rendered forms for them; removing the
+ * forms here just keeps the UI honest about what a client can actually do.
+ * Editing an existing member's display name remains available to
+ * team.view + team.display_name.manage holders (company_owner/
+ * company_admin), via the same shared update_user_display_name RPC/
+ * EditDisplayNameControl used elsewhere.
  */
 export default async function TeamSettingsPage() {
   const session = await getDashboardSession();
@@ -38,31 +40,24 @@ export default async function TeamSettingsPage() {
 
   const capabilities = getDashboardCapabilities(session.activeRole);
 
-  if (!capabilities.canManageTeam) {
+  if (!capabilities.canViewTeam) {
     return (
       <div className="dvx-card" style={{ maxWidth: 480 }}>
         <h1 style={{ fontSize: "1.1rem", margin: "0 0 0.5rem" }}>Team Settings</h1>
         <p className="dvx-muted" style={{ margin: 0 }}>
-          Your role does not have permission to manage team members.
+          Your role does not have permission to view the team.
         </p>
       </div>
     );
   }
 
   const supabase = await createServerSupabaseClient();
-  const [membersResult, invitationsResult] = await Promise.all([
-    supabase
-      .from("company_members")
-      .select("id, user_id, role, is_active, created_at")
-      .eq("company_id", session.activeCompanyId)
-      .order("created_at", { ascending: true }),
-    supabase
-      .from("company_invitations")
-      .select("id, email, role, status, expires_at, created_at")
-      .eq("company_id", session.activeCompanyId)
-      .eq("status", "pending")
-      .order("created_at", { ascending: false }),
-  ]);
+  const { data: membersData, error } = await supabase
+    .from("company_members")
+    .select("id, user_id, role, is_active, created_at")
+    .eq("company_id", session.activeCompanyId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
 
   const { data: memberIdentityRows } = await supabase.rpc("list_company_member_identities", {
     p_company_id: session.activeCompanyId,
@@ -79,43 +74,15 @@ export default async function TeamSettingsPage() {
     ]),
   );
 
-  const members = membersResult.data ?? [];
-  const invitations = invitationsResult.data ?? [];
+  const members = membersData ?? [];
   const activeMembers = members.filter((m) => m.is_active);
 
   return (
     <div>
       <h1 className="dvx-page-title">Team Settings</h1>
-      <p className="dvx-muted">Manage team members, roles and access to this workspace.</p>
-
-      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
-        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
-          Invite a teammate
-        </div>
-        <InviteMemberForm companyId={session.activeCompanyId} />
-      </div>
-
-      {invitations.length > 0 ? (
-        <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
-          <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
-            Pending invitations
-          </div>
-          <div className="dvx-team-member-list">
-            {invitations.map((invitation) => (
-              <div key={invitation.id} className="dvx-team-member-row">
-                <span className="dvx-team-member-name">
-                  Invite sent to {invitation.email}
-                  <span className="dvx-muted" style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}>
-                    {ROLE_LABELS[invitation.role] ?? invitation.role} · {invitation.status} ·
-                    expires {new Date(invitation.expires_at).toLocaleDateString()}
-                  </span>
-                </span>
-                <InvitationActions invitationId={invitation.id} />
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      <p className="dvx-muted">
+        View team members and their access. Inviting, roles, and activation are managed by Dravonix.
+      </p>
 
       <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
         <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
@@ -159,59 +126,21 @@ export default async function TeamSettingsPage() {
                     className="dvx-team-member-badges"
                     style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
                   >
+                    <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
+                      {ROLE_LABELS[member.role] ?? member.role}
+                    </span>
                     <span
                       className={`dvx-badge ${member.is_active ? "dvx-badge--success" : "dvx-badge--neutral"}`}
                       style={{ fontSize: "0.7rem" }}
                     >
                       {member.is_active ? "Active" : "Disabled"}
                     </span>
-                    <EditDisplayNameControl
-                      currentDisplayName={memberIdentity?.displayName ?? null}
-                      onSave={updateDisplayNameWithMember}
-                    />
-                    {member.is_active && member.id !== session.activeMemberId ? (
-                      <>
-                        <form
-                          action={companyChangeMemberRoleAction}
-                          style={{ display: "flex", gap: "0.3rem" }}
-                        >
-                          <input type="hidden" name="member_id" value={member.id} />
-                          <select
-                            className="dvx-input"
-                            name="new_role"
-                            defaultValue={member.role}
-                            style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem" }}
-                          >
-                            {COMPANY_ROLES.map((role) => (
-                              <option key={role} value={role}>
-                                {ROLE_LABELS[role]}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            className="dvx-button dvx-button--secondary"
-                            type="submit"
-                            style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                          >
-                            Change role
-                          </button>
-                        </form>
-                        <form action={companyDeactivateMemberAction}>
-                          <input type="hidden" name="member_id" value={member.id} />
-                          <button
-                            className="dvx-button dvx-button--secondary"
-                            type="submit"
-                            style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                          >
-                            Deactivate
-                          </button>
-                        </form>
-                      </>
-                    ) : (
-                      <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
-                        {ROLE_LABELS[member.role] ?? member.role}
-                      </span>
-                    )}
+                    {capabilities.canManageDisplayNames ? (
+                      <EditDisplayNameControl
+                        currentDisplayName={memberIdentity?.displayName ?? null}
+                        onSave={updateDisplayNameWithMember}
+                      />
+                    ) : null}
                   </span>
                 </div>
               );

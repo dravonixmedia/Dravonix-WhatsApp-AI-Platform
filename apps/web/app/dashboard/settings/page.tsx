@@ -1,13 +1,8 @@
 import Link from "next/link";
 import { maskPhoneNumber } from "@dravonix/handover";
-import { listSupportedCurrencies } from "../../../lib/currencyList.js";
-import { updateCompanyProfileAction } from "../../../lib/actions/companyProfile.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
-import { listSupportedTimezones } from "../../../lib/timezoneList.js";
-import { CurrencySelect } from "./CurrencySelect.js";
-import { TimezoneCombobox } from "./TimezoneCombobox.js";
 
 export const dynamic = "force-dynamic";
 
@@ -47,18 +42,22 @@ function SectionCard({
 }
 
 /**
- * Company Settings -- company configuration only (company profile,
- * business timezone/currency, subscription status, WhatsApp connection
- * summary). Team member management now lives on its own route,
- * app/dashboard/team/page.tsx -- see that file's docstring for why the
- * split happened. This page never queries company_members.
+ * Company Settings -- Client Dashboard Permission Hardening (migration
+ * 00000000000022) made this page fully read-only: settings.manage was
+ * revoked from every client role at the database level, so
+ * update_company_profile/update_company_timezone/update_company_currency
+ * would now be rejected even if this page still rendered forms for them.
+ * Company profile, timezone and currency are managed by Dravonix from
+ * Super Admin -> Companies -> [Company] via admin_update_company_profile.
+ * Team member management lives on its own route,
+ * app/dashboard/team/page.tsx. This page never queries company_members.
  */
 export default async function SettingsPage() {
   const session = await getDashboardSession();
   if (!session) return null;
 
   const capabilities = getDashboardCapabilities(session.activeRole);
-  const canViewAnySection = capabilities.canManageSettings || capabilities.canManageBilling;
+  const canViewAnySection = capabilities.canViewSettings || capabilities.canViewBilling;
 
   if (!canViewAnySection) {
     return (
@@ -74,7 +73,7 @@ export default async function SettingsPage() {
   const supabase = await createServerSupabaseClient();
 
   const [companyResult, whatsappAccountResult] = await Promise.all([
-    capabilities.canManageSettings
+    capabilities.canViewSettings
       ? supabase
           .from("companies")
           .select(
@@ -83,7 +82,7 @@ export default async function SettingsPage() {
           .eq("id", session.activeCompanyId)
           .single()
       : Promise.resolve({ data: null }),
-    capabilities.canManageWhatsapp
+    capabilities.canViewWhatsapp
       ? supabase
           .from("whatsapp_accounts")
           .select("status, whatsapp_phone_numbers (display_phone_number)")
@@ -92,7 +91,7 @@ export default async function SettingsPage() {
       : Promise.resolve({ data: null }),
   ]);
 
-  const subscriptionResult = capabilities.canManageBilling
+  const subscriptionResult = capabilities.canViewBilling
     ? await supabase
         .from("subscriptions")
         .select("state, plan_versions (plans (name))")
@@ -125,11 +124,12 @@ export default async function SettingsPage() {
     <div>
       <h1 className="dvx-page-title">Company Settings</h1>
       <p className="dvx-muted">
-        Manage your company profile, business preferences and workspace configuration.
+        View your company profile, business preferences and workspace configuration. Changes are
+        made by Dravonix.
       </p>
 
       <div className="dvx-card-grid dvx-card-grid--wide" style={{ marginTop: "1.5rem" }}>
-        {capabilities.canManageSettings ? (
+        {capabilities.canViewSettings ? (
           <SectionCard id="company-details" title="Company details">
             {company?.is_demo ? (
               <div
@@ -139,80 +139,28 @@ export default async function SettingsPage() {
                 Demo / Test Account
               </div>
             ) : null}
-            <form
-              action={updateCompanyProfileAction}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.6rem",
-                marginBottom: "1rem",
-              }}
-            >
-              <label style={{ fontSize: "0.8rem" }}>
-                Company name
-                <input
-                  className="dvx-input"
-                  name="name"
-                  defaultValue={company?.name ?? ""}
-                  required
-                  style={{ marginTop: "0.3rem" }}
-                />
-              </label>
-              <label style={{ fontSize: "0.8rem" }}>
-                Industry
-                <input
-                  className="dvx-input"
-                  name="industry"
-                  defaultValue={company?.industry ?? ""}
-                  placeholder="e.g. Interior Fit-Out"
-                  style={{ marginTop: "0.3rem" }}
-                />
-              </label>
-              <label style={{ fontSize: "0.8rem" }}>
-                Country
-                <input
-                  className="dvx-input"
-                  name="country"
-                  defaultValue={company?.country ?? ""}
-                  placeholder="e.g. India"
-                  style={{ marginTop: "0.3rem" }}
-                />
-              </label>
-              <button
-                className="dvx-button dvx-button--secondary"
-                type="submit"
-                style={{ alignSelf: "flex-start", fontSize: "0.85rem" }}
-              >
-                Save profile
-              </button>
-            </form>
+            <SettingsRow label="Company name" value={company?.name ?? null} />
+            <SettingsRow label="Industry" value={company?.industry ?? null} />
+            <SettingsRow label="Country" value={company?.country ?? null} />
             <SettingsRow
               label="Account status"
               value={company?.status ? company.status.replace(/_/g, " ") : null}
             />
             <SettingsRow label="Admin email" value={adminEmail} />
-            <TimezoneCombobox
-              label="Business Timezone"
-              helpText="Used for business hours, operational dates and company-local scheduling context."
-              initialValue={company?.timezone ?? ""}
-              options={listSupportedTimezones()}
-              saveLabel="Save Timezone"
-            />
-            <CurrencySelect
-              label="Business Currency"
-              helpText="Used for financial values, billing displays and business-level monetary settings."
-              initialValue={company?.default_currency ?? "INR"}
-              currencies={listSupportedCurrencies()}
-              saveLabel="Save Currency"
-            />
+            <SettingsRow label="Business timezone" value={company?.timezone ?? null} />
+            <SettingsRow label="Business currency" value={company?.default_currency ?? null} />
             <SettingsRow
               label="Created"
               value={company?.created_at ? new Date(company.created_at).toLocaleDateString() : null}
             />
+            <p className="dvx-muted" style={{ fontSize: "0.8rem", marginTop: "0.5rem" }}>
+              Company profile, timezone and currency are managed by Dravonix -- contact your account
+              representative to request a change.
+            </p>
           </SectionCard>
         ) : null}
 
-        {capabilities.canManageBilling ? (
+        {capabilities.canViewBilling ? (
           <SectionCard title="Subscription status">
             <SettingsRow label="Current plan" value={planInfo?.name ?? "Not assigned"} />
             <SettingsRow
@@ -228,7 +176,7 @@ export default async function SettingsPage() {
           </SectionCard>
         ) : null}
 
-        {capabilities.canManageWhatsapp ? (
+        {capabilities.canViewWhatsapp ? (
           <SectionCard title="WhatsApp connection">
             <SettingsRow
               label="Connection status"

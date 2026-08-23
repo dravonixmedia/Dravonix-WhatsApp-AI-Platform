@@ -58,14 +58,17 @@ describe("Invitation creation and resend each trigger exactly one email attempt"
   });
 });
 
-describe("Both the Super Admin and client Team invite paths use the exact same invitation/email service", () => {
-  it("both InviteMemberForm usages render the identical shared component, not two separate implementations", () => {
+describe("Invitations are now a Super Admin-only path, using a single shared invitation/email service", () => {
+  it("the Super Admin company page renders the shared InviteMemberForm component", () => {
     const adminPage = readSource("app/admin/companies/[id]/page.tsx");
-    const teamPage = readSource("app/dashboard/team/page.tsx");
     expect(adminPage).toContain(
       'import { InviteMemberForm } from "../../../dashboard/team/InviteMemberForm.js"',
     );
-    expect(teamPage).toContain('import { InviteMemberForm } from "./InviteMemberForm.js"');
+  });
+
+  it("the client Team page no longer renders InviteMemberForm -- team.manage was revoked from every client role (migration 00000000000022), so inviting is Dravonix-only now", () => {
+    const teamPage = readSource("app/dashboard/team/page.tsx");
+    expect(teamPage).not.toContain("InviteMemberForm");
   });
 
   it("InviteMemberForm calls only createCompanyInvitationAction -- no separate client-side email call", () => {

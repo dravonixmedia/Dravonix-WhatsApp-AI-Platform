@@ -25,7 +25,7 @@ const SECRET_FIELD_NAMES = [
 ];
 
 describe("WhatsApp connection page", () => {
-  it("is gated behind capabilities.canManageWhatsapp before rendering any connection data", () => {
+  it("is gated behind capabilities.canViewWhatsapp before rendering any connection data", () => {
     const gateIndex = actionGuardIndex();
     const queryIndex = pageSource.indexOf('.from("whatsapp_accounts")');
     expect(gateIndex).toBeGreaterThan(-1);
@@ -59,6 +59,6 @@ describe("WhatsApp connection page", () => {
   });
 
   function actionGuardIndex(): number {
-    return pageSource.indexOf("if (!capabilities.canManageWhatsapp) return <PermissionDenied />;");
+    return pageSource.indexOf("if (!capabilities.canViewWhatsapp) return <PermissionDenied />;");
   }
 });

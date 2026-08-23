@@ -65,6 +65,15 @@ insert into company_members (id, company_id, user_id, role, is_active) values
   ('2a000001-1000-0000-0000-000000000003', '2bbbbbbb-1000-0000-0000-000000000002', '2a111111-0000-0000-0000-000000000003', 'company_owner', true),
   ('2a000001-1000-0000-0000-000000000004', '2aaaaaaa-1000-0000-0000-000000000001', '2a111111-0000-0000-0000-000000000004', 'agent', false);
 
+-- Super Admin fixture: after client permission hardening
+-- (00000000000022), the independence sequence below (originally exercised
+-- via the client owner's update_company_timezone/update_company_currency)
+-- must instead go through the Super Admin-only admin_update_company_profile.
+insert into auth.users (id, email) values
+  ('2a111111-0000-0000-0000-000000000005', 'super-admin-cur@example.test');
+insert into platform_members (user_id, role, is_active) values
+  ('2a111111-0000-0000-0000-000000000005', 'super_admin', true);
+
 select test_assert(
   'companies.timezone defaults to Asia/Kolkata and default_currency defaults to INR (real DB defaults)',
   (select timezone from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'Asia/Kolkata'
@@ -79,10 +88,19 @@ set local role authenticated;
 
 select test_set_current_user('2a111111-0000-0000-0000-000000000001');
 
-select update_company_currency('2aaaaaaa-1000-0000-0000-000000000001', 'AED');
+-- The client permission-hardening migration (00000000000022) revokes
+-- settings.manage from company_owner/company_admin entirely -- company
+-- currency is now Super Admin-only, via admin_update_company_profile.
+-- update_company_currency itself is unchanged and still correctly checks
+-- settings.manage; it is simply unreachable by any client role now.
+select test_assert_raises(
+  'Company A owner (no settings.manage after client permission hardening) cannot set Company A''s currency via the client RPC',
+  $$ select update_company_currency('2aaaaaaa-1000-0000-0000-000000000001', 'AED') $$,
+  'permission_denied'
+);
 select test_assert(
-  'Company A owner (settings.manage) can set Company A''s currency to a supported ISO 4217 code',
-  (select default_currency from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'AED'
+  'the rejected owner attempt above never actually changed Company A''s currency from its default',
+  (select default_currency from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'INR'
 );
 
 select test_assert_raises(
@@ -127,7 +145,7 @@ select test_assert_raises(
 
 select test_assert(
   'The rejected cross-tenant attempt above never actually changed Company A''s currency',
-  (select default_currency from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'AED'
+  (select default_currency from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'INR'
 );
 
 select test_set_current_user('2a111111-0000-0000-0000-000000000004');
@@ -141,26 +159,31 @@ select test_assert_raises(
 -- ---------------------------------------------------------------------------
 -- Independence: business timezone and business currency never affect each
 -- other, in either direction, across the exact sequence the product spec
--- calls out (Asia/Kolkata+INR -> Asia/Dubai+INR -> Asia/Dubai+AED).
+-- calls out (Asia/Kolkata+INR -> Asia/Dubai+INR -> Asia/Dubai+AED). Exercised
+-- via admin_update_company_profile (Super Admin-only after client permission
+-- hardening) -- update_company_timezone/update_company_currency themselves
+-- are unchanged and already proven independent above; this proves the new
+-- combined Super Admin RPC preserves that same independence when only one
+-- of p_timezone/p_default_currency is supplied at a time (the other left null).
 -- ---------------------------------------------------------------------------
 
-select test_set_current_user('2a111111-0000-0000-0000-000000000001');
+select test_set_current_user('2a111111-0000-0000-0000-000000000005'); -- super_admin
 
-select update_company_currency('2aaaaaaa-1000-0000-0000-000000000001', 'INR');
+select admin_update_company_profile('2aaaaaaa-1000-0000-0000-000000000001', 'Currency Co A', null, null, null, 'INR');
 select test_assert(
   'Reset: Company A is back to Asia/Kolkata + INR before the independence sequence',
   (select timezone from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'Asia/Kolkata'
   and (select default_currency from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'INR'
 );
 
-select update_company_timezone('2aaaaaaa-1000-0000-0000-000000000001', 'Asia/Dubai');
+select admin_update_company_profile('2aaaaaaa-1000-0000-0000-000000000001', 'Currency Co A', null, null, 'Asia/Dubai', null);
 select test_assert(
   'Updating timezone to Asia/Dubai changes only timezone -- currency stays INR, unchanged',
   (select timezone from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'Asia/Dubai'
   and (select default_currency from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'INR'
 );
 
-select update_company_currency('2aaaaaaa-1000-0000-0000-000000000001', 'AED');
+select admin_update_company_profile('2aaaaaaa-1000-0000-0000-000000000001', 'Currency Co A', null, null, null, 'AED');
 select test_assert(
   'Updating currency to AED changes only currency -- timezone stays Asia/Dubai, unchanged',
   (select timezone from companies where id = '2aaaaaaa-1000-0000-0000-000000000001') = 'Asia/Dubai'
