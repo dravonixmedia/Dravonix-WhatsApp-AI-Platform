@@ -59,4 +59,13 @@ describe("resolveMemberIdentity", () => {
     const input = { name: "Pranav Kallada", email: "pranavkallada.pk@gmail.com", userId: USER_ID };
     expect(resolveMemberIdentity(input)).toEqual(resolveMemberIdentity(input));
   });
+
+  it("accepts non-English/Unicode display names unchanged, not just ASCII", () => {
+    const identity = resolveMemberIdentity({
+      name: "Renée O'Malley-García",
+      email: "renee@example.test",
+      userId: USER_ID,
+    });
+    expect(identity.primary).toBe("Renée O'Malley-García");
+  });
 });

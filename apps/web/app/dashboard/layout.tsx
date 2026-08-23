@@ -2,6 +2,8 @@ import { handoverItemNeedsAttention, SupabaseHandoverRepository } from "@dravoni
 import { getDashboardCapabilities } from "../../lib/permissions.js";
 import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
+import { updateMemberDisplayNameAction } from "../../lib/actions/memberIdentity.js";
+import { resolveMemberIdentity } from "../../lib/memberIdentity.js";
 import { RealtimeRefreshBoundary } from "../../lib/realtime/RealtimeRefreshBoundary.js";
 import { DASHBOARD_SHELL_WATCHES } from "../../lib/realtime/watchConfigs.js";
 import { loadNotificationSummary } from "../../lib/repositories/notificationsRepository.js";
@@ -9,6 +11,7 @@ import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js"
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
+import { EditDisplayNameControl } from "../../components/EditDisplayNameControl.js";
 import { GlobalSearch } from "./GlobalSearch.js";
 import {
   BellIcon,
@@ -244,6 +247,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
     session.memberships.find((m) => m.companyId === session.activeCompanyId)?.companyName ??
     session.memberships[0]?.companyName ??
     "";
+  const ownIdentity = resolveMemberIdentity({
+    name: session.displayName,
+    email: session.email,
+    userId: session.userId,
+  });
+  const updateOwnDisplayNameAction = updateMemberDisplayNameAction.bind(null, session.userId);
 
   return (
     <NotificationPanelProvider>
@@ -336,7 +345,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
                 }}
                 title={session.email ?? undefined}
               >
-                {session.email}
+                {ownIdentity.primary}
               </div>
               <form action={logoutAction}>
                 <button
@@ -425,7 +434,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
               <details className="dvx-user-menu">
                 <summary>
-                  <Avatar label={session.email ?? "?"} size={32} />
+                  <Avatar label={ownIdentity.primary} size={32} />
                   <span
                     className="dvx-user-menu-label"
                     style={{
@@ -445,7 +454,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
                       }}
                       title={session.email ?? undefined}
                     >
-                      {session.email ?? "Account"}
+                      {ownIdentity.primary}
                     </span>
                     <span
                       className="dvx-muted"
@@ -471,6 +480,23 @@ export default async function DashboardLayout({ children }: { children: React.Re
                     }}
                   >
                     {roleLabel} · {session.email}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      gap: "0.5rem",
+                      marginBottom: "0.75rem",
+                    }}
+                  >
+                    <span className="dvx-muted" style={{ fontSize: "0.78rem" }}>
+                      Display name
+                    </span>
+                    <EditDisplayNameControl
+                      currentDisplayName={session.displayName}
+                      onSave={updateOwnDisplayNameAction}
+                    />
                   </div>
                   <form action={logoutAction}>
                     <button

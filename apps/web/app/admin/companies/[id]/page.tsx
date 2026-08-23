@@ -12,6 +12,8 @@ import {
   startSupportAccessAction,
   suspendCompanyAction,
 } from "../../../../lib/actions/admin.js";
+import { adminUpdateMemberDisplayNameAction } from "../../../../lib/actions/memberIdentity.js";
+import { EditDisplayNameControl } from "../../../../components/EditDisplayNameControl.js";
 import { InvitationActions } from "../../../../components/InvitationActions.js";
 import { resolveMemberIdentity } from "../../../../lib/memberIdentity.js";
 import { computeOnboardingChecklist } from "../../../../lib/onboarding.js";
@@ -148,10 +150,16 @@ export default async function AdminCompanyDetailPage({
   const { data: memberIdentityRows } = await supabase.rpc("list_company_member_identities", {
     p_company_id: id,
   });
-  const memberEmailById = new Map(
-    ((memberIdentityRows ?? []) as Array<{ member_id: string; email: string | null }>).map(
-      (row) => [row.member_id, row.email],
-    ),
+  type MemberIdentityRow = {
+    member_id: string;
+    email: string | null;
+    display_name: string | null;
+  };
+  const memberIdentityById = new Map(
+    ((memberIdentityRows ?? []) as MemberIdentityRow[]).map((row) => [
+      row.member_id,
+      { email: row.email, displayName: row.display_name },
+    ]),
   );
 
   const members = membersResult.data ?? [];
@@ -416,10 +424,17 @@ export default async function AdminCompanyDetailPage({
         ) : (
           <div className="dvx-team-member-list">
             {members.map((member) => {
+              const memberIdentity = memberIdentityById.get(member.id);
               const identity = resolveMemberIdentity({
-                email: memberEmailById.get(member.id) ?? null,
+                name: memberIdentity?.displayName ?? null,
+                email: memberIdentity?.email ?? null,
                 userId: member.user_id,
               });
+              const adminUpdateDisplayNameWithMember = adminUpdateMemberDisplayNameAction.bind(
+                null,
+                id,
+                member.user_id,
+              );
               return (
                 <div key={member.id} className="dvx-team-member-row">
                   <span className="dvx-team-member-name">
@@ -446,6 +461,10 @@ export default async function AdminCompanyDetailPage({
                     >
                       {member.is_active ? "Active" : "Disabled"}
                     </span>
+                    <EditDisplayNameControl
+                      currentDisplayName={memberIdentity?.displayName ?? null}
+                      onSave={adminUpdateDisplayNameWithMember}
+                    />
                     {member.is_active ? (
                       <>
                         <form

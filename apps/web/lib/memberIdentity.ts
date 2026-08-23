@@ -1,12 +1,12 @@
 /**
  * Human-friendly identity for a company member row, shared by the Super
  * Admin "Users & Roles" card and the client Team page so both surfaces
- * resolve the same way rather than duplicating this priority logic. No
- * `display_name`/`full_name` field exists anywhere in this schema yet (see
- * migration 00000000000021_member_identity.sql's own audit note) -- `name`
- * is accepted here so this already matches the required display priority
- * the moment a real name field exists, without another pass through every
- * call site.
+ * resolve the same way rather than duplicating this priority logic. The
+ * `name` field is the editable `user_profiles.display_name` introduced by
+ * migration 00000000000021_member_identity.sql, resolved via
+ * list_company_member_identities alongside email -- absent until a user or
+ * an authorized admin sets one, in which case email remains the primary
+ * identity.
  */
 export interface MemberIdentitySource {
   name?: string | null;

@@ -2,6 +2,8 @@ import {
   companyChangeMemberRoleAction,
   companyDeactivateMemberAction,
 } from "../../../lib/actions/invitations.js";
+import { updateMemberDisplayNameAction } from "../../../lib/actions/memberIdentity.js";
+import { EditDisplayNameControl } from "../../../components/EditDisplayNameControl.js";
 import { InvitationActions } from "../../../components/InvitationActions.js";
 import { resolveMemberIdentity } from "../../../lib/memberIdentity.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
@@ -65,10 +67,16 @@ export default async function TeamSettingsPage() {
   const { data: memberIdentityRows } = await supabase.rpc("list_company_member_identities", {
     p_company_id: session.activeCompanyId,
   });
-  const memberEmailById = new Map(
-    ((memberIdentityRows ?? []) as Array<{ member_id: string; email: string | null }>).map(
-      (row) => [row.member_id, row.email],
-    ),
+  type MemberIdentityRow = {
+    member_id: string;
+    email: string | null;
+    display_name: string | null;
+  };
+  const memberIdentityById = new Map(
+    ((memberIdentityRows ?? []) as MemberIdentityRow[]).map((row) => [
+      row.member_id,
+      { email: row.email, displayName: row.display_name },
+    ]),
   );
 
   const members = membersResult.data ?? [];
@@ -121,10 +129,16 @@ export default async function TeamSettingsPage() {
           <div className="dvx-team-member-list">
             {members.map((member) => {
               const isSelf = member.id === session.activeMemberId;
+              const memberIdentity = memberIdentityById.get(member.id);
               const identity = resolveMemberIdentity({
-                email: (isSelf ? session.email : memberEmailById.get(member.id)) ?? null,
+                name: memberIdentity?.displayName ?? null,
+                email: (isSelf ? session.email : memberIdentity?.email) ?? null,
                 userId: member.user_id,
               });
+              const updateDisplayNameWithMember = updateMemberDisplayNameAction.bind(
+                null,
+                member.user_id,
+              );
               return (
                 <div key={member.id} className="dvx-team-member-row">
                   <span className="dvx-team-member-name">
@@ -151,6 +165,10 @@ export default async function TeamSettingsPage() {
                     >
                       {member.is_active ? "Active" : "Disabled"}
                     </span>
+                    <EditDisplayNameControl
+                      currentDisplayName={memberIdentity?.displayName ?? null}
+                      onSave={updateDisplayNameWithMember}
+                    />
                     {member.is_active && member.id !== session.activeMemberId ? (
                       <>
                         <form

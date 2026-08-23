@@ -21,6 +21,7 @@ function readSource(relativePath: string): string {
 
 const superAdminSource = readSource("app/admin/companies/[id]/page.tsx");
 const teamPageSource = readSource("app/dashboard/team/page.tsx");
+const dashboardLayoutSource = readSource("app/dashboard/layout.tsx");
 
 describe("human-friendly member identity wiring", () => {
   it("the Super Admin Users & Roles card imports the shared resolveMemberIdentity helper", () => {
@@ -64,5 +65,44 @@ describe("human-friendly member identity wiring", () => {
     expect(teamPageSource).toMatch(
       /resolveMemberIdentity\(\{[\s\S]{0,200}userId:\s*member\.user_id/,
     );
+  });
+
+  it("both pages resolve the editable display_name from list_company_member_identities, not just email", () => {
+    expect(superAdminSource).toMatch(/resolveMemberIdentity\(\{[\s\S]{0,200}name:/);
+    expect(teamPageSource).toMatch(/resolveMemberIdentity\(\{[\s\S]{0,200}name:/);
+  });
+
+  it("the Super Admin card uses the dedicated admin_update_user_display_name RPC (via its Server Action), never the company-scoped one", () => {
+    expect(superAdminSource).toMatch(
+      /import\s*\{\s*adminUpdateMemberDisplayNameAction\s*\}\s*from\s*["'].*memberIdentity\.js["']/,
+    );
+    expect(superAdminSource).toMatch(/adminUpdateMemberDisplayNameAction\.bind\(/);
+    expect(superAdminSource).not.toMatch(/\bupdateMemberDisplayNameAction\b/);
+  });
+
+  it("the Team page uses the company-scoped update_user_display_name RPC (via its Server Action)", () => {
+    expect(teamPageSource).toMatch(
+      /import\s*\{\s*updateMemberDisplayNameAction\s*\}\s*from\s*["'].*memberIdentity\.js["']/,
+    );
+    expect(teamPageSource).toMatch(/updateMemberDisplayNameAction\.bind\(/);
+  });
+
+  it("both pages render the shared EditDisplayNameControl rather than a bespoke edit form", () => {
+    expect(superAdminSource).toMatch(/<EditDisplayNameControl/);
+    expect(teamPageSource).toMatch(/<EditDisplayNameControl/);
+  });
+
+  it("the dashboard layout's self-edit control uses the company-scoped RPC (self-edit is authorized by that RPC's own is_self bypass)", () => {
+    expect(dashboardLayoutSource).toMatch(
+      /import\s*\{\s*updateMemberDisplayNameAction\s*\}\s*from\s*["'].*memberIdentity\.js["']/,
+    );
+    expect(dashboardLayoutSource).toMatch(
+      /updateMemberDisplayNameAction\.bind\(\s*null,\s*session\.userId\s*\)/,
+    );
+    expect(dashboardLayoutSource).toMatch(/<EditDisplayNameControl/);
+  });
+
+  it("the dashboard layout never interpolates session.userId directly into rendered markup", () => {
+    expect(dashboardLayoutSource).not.toMatch(/\{session\.userId\}/);
   });
 });
