@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { acceptInviteAction } from "../../../lib/actions/acceptInvite.js";
 
-const ERROR_MESSAGES: Record<string, string> = {
+export const ERROR_MESSAGES: Record<string, string> = {
   missing_fields: "Email and password are required.",
   invalid_credentials: "That password doesn't match an existing account with this email.",
   signup_failed: "Couldn't create an account with this email -- it may already be registered.",
