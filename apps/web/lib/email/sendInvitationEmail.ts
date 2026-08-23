@@ -1,6 +1,6 @@
 import "server-only";
 
-import { loadEnv, platformBrand } from "@dravonix/config";
+import { loadEnv } from "@dravonix/config";
 import {
   MockEmailProvider,
   renderInvitationEmail,
@@ -72,7 +72,6 @@ export async function sendInvitationEmail(
       roleLabel: input.roleLabel,
       acceptUrl: input.acceptUrl,
       expiresAt: input.expiresAt,
-      supportEmail: platformBrand.supportEmail,
     });
 
     const result = await provider.send({
