@@ -1,9 +1,8 @@
 import {
   companyChangeMemberRoleAction,
   companyDeactivateMemberAction,
-  resendCompanyInvitationAction,
-  revokeCompanyInvitationAction,
 } from "../../../lib/actions/invitations.js";
+import { InvitationActions } from "../../../components/InvitationActions.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
@@ -105,31 +104,7 @@ export default async function TeamSettingsPage() {
                     expires {new Date(invitation.expires_at).toLocaleDateString()}
                   </span>
                 </span>
-                <span style={{ display: "flex", gap: "0.4rem" }}>
-                  <form
-                    action={async () => {
-                      "use server";
-                      await resendCompanyInvitationAction(invitation.id);
-                    }}
-                  >
-                    <button
-                      className="dvx-button dvx-button--secondary"
-                      type="submit"
-                      style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                    >
-                      Resend
-                    </button>
-                  </form>
-                  <form action={revokeCompanyInvitationAction.bind(null, invitation.id)}>
-                    <button
-                      className="dvx-button dvx-button--secondary"
-                      type="submit"
-                      style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                    >
-                      Revoke
-                    </button>
-                  </form>
-                </span>
+                <InvitationActions invitationId={invitation.id} />
               </div>
             ))}
           </div>

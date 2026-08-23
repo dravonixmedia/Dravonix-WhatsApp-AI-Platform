@@ -12,10 +12,7 @@ import {
   startSupportAccessAction,
   suspendCompanyAction,
 } from "../../../../lib/actions/admin.js";
-import {
-  resendCompanyInvitationAction,
-  revokeCompanyInvitationAction,
-} from "../../../../lib/actions/invitations.js";
+import { InvitationActions } from "../../../../components/InvitationActions.js";
 import { computeOnboardingChecklist } from "../../../../lib/onboarding.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 
@@ -518,31 +515,7 @@ export default async function AdminCompanyDetailPage({
                     {invitation.status}
                   </span>
                   {invitation.status === "pending" ? (
-                    <>
-                      <form
-                        action={async () => {
-                          "use server";
-                          await resendCompanyInvitationAction(invitation.id);
-                        }}
-                      >
-                        <button
-                          className="dvx-button dvx-button--secondary"
-                          type="submit"
-                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                        >
-                          Resend
-                        </button>
-                      </form>
-                      <form action={revokeCompanyInvitationAction.bind(null, invitation.id)}>
-                        <button
-                          className="dvx-button dvx-button--secondary"
-                          type="submit"
-                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
-                        >
-                          Revoke
-                        </button>
-                      </form>
-                    </>
+                    <InvitationActions invitationId={invitation.id} />
                   ) : null}
                 </span>
               </div>

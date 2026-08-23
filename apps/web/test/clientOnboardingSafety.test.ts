@@ -208,8 +208,10 @@ describe("Super Admin can invite a customer who has no existing DRAIVA Auth acco
     expect(source).toContain("invitation.status");
     expect(source).toContain("invitation.created_at");
     expect(source).toContain("invitation.expires_at");
-    expect(source).toContain("resendCompanyInvitationAction");
-    expect(source).toContain("revokeCompanyInvitationAction");
+    // Resend/Revoke live in the shared InvitationActions component (see
+    // invitationResendFeedback.test.ts), not as bare action calls in this
+    // page's own source.
+    expect(source).toMatch(/<InvitationActions\s+invitationId=\{invitation\.id\}\s*\/>/);
   });
 
   it("existing member management (role change, deactivate) is untouched -- only the invite mechanism changed", () => {
