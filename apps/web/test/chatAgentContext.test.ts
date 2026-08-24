@@ -226,6 +226,32 @@ describe("loadChatAgentContext: contact and lead", () => {
       notes: null,
     });
   });
+
+  it("Phase 3A.1: masks the lead's own phone_number before it ever enters the DRAIVA context/prompt, regardless of the caller's own phone-visibility permission", async () => {
+    const chains = defaultChains({
+      leads: fakeChain({
+        data: {
+          customer_name: "Anjali",
+          company_name: null,
+          phone_number: "919820000001",
+          email: null,
+          service_interest: "Website redesign",
+          budget: null,
+          preferred_timeline: null,
+          location: null,
+          notes: null,
+        },
+        error: null,
+      }),
+    });
+    const client = fakeSupabaseClient(chains);
+
+    const context = await loadChatAgentContext(client, COMPANY_ID, CONVERSATION_ID, []);
+
+    expect(context.lead?.phone).not.toBe("919820000001");
+    expect(context.lead?.phone).not.toContain("919820000001");
+    expect(context.lead?.phone).toMatch(/\*/);
+  });
 });
 
 describe("loadChatAgentContext: history bounding and message filtering", () => {

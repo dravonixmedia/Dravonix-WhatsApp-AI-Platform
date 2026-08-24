@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { deriveUnreadCount, maskPhoneNumber } from "@dravonix/handover";
+import { deriveUnreadCount } from "@dravonix/handover";
+import { getConversationPhoneDisplays, resolvePhoneDisplay } from "./phoneDisplay.js";
 
 export { NOTIFICATION_BADGE_DISPLAY_CAP, formatBadgeCount } from "../notificationBadge.js";
 
@@ -34,8 +35,8 @@ interface CandidateConversationRow {
   handover_last_read_at: string | null;
   last_message_at: string;
   contacts:
-    | { whatsapp_wa_id: string; display_name: string | null; profile_name: string | null }
-    | { whatsapp_wa_id: string; display_name: string | null; profile_name: string | null }[]
+    | { display_name: string | null; profile_name: string | null }
+    | { display_name: string | null; profile_name: string | null }[]
     | null;
 }
 
@@ -66,9 +67,7 @@ export async function loadNotificationSummary(
 ): Promise<NotificationSummary> {
   const { data: conversations, error } = await client
     .from("conversations")
-    .select(
-      "id, handover_last_read_at, last_message_at, contacts (whatsapp_wa_id, display_name, profile_name)",
-    )
+    .select("id, handover_last_read_at, last_message_at, contacts (display_name, profile_name)")
     .eq("company_id", companyId)
     .neq("state", "closed")
     .not("last_message_at", "is", null);
@@ -102,14 +101,22 @@ export async function loadNotificationSummary(
     inboundByConversation.set(message.conversation_id, list);
   }
 
+  const unreadCandidates = candidates.filter(
+    (row) =>
+      deriveUnreadCount(inboundByConversation.get(row.id) ?? [], row.handover_last_read_at) > 0,
+  );
+  const phoneDisplays = await getConversationPhoneDisplays(
+    client,
+    unreadCandidates.map((row) => row.id),
+  );
+
   let totalUnreadCustomerMessages = 0;
   const unreadConversations: UnreadConversationSummary[] = [];
-  for (const row of candidates) {
+  for (const row of unreadCandidates) {
     const unreadCount = deriveUnreadCount(
       inboundByConversation.get(row.id) ?? [],
       row.handover_last_read_at,
     );
-    if (unreadCount === 0) continue;
     totalUnreadCustomerMessages += unreadCount;
     const contact = Array.isArray(row.contacts) ? row.contacts[0] : row.contacts;
     unreadConversations.push({
@@ -117,7 +124,7 @@ export async function loadNotificationSummary(
       displayName:
         contact?.display_name ??
         contact?.profile_name ??
-        (contact ? maskPhoneNumber(contact.whatsapp_wa_id) : "Customer"),
+        resolvePhoneDisplay(phoneDisplays, row.id).maskedPhoneNumber,
       unreadCount,
     });
   }

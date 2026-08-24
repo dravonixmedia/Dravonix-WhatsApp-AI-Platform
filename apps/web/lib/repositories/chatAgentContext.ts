@@ -116,7 +116,13 @@ export async function loadChatAgentContext(
     ? {
         customerName: leadRow.customer_name,
         companyName: leadRow.company_name,
-        phone: leadRow.phone_number,
+        // Phase 3A.1: masked unconditionally, regardless of the caller's own
+        // phone-visibility permission -- the assistant does not need the
+        // literal digits to reason about a lead, so this is deliberately
+        // stricter than the UI's own authorization-aware display (see the
+        // Phase 3A.1 report's "DRAIVA AI privacy" section). Mirrors how
+        // `contact.maskedPhoneNumber` below has always been masked here.
+        phone: leadRow.phone_number ? maskPhoneNumber(leadRow.phone_number) : null,
         email: leadRow.email,
         serviceInterest: leadRow.service_interest,
         budget: leadRow.budget,
