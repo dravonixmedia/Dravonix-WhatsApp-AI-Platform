@@ -55,7 +55,8 @@ declare
   fn text;
   fns text[] := array[
     'mask_wa_id', 'phone_is_full_for_caller', 'get_conversation_phone_displays',
-    'get_lead_phone_displays', 'search_company_conversations', 'search_company_leads'
+    'get_lead_phone_displays', 'search_company_conversations', 'search_company_leads',
+    'get_conversation_send_target'
   ];
 begin
   foreach fn in array fns loop
@@ -475,6 +476,39 @@ begin
   perform test_assert('sales-a: full-number lead search matches their own assigned lead', v_ids @> array['a3000001-0000-0000-0000-000000000001'::uuid]);
 end;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- 13. get_conversation_send_target: the outbound-routing lookup added for
+--     sendHumanReplyAction (Phase 3A security-review sweep found it running
+--     under the invoking user's own `authenticated` session, reading
+--     contacts.whatsapp_wa_id directly -- not actually a service_role
+--     trusted-backend path as earlier phase notes had assumed). Returns the
+--     RAW wa_id (never masked -- it addresses the real outbound Graph API
+--     call), gated by the same conversations.view/is_platform_staff()
+--     boundary this read already relied on before this migration existed.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare v_wa_id text; v_phone_number_id text; begin
+  perform test_set_current_user('b3000001-0000-0000-0000-000000000005'); -- sales-a, may view conv 2
+  select whatsapp_wa_id, phone_number_id into v_wa_id, v_phone_number_id
+    from get_conversation_send_target('f3000001-0000-0000-0000-000000000002');
+  perform test_assert('get_conversation_send_target returns the real raw wa_id for an authorized caller', v_wa_id = '971501234567');
+end; $$;
+
+do $$
+declare v_count integer; begin
+  perform test_set_current_user('b3000001-0000-0000-0000-000000000007'); -- company_accounts (no conversations.view)
+  select count(*) into v_count from get_conversation_send_target('f3000001-0000-0000-0000-000000000002');
+  perform test_assert('get_conversation_send_target returns zero rows for a caller with no conversations.view', v_count = 0);
+end; $$;
+
+do $$
+declare v_count integer; begin
+  perform test_set_current_user('b3000002-0000-0000-0000-000000000001'); -- owner of Company B
+  select count(*) into v_count from get_conversation_send_target('f3000001-0000-0000-0000-000000000002'); -- Company A's conversation
+  perform test_assert('get_conversation_send_target returns zero rows for a cross-tenant caller', v_count = 0);
+end; $$;
 
 reset role;
 

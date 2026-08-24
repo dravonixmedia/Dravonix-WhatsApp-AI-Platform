@@ -132,6 +132,17 @@ export async function loadOlderMessagesAction(
  * @dravonix/handover's sendHumanReply, which reserves the outbound message,
  * checks whatsapp_send entitlement, calls the real WhatsApp provider, and
  * finalizes/classifies the result -- all before this action returns.
+ *
+ * Phase 3A security correction: this runs under the invoking dashboard
+ * user's own `authenticated` session (getHandoverRepo() ->
+ * createServerSupabaseClient()), not service_role -- so the raw wa_id it
+ * needs to address the outbound Graph API call is resolved via
+ * get_conversation_send_target (migration 25), not a direct
+ * `contacts.whatsapp_wa_id` column select, so this keeps working once
+ * Migration 26 revokes that column's direct authenticated grant. The raw
+ * value returned here is never sent back to the browser -- it's consumed
+ * immediately below to build the outbound send and this function returns
+ * void.
  */
 export async function sendHumanReplyAction(
   conversationId: string,
@@ -143,24 +154,14 @@ export async function sendHumanReplyAction(
 
   const { supabase, repo } = await getHandoverRepo();
 
-  const { data: conversation, error } = await supabase
-    .from("conversations")
-    .select(
-      "whatsapp_phone_number_id, contacts (whatsapp_wa_id), whatsapp_phone_numbers (phone_number_id)",
-    )
-    .eq("id", conversationId)
+  const { data, error } = await supabase
+    .rpc("get_conversation_send_target", { p_conversation_id: conversationId })
     .single();
   if (error) throw error;
 
-  const contact = Array.isArray(conversation.contacts)
-    ? conversation.contacts[0]
-    : conversation.contacts;
-  const phoneNumber = Array.isArray(conversation.whatsapp_phone_numbers)
-    ? conversation.whatsapp_phone_numbers[0]
-    : conversation.whatsapp_phone_numbers;
-
-  const toWaId = contact?.whatsapp_wa_id as string | undefined;
-  const phoneNumberId = phoneNumber?.phone_number_id as string | undefined;
+  const target = data as { whatsapp_wa_id: string; phone_number_id: string | null } | null;
+  const toWaId = target?.whatsapp_wa_id;
+  const phoneNumberId = target?.phone_number_id ?? undefined;
   if (!toWaId || !phoneNumberId) {
     throw new Error("Conversation is missing WhatsApp routing information");
   }

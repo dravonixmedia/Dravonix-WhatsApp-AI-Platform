@@ -352,3 +352,65 @@ $$;
 
 revoke all on function search_company_leads(uuid, text, integer) from public, anon;
 grant execute on function search_company_leads(uuid, text, integer) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 7. get_conversation_send_target: closes a gap found during the Phase 3A
+--    security-correction sweep. apps/web/lib/actions/handover.ts's
+--    sendHumanReplyAction runs under the invoking dashboard user's own
+--    `authenticated` session (createServerSupabaseClient()), NOT
+--    service_role -- it is not actually one of this codebase's trusted
+--    service-role backend paths, unlike webhook ingest/message-consumer/
+--    voice-consumer, even though earlier phase notes had grouped it with
+--    them. It reads contacts.whatsapp_wa_id directly today to build the
+--    Meta Graph API destination address for an outbound human reply. That
+--    raw read is a genuine, legitimate need (you cannot send a WhatsApp
+--    message without the real wa_id) that Migration 26's authenticated-role
+--    table-level SELECT revoke would otherwise break outright, so it is
+--    migrated onto a dedicated SECURITY DEFINER RPC now, before Migration 26
+--    exists, exactly like every other read path in this file.
+--
+--    Deliberately returns the RAW wa_id (never masked) -- this value is
+--    only ever consumed server-side to address an outbound Graph API call
+--    and is never sent back to the browser (see sendHumanReplyAction, which
+--    only awaits the send and returns void). Authorization mirrors the
+--    exact boundary this read already relies on today (conversations.view
+--    OR is_platform_staff()) -- this migration does not narrow or widen who
+--    may trigger a human reply, only moves the same-shaped check inside a
+--    function so it survives the coming table-level REVOKE.
+-- ---------------------------------------------------------------------------
+
+create or replace function get_conversation_send_target(p_conversation_id uuid)
+returns table (whatsapp_wa_id text, phone_number_id text)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_company_id uuid;
+begin
+  if auth.uid() is null then raise exception 'unauthorized'; end if;
+
+  select c.company_id into v_company_id
+    from public.conversations c
+    where c.id = p_conversation_id;
+
+  if v_company_id is null then return; end if;
+  if not (public.has_company_permission(v_company_id, 'conversations.view') or public.is_platform_staff()) then
+    return;
+  end if;
+
+  return query
+    select ct.whatsapp_wa_id, wpn.phone_number_id
+    from public.conversations c
+    join public.contacts ct on ct.id = c.contact_id
+    left join public.whatsapp_phone_numbers wpn on wpn.id = c.whatsapp_phone_number_id
+    where c.id = p_conversation_id;
+end;
+$$;
+
+comment on function get_conversation_send_target(uuid) is
+  'Server-side-only outbound routing lookup for sendHumanReplyAction -- returns the RAW wa_id/phone_number_id needed to address the Meta Graph API, gated by the same conversations.view/is_platform_staff() boundary the row already relies on today. Never call this to populate anything rendered to the browser -- use get_conversation_phone_displays for that.';
+
+revoke all on function get_conversation_send_target(uuid) from public, anon;
+grant execute on function get_conversation_send_target(uuid) to authenticated;

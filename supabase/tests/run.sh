@@ -102,6 +102,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_role_team_sec
 echo "Running Phase 3A.1 secure phone read layer (migration 25) RLS/RPC hardening assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_phone_privacy_security.sql"
 
+echo "Running Phase 3A.2 direct phone-column access closure (migration 26) assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_phone_direct_access_revoke.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
