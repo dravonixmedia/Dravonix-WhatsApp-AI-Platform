@@ -240,7 +240,7 @@ export default async function ConversationDetailPage({
             </div>
 
             <ConversationThread
-              key={session.activeCompanyId}
+              key={conversationId}
               conversationId={conversationId}
               initialMessages={thread.messages}
               initialHasMore={thread.hasMore}
