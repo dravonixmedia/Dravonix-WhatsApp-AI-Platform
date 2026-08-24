@@ -6,3 +6,8 @@ export {
   type InvitationEmailInput,
   type RenderedEmail,
 } from "./invitationEmail.js";
+export {
+  renderNewSupportRequestEmail,
+  type SupportRequestTypeLabelInput,
+} from "./supportRequestEmail.js";
+export { renderSupportReplyEmail, type SupportReplyEmailInput } from "./supportReplyEmail.js";

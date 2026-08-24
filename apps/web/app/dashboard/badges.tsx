@@ -4,6 +4,12 @@ import type {
   OutboundDeliveryStatus,
 } from "@dravonix/handover";
 import type { LeadStage } from "../../lib/repositories/leadsRepository.js";
+import {
+  SUPPORT_REQUEST_PRIORITY_LABELS,
+  SUPPORT_REQUEST_STATUS_LABELS,
+  type SupportRequestPriority,
+  type SupportRequestStatus,
+} from "../../lib/repositories/supportRequestsRepository.js";
 
 /**
  * Single source of truth for every status badge's label + color across the
@@ -116,4 +122,48 @@ export function leadStageLabel(stage: LeadStage): string {
 
 export function LeadStageBadge({ stage }: { stage: LeadStage }) {
   return <span className={leadStageBadgeClass(stage)}>{leadStageLabel(stage)}</span>;
+}
+
+export function supportRequestStatusBadgeClass(status: SupportRequestStatus): string {
+  switch (status) {
+    case "resolved":
+      return "dvx-badge dvx-badge--success";
+    case "closed":
+      return "dvx-badge dvx-badge--neutral";
+    case "waiting_on_client":
+      return "dvx-badge dvx-badge--warning";
+    case "in_progress":
+      return "dvx-badge dvx-badge--info";
+    default:
+      return "dvx-badge dvx-badge--brand";
+  }
+}
+
+export function SupportRequestStatusBadge({ status }: { status: SupportRequestStatus }) {
+  return (
+    <span className={supportRequestStatusBadgeClass(status)}>
+      {SUPPORT_REQUEST_STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+export function supportRequestPriorityBadgeClass(priority: SupportRequestPriority): string {
+  switch (priority) {
+    case "urgent":
+      return "dvx-badge dvx-badge--danger";
+    case "high":
+      return "dvx-badge dvx-badge--warning";
+    case "low":
+      return "dvx-badge dvx-badge--neutral";
+    default:
+      return "dvx-badge dvx-badge--info";
+  }
+}
+
+export function SupportRequestPriorityBadge({ priority }: { priority: SupportRequestPriority }) {
+  return (
+    <span className={supportRequestPriorityBadgeClass(priority)}>
+      {SUPPORT_REQUEST_PRIORITY_LABELS[priority]}
+    </span>
+  );
 }

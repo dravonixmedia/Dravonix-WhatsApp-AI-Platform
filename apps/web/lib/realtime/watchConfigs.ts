@@ -89,6 +89,32 @@ export const LEAD_DETAIL_WATCHES: RealtimeWatch[] = [
   { table: "leads", filterColumn: "id", event: "UPDATE" },
 ];
 
+/**
+ * /dashboard/support (Support & Requests list). Mirrors LEADS_LIST_WATCHES'
+ * own precedent exactly: support_requests/support_request_messages are not
+ * added to the supabase_realtime publication (see migration 13's comment on
+ * why `leads` itself was deliberately left out) -- both pages refresh via
+ * revalidatePath after each mutation rather than a live push subscription.
+ * These watch lists exist for consistency with every other list/detail
+ * page's RealtimeRefreshBoundary wiring, not because a live update is
+ * currently broadcast for these tables.
+ */
+export const SUPPORT_REQUESTS_LIST_WATCHES: RealtimeWatch[] = [
+  { table: "support_requests", filterColumn: "company_id", event: "INSERT" },
+  { table: "support_requests", filterColumn: "company_id", event: "UPDATE" },
+];
+
+/**
+ * /dashboard/support/[requestId] -- one specific, already-existing request.
+ * support_request_messages has no company_id column of its own (it's scoped
+ * via its parent request_id), so the detail page's own realtime boundary
+ * (scopeId=requestId) filters this by request_id instead.
+ */
+export const SUPPORT_REQUEST_DETAIL_WATCHES: RealtimeWatch[] = [
+  { table: "support_requests", filterColumn: "id", event: "UPDATE" },
+  { table: "support_request_messages", filterColumn: "request_id", event: "INSERT" },
+];
+
 /** Every watch list above, for tests that need to audit all of them at once. */
 export const ALL_WATCH_LISTS: Record<string, RealtimeWatch[]> = {
   CONVERSATIONS_LIST_WATCHES,
@@ -98,4 +124,6 @@ export const ALL_WATCH_LISTS: Record<string, RealtimeWatch[]> = {
   LEADS_LIST_WATCHES,
   LEAD_DETAIL_WATCHES,
   DASHBOARD_SHELL_WATCHES,
+  SUPPORT_REQUESTS_LIST_WATCHES,
+  SUPPORT_REQUEST_DETAIL_WATCHES,
 };

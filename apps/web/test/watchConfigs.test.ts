@@ -9,9 +9,11 @@ import {
   LEADS_LIST_WATCHES,
   LEAD_DETAIL_WATCHES,
   MESSAGE_THREAD_WATCHES,
+  SUPPORT_REQUESTS_LIST_WATCHES,
+  SUPPORT_REQUEST_DETAIL_WATCHES,
 } from "../lib/realtime/watchConfigs.js";
 
-const KNOWN_TENANT_FILTER_COLUMNS = new Set(["company_id", "id", "conversation_id"]);
+const KNOWN_TENANT_FILTER_COLUMNS = new Set(["company_id", "id", "conversation_id", "request_id"]);
 
 describe("every dashboard realtime watch list", () => {
   for (const [name, watches] of Object.entries(ALL_WATCH_LISTS)) {
@@ -96,6 +98,20 @@ describe("specific watch lists match their documented, minimal scope", () => {
     expect(LEADS_LIST_WATCHES).toEqual([
       { table: "leads", filterColumn: "company_id", event: "INSERT" },
       { table: "leads", filterColumn: "company_id", event: "UPDATE" },
+    ]);
+  });
+
+  it("SUPPORT_REQUESTS_LIST_WATCHES watches both INSERT and UPDATE, scoped by company_id", () => {
+    expect(SUPPORT_REQUESTS_LIST_WATCHES).toEqual([
+      { table: "support_requests", filterColumn: "company_id", event: "INSERT" },
+      { table: "support_requests", filterColumn: "company_id", event: "UPDATE" },
+    ]);
+  });
+
+  it("SUPPORT_REQUEST_DETAIL_WATCHES scopes support_requests by id and support_request_messages by request_id (it has no company_id column of its own)", () => {
+    expect(SUPPORT_REQUEST_DETAIL_WATCHES).toEqual([
+      { table: "support_requests", filterColumn: "id", event: "UPDATE" },
+      { table: "support_request_messages", filterColumn: "request_id", event: "INSERT" },
     ]);
   });
 

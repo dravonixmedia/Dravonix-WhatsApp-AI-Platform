@@ -25,6 +25,7 @@ export type PermissionKey =
   | "leads.manage"
   | "leads.view"
   | "settings.view"
+  | "support_requests.view"
   | "team.display_name.manage"
   | "team.manage"
   | "team.view"
@@ -72,6 +73,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "leads.manage",
     "leads.view",
     "settings.view",
+    "support_requests.view",
     "team.display_name.manage",
     "team.manage",
     "team.view",
@@ -93,6 +95,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "leads.manage",
     "leads.view",
     "settings.view",
+    "support_requests.view",
     "team.display_name.manage",
     "team.manage",
     "team.view",
@@ -111,6 +114,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "knowledge.view",
     "leads.manage",
     "leads.view",
+    "support_requests.view",
     "team.view",
     "usage.view",
     "whatsapp.view",
@@ -125,6 +129,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "knowledge.view",
     "leads.manage",
     "leads.view",
+    "support_requests.view",
     "team.view",
     "whatsapp.view",
   ]),
@@ -136,9 +141,10 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "knowledge.view",
     "leads.manage",
     "leads.view",
+    "support_requests.view",
     "team.view",
   ]),
-  company_accounts: new Set(["billing.view", "usage.view"]),
+  company_accounts: new Set(["billing.view", "support_requests.view", "usage.view"]),
   agent: new Set([
     "conversations.reply",
     "conversations.view",
@@ -195,6 +201,7 @@ export interface DashboardCapabilities {
   canManageLeads: boolean;
   canViewUsage: boolean;
   canViewAudit: boolean;
+  canViewSupportRequests: boolean;
 }
 
 /**
@@ -240,5 +247,6 @@ export function getDashboardCapabilities(role: CompanyRole | null): DashboardCap
     canManageLeads: hasPermission(role, "leads.manage"),
     canViewUsage: hasPermission(role, "usage.view"),
     canViewAudit: hasPermission(role, "audit.view"),
+    canViewSupportRequests: hasPermission(role, "support_requests.view"),
   };
 }
