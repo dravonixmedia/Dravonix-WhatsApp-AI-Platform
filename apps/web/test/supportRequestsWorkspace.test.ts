@@ -29,6 +29,7 @@ const adminDetailPage = readSource("app/admin/support-requests/[requestId]/page.
 const clientActions = readSource("lib/actions/supportRequests.ts");
 const adminActions = readSource("lib/actions/adminSupport.ts");
 const repository = readSource("lib/repositories/supportRequestsRepository.ts");
+const adminLayout = readSource("app/admin/layout.tsx");
 
 describe("Client Support & Requests page: access and create flow", () => {
   it("gates the whole page behind capabilities.canViewSupportRequests, granted to all six active roles via support_requests.view", () => {
@@ -161,6 +162,25 @@ describe("Super Admin Support & Requests list: filters and columns", () => {
     expect(adminListPage).not.toContain("canViewSupportRequests");
     expect(adminListPage).not.toContain("getDashboardSession");
   });
+
+  it("neither the list page nor the detail page duplicates its own platformRole check -- both rely entirely on app/admin/layout.tsx", () => {
+    for (const source of [adminListPage, adminDetailPage]) {
+      expect(source).not.toContain("platformRole");
+      expect(source).not.toContain("getPlatformSession");
+    }
+  });
+});
+
+describe("app/admin/layout.tsx: the single gate for the entire /admin/* tree, including support-requests", () => {
+  it("strictly requires platformRole === 'super_admin' -- not merely truthy -- so platform_support/platform_billing_admin can never render any /admin page", () => {
+    expect(adminLayout).toMatch(/session\.platformRole\s*!==\s*"super_admin"/);
+  });
+
+  it("never widens the gate to admit platform_support/platform_billing_admin or any is_platform_staff()-style check", () => {
+    expect(adminLayout).not.toMatch(/platformRole\s*===\s*"platform_support"/);
+    expect(adminLayout).not.toMatch(/platformRole\s*===\s*"platform_billing_admin"/);
+    expect(adminLayout).not.toContain("isPlatformStaff");
+  });
 });
 
 describe("Super Admin Support & Requests detail: full management surface", () => {
@@ -190,10 +210,29 @@ describe("Super Admin Support & Requests detail: full management surface", () =>
   });
 });
 
-describe("Super Admin Server Actions: platform-staff only, one RPC per action", () => {
-  it("requirePlatformStaffClient checks platformRole is set -- not restricted to super_admin only (platform_support/platform_billing_admin also qualify, matching admin_start_support_access's own precedent)", () => {
-    expect(adminActions).toContain("async function requirePlatformStaffClient()");
-    expect(adminActions).toMatch(/if \(!session \|\| !session\.platformRole\)/);
+describe("Super Admin Server Actions: super_admin only (not the broader platform-staff precedent), one RPC per action", () => {
+  it("requireSuperAdminClient checks platformRole is exactly super_admin -- authorization correction: platform_support/platform_billing_admin are explicitly NOT approved as support agents for this phase, so this deliberately does not follow admin_start_support_access's broader precedent", () => {
+    expect(adminActions).toContain("async function requireSuperAdminClient()");
+    expect(adminActions).toMatch(/if \(!session \|\| session\.platformRole !== "super_admin"\)/);
+    expect(adminActions).not.toContain("requirePlatformStaffClient");
+  });
+
+  it("every admin action calls requireSuperAdminClient, not the broader platform-staff check", () => {
+    const actionNames = [
+      "adminReplySupportRequestAction",
+      "adminUpdateSupportRequestStatusAction",
+      "adminResolveSupportRequestAction",
+      "adminReopenSupportRequestAction",
+      "adminUpdateSupportRequestPriorityAction",
+      "adminAssignSupportRequestAction",
+    ];
+    for (const name of actionNames) {
+      const fnStart = adminActions.indexOf(`export async function ${name}`);
+      expect(fnStart).toBeGreaterThan(-1);
+      const fnEnd = adminActions.indexOf("\nexport async function", fnStart + 1);
+      const body = adminActions.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+      expect(body).toContain("requireSuperAdminClient()");
+    }
   });
 
   it("every admin action calls exactly one RPC for its own mutation", () => {

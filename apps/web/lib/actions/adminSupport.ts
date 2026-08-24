@@ -1,12 +1,22 @@
 "use server";
 
 /**
- * Phase 5: Client Support & Requests -- Super Admin/platform-staff Server
- * Actions. Every mutation is a thin wrapper around exactly one SECURITY
+ * Phase 5: Client Support & Requests -- Super Admin Server Actions.
+ * Authorization correction: this module (and every RPC it calls) is now
+ * scoped to platformRole === "super_admin" specifically, never the broader
+ * "any active platform_members row" -- platform_support and
+ * platform_billing_admin are explicitly NOT approved as support agents for
+ * this phase. Every mutation is a thin wrapper around exactly one SECURITY
  * DEFINER RPC (migration 27), each of which independently re-checks
- * is_platform_staff() -- these actions add no authorization logic of their
- * own beyond requiring *some* platform-staff session before calling, the
- * same shape as apps/web/lib/actions/admin.ts's requireSuperAdminClient.
+ * current_platform_role() IS NOT DISTINCT FROM 'super_admin' -- this
+ * module's own check is defense-in-depth, the same shape as
+ * apps/web/lib/actions/admin.ts's requireSuperAdminClient (the RPC is the
+ * real, unbypassable authorization boundary either way). The
+ * /admin/support-requests pages themselves need no additional check beyond
+ * this: app/admin/layout.tsx already gates the entire /admin/* tree on
+ * platformRole === "super_admin" specifically (verified directly, not
+ * assumed), so platform_support/platform_billing_admin can never even
+ * render these pages in the first place.
  *
  * The client-reply-notification email (final plan section 18) is
  * best-effort and never corrupts the reply record: the
@@ -27,9 +37,9 @@ import {
   type SupportRequestStatus,
 } from "../repositories/supportRequestsRepository.js";
 
-async function requirePlatformStaffClient() {
+async function requireSuperAdminClient() {
   const session = await getPlatformSession();
-  if (!session || !session.platformRole) {
+  if (!session || session.platformRole !== "super_admin") {
     throw new Error("Not authorized");
   }
   return createServerSupabaseClient();
@@ -44,7 +54,7 @@ export async function adminReplySupportRequestAction(
   requestId: string,
   formData: FormData,
 ): Promise<void> {
-  const supabase = await requirePlatformStaffClient();
+  const supabase = await requireSuperAdminClient();
   const message = String(formData.get("message") ?? "").trim();
   if (!message) throw new Error("Message is required");
   const isInternal = formData.get("is_internal") === "on";
@@ -97,7 +107,7 @@ export async function adminUpdateSupportRequestStatusAction(
   requestId: string,
   status: SupportRequestStatus,
 ): Promise<void> {
-  const supabase = await requirePlatformStaffClient();
+  const supabase = await requireSuperAdminClient();
   const { error } = await supabase.rpc("admin_update_support_request_status", {
     p_request_id: requestId,
     p_status: status,
@@ -107,7 +117,7 @@ export async function adminUpdateSupportRequestStatusAction(
 }
 
 export async function adminResolveSupportRequestAction(requestId: string): Promise<void> {
-  const supabase = await requirePlatformStaffClient();
+  const supabase = await requireSuperAdminClient();
   const { error } = await supabase.rpc("admin_resolve_support_request", {
     p_request_id: requestId,
   });
@@ -116,7 +126,7 @@ export async function adminResolveSupportRequestAction(requestId: string): Promi
 }
 
 export async function adminReopenSupportRequestAction(requestId: string): Promise<void> {
-  const supabase = await requirePlatformStaffClient();
+  const supabase = await requireSuperAdminClient();
   const { error } = await supabase.rpc("admin_reopen_support_request", { p_request_id: requestId });
   if (error) throw error;
   revalidateSupportPaths(requestId);
@@ -126,7 +136,7 @@ export async function adminUpdateSupportRequestPriorityAction(
   requestId: string,
   priority: SupportRequestPriority,
 ): Promise<void> {
-  const supabase = await requirePlatformStaffClient();
+  const supabase = await requireSuperAdminClient();
   const { error } = await supabase.rpc("admin_update_support_request_priority", {
     p_request_id: requestId,
     p_priority: priority,
@@ -139,7 +149,7 @@ export async function adminAssignSupportRequestAction(
   requestId: string,
   platformUserId: string | null,
 ): Promise<void> {
-  const supabase = await requirePlatformStaffClient();
+  const supabase = await requireSuperAdminClient();
   const { error } = await supabase.rpc("admin_assign_support_request", {
     p_request_id: requestId,
     p_platform_user_id: platformUserId,

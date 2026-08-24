@@ -57,11 +57,13 @@ insert into auth.users (id, email) values
   ('f1000001-0000-0000-0000-000000000003', 'accounts-a-sr@example.test'),
   ('f1000001-0000-0000-0000-000000000004', 'deactivated-a-sr@example.test'),
   ('f2000001-0000-0000-0000-000000000001', 'owner-b-sr@example.test'),
-  ('f0000002-0000-0000-0000-000000000001', 'platform-support-sr@example.test');
+  ('f0000002-0000-0000-0000-000000000001', 'platform-support-sr@example.test'),
+  ('f0000003-0000-0000-0000-000000000001', 'platform-billing-admin-sr@example.test');
 
 insert into platform_members (user_id, role, is_active) values
   ('f0000001-0000-0000-0000-000000000001', 'super_admin', true),
-  ('f0000002-0000-0000-0000-000000000001', 'platform_support', true);
+  ('f0000002-0000-0000-0000-000000000001', 'platform_support', true),
+  ('f0000003-0000-0000-0000-000000000001', 'platform_billing_admin', true);
 
 insert into companies (id, name, slug, status, is_demo) values
   ('c1000001-0000-0000-0000-000000000001', 'Support Req Co A', 'support-req-co-a', 'active', true),
@@ -201,9 +203,9 @@ select test_assert_raises_like(
 
 -- ---------------------------------------------------------------------------
 -- 5. Company A client cannot set an internal note, change status, or
---    change priority -- these RPCs are is_platform_staff()-gated; an
---    ordinary company member (even the owner) is rejected regardless of
---    their company-level permissions.
+--    change priority -- these RPCs are Super-Admin-only; an ordinary
+--    company member (even the owner) is rejected regardless of their
+--    company-level permissions.
 -- ---------------------------------------------------------------------------
 
 select test_set_current_user('f1000001-0000-0000-0000-000000000001'); -- owner-a
@@ -261,9 +263,12 @@ select test_assert(
 );
 
 -- ---------------------------------------------------------------------------
--- 6. Super Admin / platform staff: can view and manage every company's
+-- 6. Super Admin (and ONLY Super Admin) can view and manage every company's
 --    requests, including status transitions, priority, assignment, and
---    internal notes.
+--    internal notes. platform_support and platform_billing_admin are active
+--    platform staff but are explicitly NOT approved as support agents for
+--    this phase -- they must be denied by every admin RPC and both RLS
+--    SELECT policies exactly like a non-staff user.
 -- ---------------------------------------------------------------------------
 
 select test_set_current_user('f0000001-0000-0000-0000-000000000001'); -- super_admin
@@ -295,25 +300,152 @@ select test_assert(
   exists (select 1 from audit_logs where action = 'support_request_internal_note_added' and target_id = current_setting('test.request_a_id')::text)
 );
 
+-- Authorization correction: platform_support and platform_billing_admin are
+-- active platform staff, but are explicitly NOT approved as support agents
+-- for this phase. Every Phase 5 admin RPC, and both RLS SELECT policies,
+-- must deny them exactly like an ordinary non-staff user -- never fall back
+-- to the broader is_platform_staff() precedent.
+
+select test_set_current_user('f0000002-0000-0000-0000-000000000001'); -- platform_support (never super_admin)
+
 select test_assert(
-  'a not-platform-staff user other than platform_support also has full access (any active platform role, not just super_admin)',
-  true -- exercised concretely below via platform_support
+  'platform_support cannot read any support request cross-company via RLS, despite being active platform staff',
+  (select count(*) from support_requests) = 0
 );
 
-select test_set_current_user('f0000002-0000-0000-0000-000000000001'); -- platform_support (not super_admin)
+select test_assert(
+  'platform_support cannot read Company A''s support request messages via RLS',
+  (select count(*) from support_request_messages where request_id = current_setting('test.request_a_id')::uuid) = 0
+);
+
+select test_assert_raises_like(
+  'platform_support is denied by admin_reply_support_request',
+  $sql$ select * from admin_reply_support_request(current_setting('test.request_a_id')::uuid, 'should be denied', true) $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_support is denied by admin_update_support_request_status',
+  $sql$ select * from admin_update_support_request_status(current_setting('test.request_a_id')::uuid, 'in_progress') $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_support is denied by admin_resolve_support_request',
+  $sql$ select * from admin_resolve_support_request(current_setting('test.request_a_id')::uuid) $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_support is denied by admin_reopen_support_request',
+  $sql$ select * from admin_reopen_support_request(current_setting('test.request_a_id')::uuid) $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_support is denied by admin_update_support_request_priority',
+  $sql$ select * from admin_update_support_request_priority(current_setting('test.request_a_id')::uuid, 'high') $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_support is denied by admin_assign_support_request (cannot even self-assign)',
+  $sql$ select * from admin_assign_support_request(current_setting('test.request_a_id')::uuid, 'f0000002-0000-0000-0000-000000000001') $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_support is denied by admin_get_support_request_recipient_email',
+  $sql$ select admin_get_support_request_recipient_email(current_setting('test.request_a_id')::uuid) $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_support is denied by record_support_email_event (not super_admin, not a member of the request''s company)',
+  $sql$ select record_support_email_event(current_setting('test.request_a_id')::uuid, 'client_reply_notification', 'sent') $sql$,
+  'permission_denied'
+);
+
+select test_set_current_user('f0000003-0000-0000-0000-000000000001'); -- platform_billing_admin (never super_admin)
+
+select test_assert(
+  'platform_billing_admin cannot read any support request cross-company via RLS, despite being active platform staff',
+  (select count(*) from support_requests) = 0
+);
+
+select test_assert(
+  'platform_billing_admin cannot read Company A''s support request messages via RLS',
+  (select count(*) from support_request_messages where request_id = current_setting('test.request_a_id')::uuid) = 0
+);
+
+select test_assert_raises_like(
+  'platform_billing_admin is denied by admin_reply_support_request',
+  $sql$ select * from admin_reply_support_request(current_setting('test.request_a_id')::uuid, 'should be denied', true) $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_billing_admin is denied by admin_update_support_request_status',
+  $sql$ select * from admin_update_support_request_status(current_setting('test.request_a_id')::uuid, 'in_progress') $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_billing_admin is denied by admin_resolve_support_request',
+  $sql$ select * from admin_resolve_support_request(current_setting('test.request_a_id')::uuid) $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_billing_admin is denied by admin_reopen_support_request',
+  $sql$ select * from admin_reopen_support_request(current_setting('test.request_a_id')::uuid) $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_billing_admin is denied by admin_update_support_request_priority',
+  $sql$ select * from admin_update_support_request_priority(current_setting('test.request_a_id')::uuid, 'high') $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_billing_admin is denied by admin_assign_support_request',
+  $sql$ select * from admin_assign_support_request(current_setting('test.request_a_id')::uuid, 'f0000003-0000-0000-0000-000000000001') $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_billing_admin is denied by admin_get_support_request_recipient_email',
+  $sql$ select admin_get_support_request_recipient_email(current_setting('test.request_a_id')::uuid) $sql$,
+  'permission_denied'
+);
+
+select test_assert_raises_like(
+  'platform_billing_admin is denied by record_support_email_event (not super_admin, not a member of the request''s company)',
+  $sql$ select record_support_email_event(current_setting('test.request_a_id')::uuid, 'client_reply_notification', 'sent') $sql$,
+  'permission_denied'
+);
+
+select test_assert(
+  'priority and assignment are still untouched by the two denied roles above -- request_a remains exactly as Super Admin left it',
+  (select priority::text from support_requests where id = current_setting('test.request_a_id')::uuid) = 'normal'
+  and (select assigned_platform_user_id from support_requests where id = current_setting('test.request_a_id')::uuid) is null
+);
+
+select test_set_current_user('f0000001-0000-0000-0000-000000000001'); -- back to super_admin
 
 do $$
 begin
   perform admin_update_support_request_priority(current_setting('test.request_a_id')::uuid, 'high');
-  perform admin_assign_support_request(current_setting('test.request_a_id')::uuid, 'f0000002-0000-0000-0000-000000000001');
-  raise notice 'OK: platform_support (not super_admin) can update priority and self-assign';
+  perform admin_assign_support_request(current_setting('test.request_a_id')::uuid, 'f0000001-0000-0000-0000-000000000001');
+  raise notice 'OK: Super Admin (and only Super Admin) can update priority and assign';
 end;
 $$;
 
 select test_assert(
-  'priority is now high, assigned to platform_support',
+  'priority is now high, assigned to the super_admin who performed the assignment',
   (select priority::text from support_requests where id = current_setting('test.request_a_id')::uuid) = 'high'
-  and (select assigned_platform_user_id from support_requests where id = current_setting('test.request_a_id')::uuid) = 'f0000002-0000-0000-0000-000000000001'
+  and (select assigned_platform_user_id from support_requests where id = current_setting('test.request_a_id')::uuid) = 'f0000001-0000-0000-0000-000000000001'
 );
 
 select test_assert(
@@ -321,6 +453,8 @@ select test_assert(
   exists (select 1 from audit_logs where action = 'support_request_priority_changed' and target_id = current_setting('test.request_a_id')::text)
   and exists (select 1 from audit_logs where action = 'support_request_assigned' and target_id = current_setting('test.request_a_id')::text)
 );
+
+select test_set_current_user('f0000001-0000-0000-0000-000000000001'); -- super_admin (subsequent sections continue as super_admin)
 
 -- ---------------------------------------------------------------------------
 -- 7. Status transitions: 'resolved' is rejected from the generic status

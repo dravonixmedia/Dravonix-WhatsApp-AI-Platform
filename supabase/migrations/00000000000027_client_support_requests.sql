@@ -4,10 +4,23 @@
 -- company_accounts) submit a support request (complaint, service request,
 -- technical issue, feature/change request, general support), track its
 -- status/priority, hold a client-visible + internal-only conversation, and
--- gives Dravonix Super Admin/platform staff a queue to manage every
--- company's requests. Entirely new domain -- no existing ticket/request
--- table exists anywhere in this schema (confirmed by repo-wide audit before
--- writing this migration).
+-- gives Dravonix Super Admin a queue to manage every company's requests.
+-- Entirely new domain -- no existing ticket/request table exists anywhere
+-- in this schema (confirmed by repo-wide audit before writing this
+-- migration).
+--
+-- Authorization correction (still folded into this same, still-unapplied
+-- migration -- never merely appended as a new one): every Phase 5
+-- administrative capability (viewing all companies' requests/messages,
+-- including internal notes; replying; adding internal notes; changing
+-- status/priority; assigning; resolving; reopening; the recipient-email
+-- lookup; recording email diagnostics) is scoped to
+-- current_platform_role() IS NOT DISTINCT FROM 'super_admin' specifically
+-- -- never the broader is_platform_staff() (which also covers
+-- platform_support and platform_billing_admin). Those two roles are
+-- explicitly NOT approved as support agents for this phase; a future phase
+-- may introduce delegated support-agent permissions deliberately, rather
+-- than inheriting this legacy predicate by accident.
 --
 -- Explicitly NOT touched here: Phase 3A phone privacy, Phase 3B scroll
 -- behavior, Phase 2 role/team permissions (only additive grants of the new
@@ -56,7 +69,7 @@ create sequence support_request_reference_seq;
 -- never destroyed by a company deletion; an orphaned row simply becomes
 -- invisible to every company-scoped RLS check (has_company_permission
 -- requires a non-null company_id match) while remaining fully visible to
--- Super Admin/platform staff for historical reference.
+-- Super Admin for historical reference.
 --
 -- assigned_platform_user_id references platform_members, which has no
 -- display-name column (confirmed by audit) -- exactly the same limitation
@@ -90,9 +103,8 @@ comment on table support_requests is
 
 -- Discussion/reply history -- deliberately never folded into a single
 -- mutable `description` field (final plan section 8). `is_internal` rows are
--- Dravonix-only notes, filtered out entirely by RLS for any non-platform-
--- staff caller (see the SELECT policy below) rather than merely hidden by
--- the UI.
+-- Dravonix-only notes, filtered out entirely by RLS for any non-Super-Admin
+-- caller (see the SELECT policy below) rather than merely hidden by the UI.
 create table support_request_messages (
   id uuid primary key default gen_random_uuid(),
   request_id uuid not null references support_requests (id) on delete cascade,
@@ -106,7 +118,7 @@ create table support_request_messages (
 create index support_request_messages_request_id_idx on support_request_messages (request_id, created_at);
 
 comment on table support_request_messages is
-  'Phase 5 conversation/history model. is_internal=true rows are Dravonix-only notes -- never selectable by a non-platform-staff caller (support_request_messages_select RLS policy), never emailed to the client.';
+  'Phase 5 conversation/history model. is_internal=true rows are Dravonix-only notes -- never selectable by a non-Super-Admin caller (support_request_messages_select RLS policy), never emailed to the client.';
 
 create trigger support_requests_set_updated_at
   before update on support_requests
@@ -121,8 +133,8 @@ create trigger support_requests_set_updated_at
 --    a client's only writes are creating their own request and adding a
 --    client-visible reply to it (both re-verify this same permission
 --    server-side inside the RPCs below), never a status/priority/assignment
---    change, which only ever happens through the is_platform_staff()-gated
---    admin_* RPCs further down.
+--    change, which only ever happens through the Super-Admin-only admin_*
+--    RPCs further down.
 -- ---------------------------------------------------------------------------
 
 insert into permissions (key, description) values
@@ -154,19 +166,21 @@ alter table support_request_messages enable row level security;
 create policy support_requests_select on support_requests
   for select
   using (
-    is_platform_staff()
+    (current_platform_role() is not distinct from 'super_admin')
     or (company_id is not null and has_company_permission(company_id, 'support_requests.view'))
   );
 
--- Client-visible rows: everything for platform staff; for an ordinary
+-- Client-visible rows: everything for Super Admin; for an ordinary
 -- company member, only non-internal messages on a request belonging to a
 -- company they hold support_requests.view on. This is the actual
 -- enforcement mechanism behind "internal notes never visible to client" --
--- not a UI-layer filter.
+-- not a UI-layer filter. platform_support/platform_billing_admin get
+-- neither branch -- they are not approved as support agents for this
+-- phase (see the authorization-correction note at the top of this file).
 create policy support_request_messages_select on support_request_messages
   for select
   using (
-    is_platform_staff()
+    (current_platform_role() is not distinct from 'super_admin')
     or (
       not is_internal
       and exists (
@@ -320,14 +334,15 @@ revoke all on function reply_support_request(uuid, text) from public, anon;
 grant execute on function reply_support_request(uuid, text) to authenticated;
 
 -- ---------------------------------------------------------------------------
--- 8. Super Admin / platform-staff RPCs. Gated on is_platform_staff() (any
---    active platform_members row -- super_admin, platform_support, or
---    platform_billing_admin), matching admin_start_support_access's own
---    precedent for staff-level operational actions, not the stricter
---    current_platform_role() = 'super_admin' check company-lifecycle RPCs
---    use (creating/suspending a company, changing entitlements). Handling
---    support tickets is exactly the kind of day-to-day operational task the
---    platform_support role name describes.
+-- 8. Super Admin RPCs. Gated on current_platform_role() IS NOT DISTINCT FROM
+--    'super_admin' -- the same null-safe pattern company-lifecycle RPCs use
+--    (creating/suspending a company, changing entitlements) -- NOT the
+--    broader is_platform_staff() (any active platform_members row,
+--    including platform_support/platform_billing_admin). Support-request
+--    management is explicitly Super-Admin-only for this phase: those two
+--    roles are not approved as support agents, so this deliberately does
+--    NOT follow admin_start_support_access's broader precedent. A future
+--    phase may introduce delegated support-agent permissions on purpose.
 -- ---------------------------------------------------------------------------
 
 create or replace function admin_reply_support_request(
@@ -346,7 +361,7 @@ declare
   v_row public.support_request_messages%rowtype;
 begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
-  if not public.is_platform_staff() then raise exception 'permission_denied'; end if;
+  if public.current_platform_role() is distinct from 'super_admin' then raise exception 'permission_denied'; end if;
 
   select * into v_request from public.support_requests where public.support_requests.id = p_request_id for update;
   if not found then raise exception 'request_not_found'; end if;
@@ -396,7 +411,7 @@ declare
   v_old_status public.support_request_status;
 begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
-  if not public.is_platform_staff() then raise exception 'permission_denied'; end if;
+  if public.current_platform_role() is distinct from 'super_admin' then raise exception 'permission_denied'; end if;
 
   select * into v_request from public.support_requests where public.support_requests.id = p_request_id for update;
   if not found then raise exception 'request_not_found'; end if;
@@ -436,7 +451,7 @@ declare
   v_request public.support_requests%rowtype;
 begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
-  if not public.is_platform_staff() then raise exception 'permission_denied'; end if;
+  if public.current_platform_role() is distinct from 'super_admin' then raise exception 'permission_denied'; end if;
 
   select * into v_request from public.support_requests where public.support_requests.id = p_request_id for update;
   if not found then raise exception 'request_not_found'; end if;
@@ -469,7 +484,7 @@ declare
   v_request public.support_requests%rowtype;
 begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
-  if not public.is_platform_staff() then raise exception 'permission_denied'; end if;
+  if public.current_platform_role() is distinct from 'super_admin' then raise exception 'permission_denied'; end if;
 
   select * into v_request from public.support_requests where public.support_requests.id = p_request_id for update;
   if not found then raise exception 'request_not_found'; end if;
@@ -503,7 +518,7 @@ declare
   v_old_priority public.support_request_priority;
 begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
-  if not public.is_platform_staff() then raise exception 'permission_denied'; end if;
+  if public.current_platform_role() is distinct from 'super_admin' then raise exception 'permission_denied'; end if;
 
   select * into v_request from public.support_requests where public.support_requests.id = p_request_id for update;
   if not found then raise exception 'request_not_found'; end if;
@@ -532,7 +547,7 @@ declare
   v_request public.support_requests%rowtype;
 begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
-  if not public.is_platform_staff() then raise exception 'permission_denied'; end if;
+  if public.current_platform_role() is distinct from 'super_admin' then raise exception 'permission_denied'; end if;
 
   select * into v_request from public.support_requests where public.support_requests.id = p_request_id for update;
   if not found then raise exception 'request_not_found'; end if;
@@ -574,7 +589,7 @@ declare
   v_email text;
 begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
-  if not public.is_platform_staff() then raise exception 'permission_denied'; end if;
+  if public.current_platform_role() is distinct from 'super_admin' then raise exception 'permission_denied'; end if;
 
   select au.email into v_email
     from public.support_requests sr
@@ -594,7 +609,8 @@ grant execute on function admin_get_support_request_recipient_email(uuid) to aut
 --    never the raw provider response/credentials. Callable by the request's
 --    own company member (recording the "new request" notification-to-
 --    Dravonix outcome, triggered synchronously from their own create flow)
---    or by platform staff (recording a client-reply-notification outcome).
+--    or by Super Admin (recording a client-reply-notification outcome) --
+--    platform_support/platform_billing_admin get neither branch.
 -- ---------------------------------------------------------------------------
 
 create or replace function record_support_email_event(
@@ -624,7 +640,7 @@ begin
   select * into v_request from public.support_requests where public.support_requests.id = p_request_id;
   if not found then raise exception 'request_not_found'; end if;
 
-  if not public.is_platform_staff()
+  if public.current_platform_role() is distinct from 'super_admin'
      and (v_request.company_id is null or not public.has_company_permission(v_request.company_id, 'support_requests.view'))
   then
     raise exception 'permission_denied';
