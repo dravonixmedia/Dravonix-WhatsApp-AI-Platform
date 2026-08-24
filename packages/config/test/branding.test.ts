@@ -9,8 +9,15 @@ describe("platformBrand", () => {
   });
 
   it("exposes the support email alongside a matching mailto: href", () => {
-    expect(platformBrand.supportEmail).toBe("Support@dravonixmedia.com");
-    expect(platformBrand.supportEmailHref).toBe("mailto:support@dravonixmedia.com");
+    expect(platformBrand.supportEmail).toBe("admin@dravonixmedia.com");
+    expect(platformBrand.supportEmailHref).toBe("mailto:admin@dravonixmedia.com");
+  });
+
+  it("never defaults to the nonexistent support@dravonixmedia.com mailbox", () => {
+    expect(platformBrand.supportEmail.toLowerCase()).not.toBe("support@dravonixmedia.com");
+    expect(platformBrand.supportEmailHref.toLowerCase()).not.toBe(
+      "mailto:support@dravonixmedia.com",
+    );
   });
 
   it("builds a section page title using the short name", () => {

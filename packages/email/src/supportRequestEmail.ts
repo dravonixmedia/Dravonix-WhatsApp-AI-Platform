@@ -10,7 +10,7 @@ export interface SupportRequestTypeLabelInput {
   detailUrl: string;
 }
 
-const SUPPORT_CONTACT_EMAIL = "support@dravonixmedia.com";
+const SUPPORT_CONTACT_EMAIL = "admin@dravonixmedia.com";
 const COLOR_PRIMARY_BLUE = "#2563EB";
 const COLOR_ACCENT_CYAN = "#06B6D4";
 const DESCRIPTION_PREVIEW_LENGTH = 400;

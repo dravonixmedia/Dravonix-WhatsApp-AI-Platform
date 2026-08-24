@@ -75,4 +75,12 @@ describe("renderNewSupportRequestEmail", () => {
     const second = renderNewSupportRequestEmail(base);
     expect(first).toEqual(second);
   });
+
+  it("contains the admin@dravonixmedia.com contact, and never support@dravonixmedia.com (nonexistent mailbox), in both html and text", () => {
+    const rendered = renderNewSupportRequestEmail(base);
+    for (const body of [rendered.html, rendered.text]) {
+      expect(body).toContain("admin@dravonixmedia.com");
+      expect(body.toLowerCase()).not.toContain("support@dravonixmedia.com");
+    }
+  });
 });
