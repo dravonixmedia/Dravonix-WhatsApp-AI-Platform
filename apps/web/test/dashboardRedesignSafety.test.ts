@@ -21,12 +21,28 @@ function readSource(relativePath: string): string {
 }
 
 describe("dashboard UI redesign: tenant scoping preserved", () => {
-  it("conversations/[conversationId]/page.tsx still resolves the conversation via getConversationThreadForDashboard scoped to session.activeCompanyId", () => {
+  // Phase 4 extracted the getConversationThreadForDashboard call (plus
+  // contact loading and aiLikelyProcessing derivation) into a shared
+  // loadConversationWorkspaceData helper, reused by these two pages and by
+  // the new DRAIVA three-column route -- see
+  // conversationWorkspaceData.test.ts for the loader's own behavior, and
+  // draivaConversationWorkspace.test.ts for the DRAIVA route's identical use.
+  const sharedLoaderSource = readSource("app/dashboard/conversationWorkspaceData.ts");
+
+  it("the shared conversation-workspace loader calls getConversationThreadForDashboard scoped to (repo, companyId, conversationId) -- the single tenant-checked entry point every conversation-detail page goes through", () => {
+    expect(sharedLoaderSource).toMatch(
+      /getConversationThreadForDashboard\(repo,\s*companyId,\s*conversationId\)/,
+    );
+  });
+
+  it("conversations/[conversationId]/page.tsx still resolves the conversation via the shared loader, scoped to session.activeCompanyId", () => {
     const source = readSource("app/dashboard/conversations/[conversationId]/page.tsx");
     expect(source).toContain("getDashboardSession");
-    expect(source).toMatch(
-      /getConversationThreadForDashboard\(\s*repo,\s*session\.activeCompanyId,\s*conversationId,?\s*\)/,
+    expect(source).toContain(
+      'import { loadConversationWorkspaceData } from "../../conversationWorkspaceData.js"',
     );
+    expect(source).toMatch(/loadConversationWorkspaceData\(supabase, repo, \{/);
+    expect(source).toContain("companyId: session.activeCompanyId");
     // markConversationRead now runs from a client effect keyed by
     // conversationId (MarkConversationReadOnMount), not unconditionally on
     // every server render -- see realtimeRefreshLoop.test.ts for why
@@ -35,12 +51,13 @@ describe("dashboard UI redesign: tenant scoping preserved", () => {
     expect(source).not.toContain("markConversationRead(repo, conversationId)");
   });
 
-  it("handover/[conversationId]/page.tsx still resolves the conversation via getConversationThreadForDashboard scoped to session.activeCompanyId", () => {
+  it("handover/[conversationId]/page.tsx still resolves the conversation via the shared loader, scoped to session.activeCompanyId", () => {
     const source = readSource("app/dashboard/handover/[conversationId]/page.tsx");
     expect(source).toContain("getDashboardSession");
-    expect(source).toMatch(
-      /getConversationThreadForDashboard\(\s*repo,\s*session\.activeCompanyId,\s*conversationId,?\s*\)/,
+    expect(source).toContain(
+      'import { loadConversationWorkspaceData } from "../../conversationWorkspaceData.js"',
     );
+    expect(source).toContain("companyId: session.activeCompanyId");
     // markConversationRead now runs from a client effect keyed by
     // conversationId (MarkConversationReadOnMount), not unconditionally on
     // every server render -- see realtimeRefreshLoop.test.ts for why

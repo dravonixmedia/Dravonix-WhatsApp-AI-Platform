@@ -1,15 +1,9 @@
 import {
-  deriveAiLikelyProcessing,
-  getConversationThreadForDashboard,
   listHandoverInbox,
   SupabaseHandoverRepository,
   type HandoverInboxFilterKind,
   type HandoverInboxSort,
 } from "@dravonix/handover";
-import { loadEnv } from "@dravonix/config";
-import { AppError } from "@dravonix/core";
-import { createLogger } from "@dravonix/observability";
-import { notFound } from "next/navigation";
 import {
   closeConversationAction,
   endHumanAssistanceAction,
@@ -23,13 +17,13 @@ import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { Avatar } from "../../Avatar.js";
 import { AiModeBadge, ConversationStateBadge } from "../../badges.js";
+import { ConversationComposerWithAssistant } from "../../ConversationComposerWithAssistant.js";
+import { loadConversationWorkspaceData } from "../../conversationWorkspaceData.js";
 import { CustomerTimezoneField } from "../../CustomerTimezoneField.js";
 import { WhatsAppIcon } from "../../Icons.js";
-import { loadContactSummary } from "../../loadContactSummary.js";
 import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
-import { ConversationComposerWithAssistant } from "../../ConversationComposerWithAssistant.js";
-import { ConversationThread } from "./ConversationThread.js";
 import { HandoverQueuePanel } from "../HandoverQueuePanel.js";
+import { ConversationThread } from "./ConversationThread.js";
 
 function ActionButton({ children }: { children: React.ReactNode }) {
   return (
@@ -72,44 +66,19 @@ export default async function ConversationDetailPage({
       .eq("is_active", true),
   ]);
 
-  let conversation: Awaited<ReturnType<typeof getConversationThreadForDashboard>>["conversation"];
-  let thread: Awaited<ReturnType<typeof getConversationThreadForDashboard>>["thread"];
-  try {
-    const result = await getConversationThreadForDashboard(
-      repo,
-      session.activeCompanyId,
-      conversationId,
-    );
-    conversation = result.conversation;
-    thread = result.thread;
-  } catch (err) {
-    // Never leak internal Supabase/Postgres error text, and never reveal
-    // whether the conversation exists in another tenant -- log only
-    // sanitized identifiers/error codes server-side, then render the same
-    // not-found response for a missing, cross-tenant, RLS-hidden, or
-    // revoked-membership conversationId.
-    const env = loadEnv(process.env);
-    createLogger({
-      environment: env.APP_ENV,
+  const { conversation, thread, contact, aiLikelyProcessing } = await loadConversationWorkspaceData(
+    supabase,
+    repo,
+    {
       companyId: session.activeCompanyId,
       conversationId,
-    }).warn("conversation_detail_unavailable", {
-      errorCode: err instanceof AppError ? err.code : "unknown",
-    });
-    notFound();
-  }
-
-  const contact = await loadContactSummary(supabase, conversationId);
-
-  const latestInbound = [...thread.messages].reverse().find((m) => m.direction === "inbound");
-  const latestAiOutbound = [...thread.messages]
-    .reverse()
-    .find((m) => m.direction === "outbound" && m.senderType === "ai");
-  const aiLikelyProcessing = deriveAiLikelyProcessing({
-    aiMode: conversation.aiMode,
-    latestInboundAt: latestInbound?.createdAt ?? null,
-    latestAiOutboundAt: latestAiOutbound?.createdAt ?? null,
-  });
+      // The handover detail page's own per-row assignment dropdown lives in
+      // HandoverQueuePanel (fed by membersResult above), not in this
+      // per-conversation panel, so it never needs the shared loader's
+      // members-for-assign-dropdown fetch.
+      canAssignConversations: false,
+    },
+  );
 
   const displayName = contact?.displayName ?? contact?.maskedPhoneNumber ?? "Customer";
 

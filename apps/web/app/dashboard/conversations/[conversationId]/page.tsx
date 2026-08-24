@@ -1,12 +1,4 @@
-import { loadEnv } from "@dravonix/config";
-import { AppError } from "@dravonix/core";
-import {
-  deriveAiLikelyProcessing,
-  getConversationThreadForDashboard,
-  SupabaseHandoverRepository,
-} from "@dravonix/handover";
-import { createLogger } from "@dravonix/observability";
-import { notFound } from "next/navigation";
+import { SupabaseHandoverRepository } from "@dravonix/handover";
 import {
   assignToMeAction,
   assignToTeamMemberAction,
@@ -21,16 +13,16 @@ import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { Avatar } from "../../Avatar.js";
 import { AiModeBadge, ConversationStateBadge } from "../../badges.js";
+import { ConversationComposerWithAssistant } from "../../ConversationComposerWithAssistant.js";
+import { loadConversationWorkspaceData } from "../../conversationWorkspaceData.js";
 import { CustomerTimezoneField } from "../../CustomerTimezoneField.js";
-import { WhatsAppIcon } from "../../Icons.js";
-import { loadContactSummary } from "../../loadContactSummary.js";
-import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
-// Reused directly from the Human Handover module: these components are
+// Reused directly from the Human Handover module: this component is
 // conversation-generic (pagination, composer, reconciliation), not
-// handover-specific, so Live Conversations shares them rather than
+// handover-specific, so Live Conversations shares it rather than
 // duplicating pagination/composer/idempotency logic.
 import { ConversationThread } from "../../handover/[conversationId]/ConversationThread.js";
-import { ConversationComposerWithAssistant } from "../../ConversationComposerWithAssistant.js";
+import { WhatsAppIcon } from "../../Icons.js";
+import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
 import { ConversationListPanel } from "../ConversationListPanel.js";
 import {
   loadConversationsListData,
@@ -68,49 +60,12 @@ export default async function ConversationDetailPage({
     listParams,
   );
 
-  let conversation: Awaited<ReturnType<typeof getConversationThreadForDashboard>>["conversation"];
-  let thread: Awaited<ReturnType<typeof getConversationThreadForDashboard>>["thread"];
-  try {
-    const result = await getConversationThreadForDashboard(
-      repo,
-      session.activeCompanyId,
-      conversationId,
-    );
-    conversation = result.conversation;
-    thread = result.thread;
-  } catch (err) {
-    // Never leak internal Supabase/Postgres error text, and never reveal
-    // whether the conversation exists in another tenant.
-    const env = loadEnv(process.env);
-    createLogger({
-      environment: env.APP_ENV,
+  const { conversation, thread, contact, aiLikelyProcessing, members } =
+    await loadConversationWorkspaceData(supabase, repo, {
       companyId: session.activeCompanyId,
       conversationId,
-    }).warn("conversation_detail_unavailable", {
-      errorCode: err instanceof AppError ? err.code : "unknown",
+      canAssignConversations: capabilities.canAssignConversations,
     });
-    notFound();
-  }
-
-  const contact = await loadContactSummary(supabase, conversationId);
-
-  const latestInbound = [...thread.messages].reverse().find((m) => m.direction === "inbound");
-  const latestAiOutbound = [...thread.messages]
-    .reverse()
-    .find((m) => m.direction === "outbound" && m.senderType === "ai");
-  const aiLikelyProcessing = deriveAiLikelyProcessing({
-    aiMode: conversation.aiMode,
-    latestInboundAt: latestInbound?.createdAt ?? null,
-    latestAiOutboundAt: latestAiOutbound?.createdAt ?? null,
-  });
-
-  const { data: members } = capabilities.canAssignConversations
-    ? await supabase
-        .from("company_members")
-        .select("id, role")
-        .eq("company_id", session.activeCompanyId)
-        .eq("is_active", true)
-    : { data: null };
 
   const displayName = contact?.displayName ?? contact?.maskedPhoneNumber ?? "Customer";
 
