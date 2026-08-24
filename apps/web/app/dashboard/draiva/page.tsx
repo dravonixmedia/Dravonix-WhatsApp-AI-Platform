@@ -4,7 +4,9 @@ import { CONVERSATIONS_LIST_WATCHES } from "../../../lib/realtime/watchConfigs.j
 import { listConversations } from "../../../lib/repositories/conversationsRepository.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
-import { DraivaWorkspace } from "./DraivaWorkspace.js";
+import { EmptyState } from "../EmptyState.js";
+import { SparkleIcon } from "../Icons.js";
+import { DraivaConversationList } from "./DraivaConversationList.js";
 
 export const dynamic = "force-dynamic";
 
@@ -65,7 +67,29 @@ export default async function DraivaPage() {
           Analyse conversations, prepare replies, translate messages and extract customer insights.
         </p>
       </div>
-      <DraivaWorkspace conversations={items} />
+      <div className="dvx-workspace">
+        <DraivaConversationList conversations={items} activeConversationId={null} />
+        <div className="dvx-workspace-detail">
+          <div className="dvx-workspace-center">
+            <EmptyState
+              icon={<SparkleIcon size={40} />}
+              title="Select a conversation"
+              description="Choose a conversation from the list to view its message history and let DRAIVA review its context."
+            />
+          </div>
+          <aside className="dvx-workspace-right">
+            <div className="dvx-card">
+              <div style={{ fontWeight: 700, fontSize: "0.9rem", letterSpacing: "0.03em" }}>
+                DRAIVA
+              </div>
+              <p className="dvx-muted" style={{ fontSize: "0.78rem", margin: "0.4rem 0 0" }}>
+                Select a conversation to let DRAIVA summarize it, prepare replies, translate
+                messages, extract lead details and plan follow-ups.
+              </p>
+            </div>
+          </aside>
+        </div>
+      </div>
     </div>
   );
 }

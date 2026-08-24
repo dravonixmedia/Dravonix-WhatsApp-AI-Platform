@@ -56,7 +56,8 @@ const AUDITED_LANGUAGE_POLICY_SOURCE_FILES = [
   "packages/ai/src/research/languagePolicy.ts",
   "packages/ai/src/research/webResearchTool.ts",
   "apps/web/app/dashboard/ChatAgentPanel.tsx",
-  "apps/web/app/dashboard/draiva/DraivaWorkspace.tsx",
+  "apps/web/app/dashboard/draiva/DraivaConversationList.tsx",
+  "apps/web/app/dashboard/draiva/DraivaAssistantColumn.tsx",
   "apps/web/lib/repositories/chatAgentContext.ts",
 ];
 

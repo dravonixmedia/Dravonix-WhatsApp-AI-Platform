@@ -6,7 +6,7 @@ export interface PhoneDisplayResult {
   /**
    * Named maskedPhoneNumber for backward compatibility with the many
    * existing display components (ConversationListPanel, HandoverQueuePanel,
-   * GlobalSearch, leads pages, NotificationBell, DraivaWorkspace, ...) that
+   * GlobalSearch, leads pages, NotificationBell, DraivaConversationList, ...) that
    * already render this field -- despite the name, it now holds either the
    * full or masked value depending on phoneVisibility, resolved entirely
    * server-side by get_conversation_phone_displays/get_lead_phone_displays
