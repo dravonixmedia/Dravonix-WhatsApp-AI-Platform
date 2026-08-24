@@ -224,7 +224,7 @@ export default async function ConversationDetailPage({
                   )
                 ) : null}
 
-                {capabilities.canAssignConversations &&
+                {capabilities.canCloseConversations &&
                 conversation.state !== "closed" &&
                 conversation.state !== "ai_active" ? (
                   <form

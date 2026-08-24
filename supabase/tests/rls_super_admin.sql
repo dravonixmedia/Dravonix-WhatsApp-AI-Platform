@@ -266,19 +266,25 @@ declare
   v_is_active boolean;
 begin
   select id, role, is_active into v_member_id, v_role, v_is_active
-    from admin_invite_company_member('60000001-0000-0000-0000-000000000001', 'invitee@example.test', 'company_owner');
+    from admin_invite_company_member('60000001-0000-0000-0000-000000000001', 'invitee@example.test', 'manager');
 
   perform test_assert('admin_invite_company_member creates an active membership', v_is_active = true);
-  perform test_assert('admin_invite_company_member sets the requested role', v_role = 'company_owner');
-  perform test_assert(
-    'inviting the same owner as company_owner does not enforce a silent single-owner rule -- Existing Co now legitimately has two owners',
-    (select count(*) from company_members where company_id = '60000001-0000-0000-0000-000000000001' and role = 'company_owner' and is_active) = 2
-  );
+  perform test_assert('admin_invite_company_member sets the requested role', v_role = 'manager');
 
   create temporary table t_invited_member (id uuid);
   insert into t_invited_member values (v_member_id);
 end;
 $$;
+
+-- Phase 2 role model expansion (migration 24): admin_invite_company_member
+-- now refuses to create a second active company_owner (see
+-- rls_role_team_security.sql for the dedicated owner-protection coverage) --
+-- Existing Co already has an active owner from the fixtures below.
+select test_assert_raises(
+  'admin_invite_company_member cannot create a second active owner for a company that already has one',
+  $sql$ select admin_invite_company_member('60000001-0000-0000-0000-000000000001', 'second-owner@example.test', 'company_owner') $sql$,
+  'owner_already_exists'
+);
 
 select test_assert_raises(
   're-inviting an already-active member is rejected, not silently duplicated',

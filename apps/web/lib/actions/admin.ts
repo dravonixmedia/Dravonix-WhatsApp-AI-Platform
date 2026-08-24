@@ -16,6 +16,7 @@
  */
 
 import { revalidatePath } from "next/cache";
+import { isActiveCompanyRole } from "../companyRoles.js";
 import { getPlatformSession } from "../session.js";
 import { createServerSupabaseClient } from "../supabase/server.js";
 
@@ -89,6 +90,7 @@ export async function inviteCompanyMemberAction(
   const email = str(formData, "email");
   const role = str(formData, "role");
   if (!email || !role) throw new Error("Email and role are required");
+  if (!isActiveCompanyRole(role)) throw new Error("Unsupported role");
 
   const { error } = await supabase.rpc("admin_invite_company_member", {
     p_company_id: companyId,
@@ -107,6 +109,7 @@ export async function changeCompanyMemberRoleAction(
   const memberId = str(formData, "member_id");
   const newRole = str(formData, "new_role");
   if (!memberId || !newRole) throw new Error("Member and role are required");
+  if (!isActiveCompanyRole(newRole)) throw new Error("Unsupported role");
 
   const { error } = await supabase.rpc("admin_change_company_member_role", {
     p_company_id: companyId,

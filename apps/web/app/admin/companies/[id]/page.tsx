@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { ACTIVE_COMPANY_ROLES, companyRoleLabel } from "../../../../lib/companyRoles.js";
 import { InviteMemberForm } from "../../../dashboard/team/InviteMemberForm.js";
 import {
   assignPlanAction,
@@ -28,16 +29,6 @@ import { computeOnboardingChecklist } from "../../../../lib/onboarding.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 
 export const dynamic = "force-dynamic";
-
-const COMPANY_ROLES = [
-  "company_owner",
-  "company_admin",
-  "manager",
-  "agent",
-  "knowledge_editor",
-  "billing_viewer",
-  "viewer",
-];
 
 const SUBSCRIPTION_STATES = [
   "onboarding",
@@ -578,7 +569,7 @@ export default async function AdminCompanyDetailPage({
                     style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
                   >
                     <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
-                      {member.role.replace(/_/g, " ")}
+                      {companyRoleLabel(member.role)}
                     </span>
                     <span
                       className={`dvx-badge ${member.is_active ? "dvx-badge--success" : "dvx-badge--neutral"}`}
@@ -603,9 +594,18 @@ export default async function AdminCompanyDetailPage({
                             defaultValue={member.role}
                             style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem" }}
                           >
-                            {COMPANY_ROLES.map((r) => (
+                            {/* member.role may be a legacy/dormant value not in
+                                ACTIVE_COMPANY_ROLES (e.g. a pre-Phase-2 row this
+                                migration didn't touch in some other
+                                environment) -- included so the <select>'s
+                                current value is always a real option, never
+                                silently coerced to the first one. */}
+                            {((ACTIVE_COMPANY_ROLES as readonly string[]).includes(member.role)
+                              ? ACTIVE_COMPANY_ROLES
+                              : [member.role, ...ACTIVE_COMPANY_ROLES]
+                            ).map((r) => (
                               <option key={r} value={r}>
-                                {r.replace(/_/g, " ")}
+                                {companyRoleLabel(r)}
                               </option>
                             ))}
                           </select>
@@ -650,7 +650,7 @@ export default async function AdminCompanyDetailPage({
           with a link to create one and accept in a single step. If email delivery isn&apos;t
           configured yet, a manual-copy link is shown instead.
         </p>
-        <InviteMemberForm companyId={id} defaultRole="company_owner" />
+        <InviteMemberForm companyId={id} defaultRole="company_owner" roles={ACTIVE_COMPANY_ROLES} />
       </div>
 
       {/* Invitations */}
@@ -669,7 +669,7 @@ export default async function AdminCompanyDetailPage({
                 <span className="dvx-team-member-name">
                   {invitation.email}
                   <span className="dvx-muted" style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}>
-                    {invitation.role.replace(/_/g, " ")} · invited{" "}
+                    {companyRoleLabel(invitation.role)} · invited{" "}
                     {new Date(invitation.created_at).toLocaleDateString()} · expires{" "}
                     {new Date(invitation.expires_at).toLocaleDateString()}
                   </span>

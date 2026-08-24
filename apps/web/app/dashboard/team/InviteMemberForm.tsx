@@ -1,17 +1,9 @@
 "use client";
 
+import type { CompanyRole } from "@dravonix/database";
 import { useState, useTransition } from "react";
 import { createCompanyInvitationAction } from "../../../lib/actions/invitations.js";
-
-const ROLES = [
-  "company_owner",
-  "company_admin",
-  "manager",
-  "agent",
-  "knowledge_editor",
-  "billing_viewer",
-  "viewer",
-];
+import { CLIENT_ASSIGNABLE_ROLES, companyRoleLabel } from "../../../lib/companyRoles.js";
 
 /**
  * Invitation delivery is handled server-side by the shared
@@ -21,13 +13,22 @@ const ROLES = [
  * appears when email delivery didn't happen (no provider configured yet, or
  * a non-production send failure) -- acceptUrl is otherwise omitted by the
  * server response entirely, never just hidden client-side.
+ *
+ * `roles` defaults to the five non-owner active roles a client (team.manage)
+ * may invite -- create_company_invitation itself rejects company_owner from
+ * that path regardless of what this form renders (see migration 24). The
+ * Super Admin company page passes the full active-role list explicitly
+ * (including company_owner, for bootstrapping a brand new company's first
+ * owner), since only a super_admin caller is authorized for that role.
  */
 export function InviteMemberForm({
   companyId,
-  defaultRole = "agent",
+  defaultRole = "manager",
+  roles = CLIENT_ASSIGNABLE_ROLES,
 }: {
   companyId: string;
-  defaultRole?: string;
+  defaultRole?: CompanyRole;
+  roles?: readonly CompanyRole[];
 }) {
   const [isPending, startTransition] = useTransition();
   const [result, setResult] = useState<{
@@ -71,9 +72,9 @@ export function InviteMemberForm({
           defaultValue={defaultRole}
           style={{ maxWidth: 180 }}
         >
-          {ROLES.map((role) => (
+          {roles.map((role) => (
             <option key={role} value={role}>
-              {role.replace(/_/g, " ")}
+              {companyRoleLabel(role)}
             </option>
           ))}
         </select>

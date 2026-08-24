@@ -8,12 +8,14 @@ import { describe, expect, it } from "vitest";
  * same pattern as settingsPageCleanup.test.ts (see that file's note on why
  * this can't import the page directly).
  *
- * Client Dashboard Permission Hardening (migration 00000000000022) reduced
- * this page to view + display-name-edit only: team.manage was revoked from
- * every client role at the database level, so invite/resend/revoke/
- * change-role/deactivate are no longer reachable by any client session --
- * these tests assert the page's UI matches that, not merely that a
- * capability flag is checked.
+ * Phase 2 role model expansion (migration 24) revives team.manage for
+ * company_owner/company_admin -- Client Dashboard Permission Hardening
+ * (migration 00000000000022) had reduced this page to view +
+ * display-name-edit only; these tests assert the revived invite/role-change/
+ * deactivate-reactivate/invitation controls are gated on
+ * capabilities.canManageTeam (never a hardcoded role string), and that the
+ * current company_owner row never gets one of those controls (server-side
+ * owner protection, but the UI must stay honest about it too).
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -64,20 +66,31 @@ describe("Team Settings page", () => {
     expect(source).not.toContain('.from("companies")');
   });
 
-  it("does not render invite, resend, revoke, change-role, or deactivate controls -- those are Dravonix-only now", () => {
-    for (const forbidden of [
+  it("gates invite/role-change/deactivate/reactivate/invitation controls on capabilities.canManageTeam", () => {
+    for (const required of [
       "InviteMemberForm",
       "InvitationActions",
       "companyChangeMemberRoleAction",
       "companyDeactivateMemberAction",
-      "createCompanyInvitationAction",
+      "companyReactivateMemberAction",
     ]) {
-      expect(source).not.toContain(forbidden);
+      expect(source).toContain(required);
     }
+    expect(source).toContain("capabilities.canManageTeam");
   });
 
-  it("never queries company_invitations -- there is no invitation data path on this page", () => {
-    expect(source).not.toContain('.from("company_invitations")');
+  it("never lets the client role-change control offer company_owner as a target role", () => {
+    expect(source).toContain("CLIENT_ASSIGNABLE_ROLES");
+  });
+
+  it("never renders a role-change or deactivate control for the current company_owner row", () => {
+    expect(source).toMatch(/isOwner\s*=\s*member\.role\s*===\s*["']company_owner["']/);
+    expect(source).toMatch(/canManageTeam[\s\S]{0,40}!isOwner/);
+  });
+
+  it("queries company_invitations only for canManageTeam holders, scoped to the caller's own company", () => {
+    expect(source).toContain('.from("company_invitations")');
+    expect(source).toMatch(/capabilities\.canManageTeam[\s\S]{0,80}from\("company_invitations"\)/);
   });
 
   it("renders the display-name edit control only for canManageDisplayNames holders", () => {
@@ -86,8 +99,8 @@ describe("Team Settings page", () => {
     expect(source).toContain("updateMemberDisplayNameAction");
   });
 
-  it("shows role and active/inactive status for each member, same real data as before", () => {
-    expect(source).toContain("ROLE_LABELS");
+  it("shows role and active/inactive status for each member using the shared role-label module", () => {
+    expect(source).toContain("companyRoleLabel");
     expect(source).toContain("member.is_active");
     expect(source).toContain('dvx-badge--success" : "dvx-badge--neutral');
   });

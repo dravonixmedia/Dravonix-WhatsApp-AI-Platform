@@ -1,38 +1,32 @@
+import {
+  companyDeactivateMemberAction,
+  companyReactivateMemberAction,
+  companyChangeMemberRoleAction,
+} from "../../../lib/actions/invitations.js";
 import { updateMemberDisplayNameAction } from "../../../lib/actions/memberIdentity.js";
+import { CLIENT_ASSIGNABLE_ROLES, companyRoleLabel } from "../../../lib/companyRoles.js";
 import { EditDisplayNameControl } from "../../../components/EditDisplayNameControl.js";
+import { InvitationActions } from "../../../components/InvitationActions.js";
 import { resolveMemberIdentity } from "../../../lib/memberIdentity.js";
 import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
+import { InviteMemberForm } from "./InviteMemberForm.js";
 
 export const dynamic = "force-dynamic";
 
-const ROLE_LABELS: Record<string, string> = {
-  company_owner: "Owner",
-  company_admin: "Admin",
-  manager: "Manager",
-  agent: "Agent",
-  knowledge_editor: "Knowledge Editor",
-  billing_viewer: "Billing Viewer",
-  viewer: "Viewer",
-};
-
 /**
- * Team Settings -- client Dashboard Permission Hardening (migration
- * 00000000000022): the client Team page is now view + display-name-edit
- * only. Inviting teammates, resending/revoking invitations, changing
- * roles, and activating/deactivating members are Dravonix-only now,
- * managed from Super Admin -> Companies -> [Company] -- team.manage was
- * revoked from every client role at the database level, so those RPCs
- * (create_company_invitation, admin_resend_company_invitation,
- * admin_revoke_company_invitation, company_change_member_role,
- * company_deactivate_member) are no longer reachable by any client
- * session even if this page still rendered forms for them; removing the
- * forms here just keeps the UI honest about what a client can actually do.
- * Editing an existing member's display name remains available to
- * team.view + team.display_name.manage holders (company_owner/
- * company_admin), via the same shared update_user_display_name RPC/
- * EditDisplayNameControl used elsewhere.
+ * Team Settings -- Phase 2 role model expansion (migration 24) revives
+ * team.manage for company_owner/company_admin (Client Dashboard Permission
+ * Hardening, migration 22, had moved all of this to Super Admin-only). Owner
+ * and Admin get full invite/role-change/deactivate-reactivate controls
+ * again, now with server-side owner protection (company_change_member_role/
+ * company_deactivate_member reject touching the current company_owner no
+ * matter what this page renders -- see migration 24's comments). Manager/
+ * Team Leader/Sales Person hold team.view but not team.manage, so they see
+ * the same member list read-only. Company Accounts holds neither
+ * permission and never reaches this page at all -- both the sidebar link
+ * (dashboard/layout.tsx, gated on canViewTeam) and the guard below agree.
  */
 export default async function TeamSettingsPage() {
   const session = await getDashboardSession();
@@ -77,11 +71,23 @@ export default async function TeamSettingsPage() {
   const members = membersData ?? [];
   const activeMembers = members.filter((m) => m.is_active);
 
+  const { data: invitationsData } = capabilities.canManageTeam
+    ? await supabase
+        .from("company_invitations")
+        .select("id, email, role, status, expires_at, created_at")
+        .eq("company_id", session.activeCompanyId)
+        .order("created_at", { ascending: false })
+        .limit(20)
+    : { data: null };
+  const invitations = invitationsData ?? [];
+
   return (
     <div>
       <h1 className="dvx-page-title">Team Settings</h1>
       <p className="dvx-muted">
-        View team members and their access. Inviting, roles, and activation are managed by Dravonix.
+        {capabilities.canManageTeam
+          ? "Invite teammates, manage roles, and activate or deactivate members."
+          : "View team members and their access."}
       </p>
 
       <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
@@ -96,6 +102,7 @@ export default async function TeamSettingsPage() {
           <div className="dvx-team-member-list">
             {members.map((member) => {
               const isSelf = member.id === session.activeMemberId;
+              const isOwner = member.role === "company_owner";
               const memberIdentity = memberIdentityById.get(member.id);
               const identity = resolveMemberIdentity({
                 name: memberIdentity?.displayName ?? null,
@@ -124,10 +131,16 @@ export default async function TeamSettingsPage() {
                   </span>
                   <span
                     className="dvx-team-member-badges"
-                    style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.5rem",
+                      flexWrap: "wrap",
+                      justifyContent: "flex-end",
+                    }}
                   >
                     <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
-                      {ROLE_LABELS[member.role] ?? member.role}
+                      {companyRoleLabel(member.role)}
                     </span>
                     <span
                       className={`dvx-badge ${member.is_active ? "dvx-badge--success" : "dvx-badge--neutral"}`}
@@ -140,6 +153,64 @@ export default async function TeamSettingsPage() {
                         currentDisplayName={memberIdentity?.displayName ?? null}
                         onSave={updateDisplayNameWithMember}
                       />
+                    ) : null}
+                    {/* Owner protection: the current company_owner row never
+                        gets a role-change/deactivate control on this page --
+                        company_change_member_role/company_deactivate_member
+                        would reject either action anyway, but hiding the
+                        control here keeps the UI honest about what a client
+                        can actually do (RPC rules remain authoritative). */}
+                    {capabilities.canManageTeam && member.is_active && !isOwner ? (
+                      <form
+                        action={companyChangeMemberRoleAction}
+                        style={{ display: "flex", gap: "0.3rem" }}
+                      >
+                        <input type="hidden" name="member_id" value={member.id} />
+                        <select
+                          className="dvx-input"
+                          name="new_role"
+                          defaultValue={member.role}
+                          style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem" }}
+                        >
+                          {CLIENT_ASSIGNABLE_ROLES.map((role) => (
+                            <option key={role} value={role}>
+                              {companyRoleLabel(role)}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="dvx-button dvx-button--secondary"
+                          type="submit"
+                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                        >
+                          Change role
+                        </button>
+                      </form>
+                    ) : null}
+                    {capabilities.canManageTeam && !isOwner ? (
+                      member.is_active ? (
+                        <form action={companyDeactivateMemberAction}>
+                          <input type="hidden" name="member_id" value={member.id} />
+                          <button
+                            className="dvx-button dvx-button--secondary"
+                            type="submit"
+                            style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                          >
+                            Deactivate
+                          </button>
+                        </form>
+                      ) : (
+                        <form action={companyReactivateMemberAction}>
+                          <input type="hidden" name="member_id" value={member.id} />
+                          <button
+                            className="dvx-button dvx-button--secondary"
+                            type="submit"
+                            style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                          >
+                            Reactivate
+                          </button>
+                        </form>
+                      )
                     ) : null}
                   </span>
                 </div>
@@ -169,6 +240,68 @@ export default async function TeamSettingsPage() {
           </div>
         </div>
       </div>
+
+      {capabilities.canManageTeam ? (
+        <>
+          <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+            <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+              Invite a teammate
+            </div>
+            <p
+              className="dvx-muted"
+              style={{ fontSize: "0.8rem", marginTop: 0, marginBottom: "0.75rem" }}
+            >
+              The invited person does not need an existing DRAIVA account -- an email is sent to
+              them with a link to create one and accept in a single step. Owner cannot be assigned
+              here; ownership changes go through Dravonix.
+            </p>
+            <InviteMemberForm companyId={session.activeCompanyId} defaultRole="manager" />
+          </div>
+
+          <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+            <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+              Pending invitations
+            </div>
+            {invitations.length === 0 ? (
+              <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+                No invitations yet.
+              </p>
+            ) : (
+              <div className="dvx-team-member-list">
+                {invitations.map((invitation) => (
+                  <div key={invitation.id} className="dvx-team-member-row">
+                    <span className="dvx-team-member-name">
+                      {invitation.email}
+                      <span
+                        className="dvx-muted"
+                        style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}
+                      >
+                        {companyRoleLabel(invitation.role)} · invited{" "}
+                        {new Date(invitation.created_at).toLocaleDateString()} · expires{" "}
+                        {new Date(invitation.expires_at).toLocaleDateString()}
+                      </span>
+                    </span>
+                    <span
+                      className="dvx-team-member-badges"
+                      style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                    >
+                      <span
+                        className={`dvx-badge ${invitation.status === "pending" ? "dvx-badge--warning" : invitation.status === "accepted" ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                        style={{ fontSize: "0.7rem" }}
+                      >
+                        {invitation.status}
+                      </span>
+                      {invitation.status === "pending" ? (
+                        <InvitationActions invitationId={invitation.id} />
+                      ) : null}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -19,10 +19,10 @@ describe("hasPermission", () => {
     expect(hasPermission("agent", "team.view")).toBe(false);
   });
 
-  it("manager can assign and reassign but cannot view the team", () => {
+  it("manager can assign and reassign, and (Phase 2) can view the team", () => {
     expect(hasPermission("manager", "conversations.assign")).toBe(true);
     expect(hasPermission("manager", "conversations.reassign")).toBe(true);
-    expect(hasPermission("manager", "team.view")).toBe(false);
+    expect(hasPermission("manager", "team.view")).toBe(true);
   });
 
   it("company_admin and company_owner hold every client-facing permission", () => {
@@ -53,6 +53,54 @@ describe("hasPermission", () => {
   it("billing_viewer holds only billing.view", () => {
     expect(hasPermission("billing_viewer", "billing.view")).toBe(true);
     expect(hasPermission("billing_viewer", "conversations.view")).toBe(false);
+  });
+
+  it("Phase 2: company_owner and company_admin hold team.manage again (revived) and conversations.close", () => {
+    for (const role of ["company_owner", "company_admin"] as const) {
+      expect(hasPermission(role, "team.manage")).toBe(true);
+      expect(hasPermission(role, "conversations.close")).toBe(true);
+    }
+  });
+
+  it("Phase 2: manager holds team.view and conversations.close but not team.manage", () => {
+    expect(hasPermission("manager", "team.view")).toBe(true);
+    expect(hasPermission("manager", "conversations.close")).toBe(true);
+    expect(hasPermission("manager", "team.manage")).toBe(false);
+  });
+
+  it("Phase 2: team_leader can view/reply/assign/close but not reassign, view usage, or manage team", () => {
+    expect(hasPermission("team_leader", "conversations.view")).toBe(true);
+    expect(hasPermission("team_leader", "conversations.reply")).toBe(true);
+    expect(hasPermission("team_leader", "conversations.assign")).toBe(true);
+    expect(hasPermission("team_leader", "conversations.close")).toBe(true);
+    expect(hasPermission("team_leader", "team.view")).toBe(true);
+    expect(hasPermission("team_leader", "conversations.reassign")).toBe(false);
+    expect(hasPermission("team_leader", "usage.view")).toBe(false);
+    expect(hasPermission("team_leader", "team.manage")).toBe(false);
+    expect(hasPermission("team_leader", "team.display_name.manage")).toBe(false);
+  });
+
+  it("Phase 2: sales_person replaces agent -- can view/reply/assign but never close, reassign, or manage team", () => {
+    expect(hasPermission("sales_person", "conversations.view")).toBe(true);
+    expect(hasPermission("sales_person", "conversations.reply")).toBe(true);
+    expect(hasPermission("sales_person", "conversations.assign")).toBe(true);
+    expect(hasPermission("sales_person", "team.view")).toBe(true);
+    expect(hasPermission("sales_person", "conversations.close")).toBe(false);
+    expect(hasPermission("sales_person", "conversations.reassign")).toBe(false);
+    expect(hasPermission("sales_person", "team.manage")).toBe(false);
+    expect(hasPermission("sales_person", "usage.view")).toBe(false);
+    expect(hasPermission("sales_person", "billing.view")).toBe(false);
+  });
+
+  it("Phase 2: company_accounts holds only billing.view and usage.view -- no team, conversations, leads, knowledge, ai_settings, or whatsapp visibility", () => {
+    expect(hasPermission("company_accounts", "billing.view")).toBe(true);
+    expect(hasPermission("company_accounts", "usage.view")).toBe(true);
+    expect(hasPermission("company_accounts", "team.view")).toBe(false);
+    expect(hasPermission("company_accounts", "conversations.view")).toBe(false);
+    expect(hasPermission("company_accounts", "leads.view")).toBe(false);
+    expect(hasPermission("company_accounts", "knowledge.view")).toBe(false);
+    expect(hasPermission("company_accounts", "ai_settings.view")).toBe(false);
+    expect(hasPermission("company_accounts", "whatsapp.view")).toBe(false);
   });
 });
 
@@ -89,28 +137,28 @@ describe("getDashboardCapabilities", () => {
     expect(capabilities.canViewTeam).toBe(false);
   });
 
-  it("manager can assign conversations and manage leads but cannot view the team or billing", () => {
+  it("manager can assign conversations, manage leads, and (Phase 2) view the team, but cannot manage it or view billing", () => {
     const capabilities = getDashboardCapabilities("manager");
     expect(capabilities.canAssignConversations).toBe(true);
     expect(capabilities.canReassignConversations).toBe(true);
     expect(capabilities.canManageLeads).toBe(true);
-    expect(capabilities.canViewTeam).toBe(false);
+    expect(capabilities.canViewTeam).toBe(true);
+    expect(capabilities.canManageTeam).toBe(false);
     expect(capabilities.canViewBilling).toBe(false);
   });
 
-  it("company_owner and company_admin can view the team, settings, and billing, and edit display names -- but hold no *.manage capability for settings/AI/knowledge/WhatsApp/billing", () => {
+  it("company_owner and company_admin can view the team, settings, and billing, edit display names, and (Phase 2) manage the team again -- but still hold no *.manage capability for settings/AI/knowledge/WhatsApp/billing", () => {
     for (const role of ["company_owner", "company_admin"] as const) {
       const capabilities = getDashboardCapabilities(role);
       expect(capabilities.canViewTeam).toBe(true);
+      expect(capabilities.canManageTeam).toBe(true);
       expect(capabilities.canManageDisplayNames).toBe(true);
       expect(capabilities.canViewSettings).toBe(true);
       expect(capabilities.canViewBilling).toBe(true);
       expect(capabilities.canViewWhatsapp).toBe(true);
       expect(capabilities.canViewAiSettings).toBe(true);
       expect(capabilities.canViewKnowledge).toBe(true);
-      expect(capabilities as unknown as Record<string, unknown>).not.toHaveProperty(
-        "canManageTeam",
-      );
+      expect(capabilities.canCloseConversations).toBe(true);
       expect(capabilities as unknown as Record<string, unknown>).not.toHaveProperty(
         "canManageSettings",
       );
@@ -127,6 +175,45 @@ describe("getDashboardCapabilities", () => {
         "canManageBilling",
       );
     }
+  });
+
+  it("Phase 2: manager can view the team and close conversations but cannot manage the team", () => {
+    const capabilities = getDashboardCapabilities("manager");
+    expect(capabilities.canViewTeam).toBe(true);
+    expect(capabilities.canManageTeam).toBe(false);
+    expect(capabilities.canCloseConversations).toBe(true);
+  });
+
+  it("Phase 2: team_leader can assign and close conversations, view the team, but cannot reassign, manage the team, or view usage", () => {
+    const capabilities = getDashboardCapabilities("team_leader");
+    expect(capabilities.canAssignConversations).toBe(true);
+    expect(capabilities.canCloseConversations).toBe(true);
+    expect(capabilities.canViewTeam).toBe(true);
+    expect(capabilities.canReassignConversations).toBe(false);
+    expect(capabilities.canManageTeam).toBe(false);
+    expect(capabilities.canViewUsage).toBe(false);
+  });
+
+  it("Phase 2: sales_person can assign conversations but must not be able to close/end them, reassign, or manage the team", () => {
+    const capabilities = getDashboardCapabilities("sales_person");
+    expect(capabilities.canAssignConversations).toBe(true);
+    expect(capabilities.canCloseConversations).toBe(false);
+    expect(capabilities.canReassignConversations).toBe(false);
+    expect(capabilities.canManageTeam).toBe(false);
+    expect(capabilities.canViewTeam).toBe(true);
+  });
+
+  it("Phase 2: company_accounts sees billing/usage only -- no team page, no conversations, no leads/knowledge/ai/whatsapp", () => {
+    const capabilities = getDashboardCapabilities("company_accounts");
+    expect(capabilities.canViewBilling).toBe(true);
+    expect(capabilities.canViewUsage).toBe(true);
+    expect(capabilities.canViewTeam).toBe(false);
+    expect(capabilities.canManageTeam).toBe(false);
+    expect(capabilities.canViewConversations).toBe(false);
+    expect(capabilities.canViewLeads).toBe(false);
+    expect(capabilities.canViewKnowledge).toBe(false);
+    expect(capabilities.canViewAiSettings).toBe(false);
+    expect(capabilities.canViewWhatsapp).toBe(false);
   });
 
   it("viewer can view AI settings and WhatsApp connection info but cannot edit display names", () => {
