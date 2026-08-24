@@ -14,6 +14,7 @@ export type PermissionKey =
   | "ai_settings.view"
   | "audit.view"
   | "billing.view"
+  | "contacts.phone.view_full"
   | "conversations.assign"
   | "conversations.close"
   | "conversations.reassign"
@@ -44,12 +45,23 @@ export type PermissionKey =
  * entries below exist only so a historical row (if one is ever found)
  * still resolves capabilities correctly, never offered anywhere in active
  * UI (see apps/web/lib/companyRoles.ts).
+ *
+ * Phase 3A.1 (migration 25) adds contacts.phone.view_full -- company-wide
+ * full-number visibility for company_owner/company_admin/manager/
+ * team_leader. sales_person deliberately never holds this: its full-number
+ * access is always computed live, per conversation/lead, from
+ * assigned_member_id (see get_conversation_phone_displays/
+ * get_lead_phone_displays/phone_is_full_for_caller) -- never a static
+ * role grant, and this mirror intentionally has no way to represent that
+ * per-row condition, which is exactly why the database RPC layer, not this
+ * file, is the actual authorization boundary for phone display.
  */
 const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
   company_owner: new Set([
     "ai_settings.view",
     "audit.view",
     "billing.view",
+    "contacts.phone.view_full",
     "conversations.assign",
     "conversations.close",
     "conversations.reassign",
@@ -70,6 +82,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "ai_settings.view",
     "audit.view",
     "billing.view",
+    "contacts.phone.view_full",
     "conversations.assign",
     "conversations.close",
     "conversations.reassign",
@@ -88,6 +101,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
   ]),
   manager: new Set([
     "ai_settings.view",
+    "contacts.phone.view_full",
     "conversations.assign",
     "conversations.close",
     "conversations.reassign",
@@ -103,6 +117,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
   ]),
   team_leader: new Set([
     "ai_settings.view",
+    "contacts.phone.view_full",
     "conversations.assign",
     "conversations.close",
     "conversations.reply",
@@ -156,6 +171,17 @@ export interface DashboardCapabilities {
   canReassignConversations: boolean;
   canReconcileOutbound: boolean;
   canCloseConversations: boolean;
+  /**
+   * Phase 3A.1: whether this role holds contacts.phone.view_full
+   * (company-wide full-number visibility). Never sufficient on its own to
+   * decide what a Sales Person sees for a given conversation/lead -- that
+   * is always resolved server-side, per row, by
+   * get_conversation_phone_displays/get_lead_phone_displays. UI-only hint
+   * (e.g. whether to offer a "search by full number" affordance);
+   * search_company_conversations/search_company_leads re-derive the same
+   * decision server-side regardless of what this flag says.
+   */
+  canViewFullPhoneCompanyWide: boolean;
   canPauseResumeAi: boolean;
   canViewTeam: boolean;
   canManageTeam: boolean;
@@ -200,6 +226,7 @@ export function getDashboardCapabilities(role: CompanyRole | null): DashboardCap
     canReassignConversations: hasPermission(role, "conversations.reassign"),
     canReconcileOutbound: hasPermission(role, "conversations.reconcile"),
     canCloseConversations: hasPermission(role, "conversations.close"),
+    canViewFullPhoneCompanyWide: hasPermission(role, "contacts.phone.view_full"),
     canPauseResumeAi: hasPermission(role, "conversations.assign"),
     canViewTeam: hasPermission(role, "team.view"),
     canManageTeam: hasPermission(role, "team.manage"),

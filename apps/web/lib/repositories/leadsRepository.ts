@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { maskPhoneNumber } from "@dravonix/handover";
+import {
+  getLeadPhoneDisplays,
+  searchCompanyLeadIds,
+  type PhoneDisplayResult,
+} from "./phoneDisplay.js";
 
 export type LeadStage = "new" | "qualifying" | "qualified" | "proposal_sent" | "won" | "lost";
 
@@ -23,6 +27,7 @@ export interface LeadListItem {
   displayName: string;
   companyName: string | null;
   maskedPhoneNumber: string | null;
+  phoneVisibility: "full" | "masked";
   serviceInterest: string | null;
   stage: LeadStage;
   score: number | null;
@@ -62,7 +67,6 @@ interface LeadRow {
   company_id: string;
   customer_name: string | null;
   company_name: string | null;
-  phone_number: string | null;
   service_interest: string | null;
   product_interest: string | null;
   budget: string | null;
@@ -79,7 +83,6 @@ interface LeadRow {
   created_at: string;
   updated_at: string;
   contacts: {
-    whatsapp_wa_id: string;
     display_name: string | null;
     profile_name: string | null;
   } | null;
@@ -94,32 +97,39 @@ interface LeadRow {
  * see packages/ai/src/schema.ts's leadUpdatesSchema, entirely `.partial()`
  * -- so a brand-new lead legitimately has no customer_name yet even though
  * its underlying contact is always known); (2) the company name, when no
- * personal name exists; (3) the WhatsApp number, preferring the lead's own
- * phone_number but falling back to the linked contact's whatsapp_wa_id
- * (always present, unlike the AI-extracted phone_number); (4) a neutral,
- * non-fabricated fallback. Never returns "Unknown lead" when any of these
- * real fields exist.
+ * personal name exists; (3) the phone display already resolved for this
+ * lead (Phase 3A.1: full or masked, per get_lead_phone_displays -- never a
+ * raw value computed here); (4) a neutral, non-fabricated fallback. Never
+ * returns "Unknown lead" when any of these real fields exist.
  */
-function resolveLeadDisplayName(row: LeadRow, maskedPhoneNumber: string | null): string {
+function resolveLeadDisplayName(row: LeadRow, phoneDisplay: string | null): string {
   const contactName = row.contacts?.display_name ?? row.contacts?.profile_name ?? null;
   return (
-    row.customer_name ??
-    contactName ??
-    row.company_name ??
-    maskedPhoneNumber ??
-    "Unnamed WhatsApp lead"
+    row.customer_name ?? contactName ?? row.company_name ?? phoneDisplay ?? "Unnamed WhatsApp lead"
   );
 }
 
-function toListItem(row: LeadRow): LeadListItem {
-  const rawPhone = row.phone_number ?? row.contacts?.whatsapp_wa_id ?? null;
-  const maskedPhoneNumber = rawPhone ? maskPhoneNumber(rawPhone) : null;
+/**
+ * `phone` is undefined only when get_lead_phone_displays returned no row for
+ * this lead id at all (the caller isn't authorized to see it, or it's
+ * genuinely missing) -- treated as "no phone value known" (null), exactly
+ * like the pre-Phase-3A.1 contract where a null rawPhone produced a null
+ * maskedPhoneNumber. This is deliberately NOT the same "Unknown" placeholder
+ * conversationsRepository/globalSearchRepository use for their
+ * non-nullable maskedPhoneNumber field -- LeadListItem.maskedPhoneNumber has
+ * always been nullable, and silently substituting the literal string
+ * "Unknown" here would corrupt resolveLeadDisplayName's fallback chain (it
+ * would render as if "Unknown" were a real identity fallback, ahead of the
+ * neutral "Unnamed WhatsApp lead" label).
+ */
+function toListItem(row: LeadRow, phone: PhoneDisplayResult | undefined): LeadListItem {
   return {
     id: row.id,
     customerName: row.customer_name,
-    displayName: resolveLeadDisplayName(row, maskedPhoneNumber),
+    displayName: resolveLeadDisplayName(row, phone?.maskedPhoneNumber ?? null),
     companyName: row.company_name,
-    maskedPhoneNumber,
+    maskedPhoneNumber: phone?.maskedPhoneNumber ?? null,
+    phoneVisibility: phone?.phoneVisibility ?? "masked",
     serviceInterest: row.service_interest,
     stage: row.stage,
     score: row.score,
@@ -130,10 +140,10 @@ function toListItem(row: LeadRow): LeadListItem {
   };
 }
 
-const LEAD_SELECT_COLUMNS = `id, company_id, customer_name, company_name, phone_number, service_interest,
+const LEAD_SELECT_COLUMNS = `id, company_id, customer_name, company_name, service_interest,
        product_interest, budget, preferred_timeline, email, location, branch, notes,
        source, score, stage, assigned_member_id, conversation_id, created_at, updated_at,
-       contacts (whatsapp_wa_id, display_name, profile_name)`;
+       contacts (display_name, profile_name)`;
 
 /**
  * Tenant-scoped, paginated, searchable leads list for /dashboard/leads. RLS
@@ -145,16 +155,24 @@ export async function listLeads(
   client: SupabaseClient,
   filters: LeadListFilters,
 ): Promise<LeadListPage> {
+  // Phase 3A.1: search_company_leads (migration 25) replaces the raw
+  // `phone_number ilike ...` filter -- see phoneDisplay.ts and the
+  // migration's own comments for the privacy-aware matching rules.
+  let leadIdFilter: string[] | null = null;
+  if (filters.search && filters.search.trim().length > 0) {
+    leadIdFilter = await searchCompanyLeadIds(client, filters.companyId, filters.search.trim());
+    if (leadIdFilter.length === 0) {
+      return { items: [], totalCount: 0 };
+    }
+  }
+
   let query = client
     .from("leads")
     .select(LEAD_SELECT_COLUMNS, { count: "exact" })
     .eq("company_id", filters.companyId);
 
-  if (filters.search && filters.search.trim().length > 0) {
-    const term = filters.search.trim();
-    query = query.or(
-      `customer_name.ilike.%${term}%,company_name.ilike.%${term}%,phone_number.ilike.%${term}%,email.ilike.%${term}%`,
-    );
+  if (leadIdFilter) {
+    query = query.in("id", leadIdFilter);
   }
   if (filters.stage && filters.stage !== "all") {
     query = query.eq("stage", filters.stage);
@@ -172,7 +190,12 @@ export async function listLeads(
   const { data, count, error } = await query;
   if (error) throw error;
 
-  const items = ((data ?? []) as unknown as LeadRow[]).map(toListItem);
+  const rows = (data ?? []) as unknown as LeadRow[];
+  const phoneDisplays = await getLeadPhoneDisplays(
+    client,
+    rows.map((row) => row.id),
+  );
+  const items = rows.map((row) => toListItem(row, phoneDisplays.get(row.id)));
   return { items, totalCount: count ?? items.length };
 }
 
@@ -197,8 +220,9 @@ export async function getLead(
   if (!data) return null;
 
   const row = data as unknown as LeadRow;
+  const phoneDisplays = await getLeadPhoneDisplays(client, [row.id]);
   return {
-    ...toListItem(row),
+    ...toListItem(row, phoneDisplays.get(row.id)),
     companyId: row.company_id,
     productInterest: row.product_interest,
     budget: row.budget,

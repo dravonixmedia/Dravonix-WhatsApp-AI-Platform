@@ -11,6 +11,29 @@ import {
   resolveConversationTemporalContext,
   type ConversationTemporalContext,
 } from "@dravonix/core";
+import {
+  getConversationPhoneDisplays,
+  getLeadPhoneDisplays,
+  resolvePhoneDisplay,
+  type PhoneDisplayResult,
+} from "./phoneDisplay.js";
+
+/**
+ * Phase 3A.1/3A security correction: the DRAIVA prompt must never see a raw
+ * phone number, regardless of the caller's own contacts.phone.view_full
+ * grant -- the assistant doesn't need literal digits to reason about a
+ * contact or lead. get_conversation_phone_displays/get_lead_phone_displays
+ * return the RAW value for an authorized caller, so a second, unconditional
+ * mask is applied here on top; a caller who was never authorized already
+ * gets back an already-masked string (stars stripped as non-digits by
+ * maskPhoneNumber, which would collapse it to all-stars if re-masked), so
+ * that case is passed through untouched instead of being re-masked.
+ */
+function forceMaskedForPrompt(result: PhoneDisplayResult): string {
+  return result.phoneVisibility === "full"
+    ? maskPhoneNumber(result.maskedPhoneNumber)
+    : result.maskedPhoneNumber;
+}
 
 export interface ChatAgentContext {
   messages: ChatAgentMessage[];
@@ -67,16 +90,14 @@ export async function loadChatAgentContext(
       .maybeSingle(),
     supabase
       .from("conversations")
-      .select(
-        "contacts (whatsapp_wa_id, display_name, profile_name, last_detected_language, timezone)",
-      )
+      .select("contacts (display_name, profile_name, last_detected_language, timezone)")
       .eq("id", conversationId)
       .eq("company_id", companyId)
       .maybeSingle(),
     supabase
       .from("leads")
       .select(
-        "customer_name, company_name, phone_number, email, service_interest, budget, preferred_timeline, location, notes",
+        "id, customer_name, company_name, email, service_interest, budget, preferred_timeline, location, notes",
       )
       .eq("conversation_id", conversationId)
       .eq("company_id", companyId)
@@ -95,7 +116,6 @@ export async function loadChatAgentContext(
   };
 
   type ContactRow = {
-    whatsapp_wa_id: string;
     display_name: string | null;
     profile_name: string | null;
     last_detected_language: string | null;
@@ -103,20 +123,48 @@ export async function loadChatAgentContext(
   };
   const rawContact = contactResult.data?.contacts as ContactRow | ContactRow[] | null | undefined;
   const contactRow = Array.isArray(rawContact) ? rawContact[0] : rawContact;
+
+  const leadRow = leadResult.data;
+
+  // Phase 3A security correction: neither contacts.whatsapp_wa_id nor
+  // leads.phone_number is read as a raw column here anymore -- both go
+  // through the same batched, SECURITY DEFINER RPCs (migration 25) every
+  // other client-facing read path uses, then get forced through
+  // forceMaskedForPrompt() regardless of what visibility the RPC granted
+  // this caller (see that helper's doc comment).
+  const [conversationPhoneDisplays, leadPhoneDisplays] = await Promise.all([
+    contactRow ? getConversationPhoneDisplays(supabase, [conversationId]) : null,
+    leadRow ? getLeadPhoneDisplays(supabase, [leadRow.id]) : null,
+  ]);
+
   const contact: ChatAgentContactContext | null = contactRow
     ? {
         displayName: contactRow.display_name ?? contactRow.profile_name,
-        maskedPhoneNumber: maskPhoneNumber(contactRow.whatsapp_wa_id),
+        maskedPhoneNumber: forceMaskedForPrompt(
+          resolvePhoneDisplay(conversationPhoneDisplays!, conversationId),
+        ),
         lastDetectedLanguage: contactRow.last_detected_language,
       }
     : null;
 
-  const leadRow = leadResult.data;
+  // Looked up directly (not via resolvePhoneDisplay's always-non-null
+  // "Unknown" placeholder) so a lead with no phone of its own -- and no
+  // linked contact wa_id to fall back to -- still yields null here, matching
+  // this field's `string | null` contract, exactly as it did before this
+  // read moved off the raw phone_number column.
+  const leadPhoneEntry = leadRow ? leadPhoneDisplays?.get(leadRow.id) : undefined;
+
   const lead: ChatAgentLeadContext | null = leadRow
     ? {
         customerName: leadRow.customer_name,
         companyName: leadRow.company_name,
-        phone: leadRow.phone_number,
+        // Masked unconditionally, regardless of the caller's own
+        // phone-visibility permission -- the assistant does not need the
+        // literal digits to reason about a lead, so this is deliberately
+        // stricter than the UI's own authorization-aware display (see the
+        // Phase 3A.1 report's "DRAIVA AI privacy" section). Mirrors how
+        // `contact.maskedPhoneNumber` above has always been masked here.
+        phone: leadPhoneEntry ? forceMaskedForPrompt(leadPhoneEntry) : null,
         email: leadRow.email,
         serviceInterest: leadRow.service_interest,
         budget: leadRow.budget,

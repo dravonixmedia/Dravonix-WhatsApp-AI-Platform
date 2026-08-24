@@ -1,5 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { maskPhoneNumber } from "@dravonix/handover";
+import {
+  getConversationPhoneDisplays,
+  getLeadPhoneDisplays,
+  resolvePhoneDisplay,
+  searchCompanyConversationIds,
+  searchCompanyLeadIds,
+} from "./phoneDisplay.js";
 
 export const GLOBAL_SEARCH_RESULT_LIMIT = 5;
 /** Caps the intermediate contact-id lookup before the conversations query -- never an unbounded scan. */
@@ -9,6 +15,7 @@ export interface GlobalSearchConversationResult {
   conversationId: string;
   displayName: string;
   maskedPhoneNumber: string;
+  phoneVisibility: "full" | "masked";
   latestMessagePreview: string | null;
 }
 
@@ -53,49 +60,52 @@ export async function searchConversations(
   companyId: string,
   term: string,
 ): Promise<GlobalSearchConversationResult[]> {
-  const { data: matchingContacts, error: contactsError } = await supabase
-    .from("contacts")
-    .select("id")
-    .eq("company_id", companyId)
-    .or(`display_name.ilike.%${term}%,profile_name.ilike.%${term}%,whatsapp_wa_id.ilike.%${term}%`)
-    .limit(CANDIDATE_CONTACT_LIMIT);
-  if (contactsError) throw contactsError;
-
-  const contactIds = (matchingContacts ?? []).map((c) => c.id as string);
-  if (contactIds.length === 0) return [];
+  // Phase 3A.1: search_company_conversations (migration 25) replaces the
+  // raw `contacts.whatsapp_wa_id ilike ...` filter -- see
+  // conversationsRepository.ts's identical comment for the privacy
+  // rationale (last-4-only phone matching outside the caller's own
+  // authorized rows, never a full-number existence oracle).
+  const conversationIds = await searchCompanyConversationIds(
+    supabase,
+    companyId,
+    term,
+    CANDIDATE_CONTACT_LIMIT,
+  );
+  if (conversationIds.length === 0) return [];
 
   const { data, error } = await supabase
     .from("conversations")
     .select(
-      `id, contacts (whatsapp_wa_id, display_name, profile_name),
+      `id, contacts (display_name, profile_name),
        messages (body, channel_type, created_at)`,
     )
     .eq("company_id", companyId)
-    .in("contact_id", contactIds)
+    .in("id", conversationIds)
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .order("created_at", { foreignTable: "messages", ascending: false })
     .limit(1, { foreignTable: "messages" })
     .limit(GLOBAL_SEARCH_RESULT_LIMIT);
   if (error) throw error;
 
-  return (
-    (data ?? []) as unknown as Array<{
-      id: string;
-      contacts: {
-        whatsapp_wa_id: string;
-        display_name: string | null;
-        profile_name: string | null;
-      } | null;
-      messages: Array<{ body: string | null; channel_type: string }> | null;
-    }>
-  ).map((row) => {
+  const rows = (data ?? []) as unknown as Array<{
+    id: string;
+    contacts: { display_name: string | null; profile_name: string | null } | null;
+    messages: Array<{ body: string | null; channel_type: string }> | null;
+  }>;
+  const phoneDisplays = await getConversationPhoneDisplays(
+    supabase,
+    rows.map((row) => row.id),
+  );
+
+  return rows.map((row) => {
     const contact = row.contacts;
     const latestMessage = row.messages?.[0] ?? null;
+    const phone = resolvePhoneDisplay(phoneDisplays, row.id);
     return {
       conversationId: row.id,
-      displayName:
-        contact?.display_name ?? contact?.profile_name ?? contact?.whatsapp_wa_id ?? "Customer",
-      maskedPhoneNumber: contact ? maskPhoneNumber(contact.whatsapp_wa_id) : "Unknown",
+      displayName: contact?.display_name ?? contact?.profile_name ?? phone.maskedPhoneNumber,
+      maskedPhoneNumber: phone.maskedPhoneNumber,
+      phoneVisibility: phone.phoneVisibility,
       latestMessagePreview:
         latestMessage?.channel_type === "audio" ? "Voice message" : (latestMessage?.body ?? null),
     };
@@ -107,41 +117,42 @@ export async function searchLeads(
   companyId: string,
   term: string,
 ): Promise<GlobalSearchLeadResult[]> {
+  // Phase 3A.1: search_company_leads (migration 25) replaces the raw
+  // `phone_number ilike ...` filter -- same privacy rationale as
+  // searchConversations above.
+  const leadIds = await searchCompanyLeadIds(supabase, companyId, term, GLOBAL_SEARCH_RESULT_LIMIT);
+  if (leadIds.length === 0) return [];
+
   const { data, error } = await supabase
     .from("leads")
     .select(
       `id, customer_name, company_name, service_interest, stage,
-       contacts (whatsapp_wa_id, display_name, profile_name)`,
+       contacts (display_name, profile_name)`,
     )
     .eq("company_id", companyId)
-    .or(
-      `customer_name.ilike.%${term}%,company_name.ilike.%${term}%,phone_number.ilike.%${term}%,email.ilike.%${term}%,service_interest.ilike.%${term}%`,
-    )
+    .in("id", leadIds)
     .order("updated_at", { ascending: false })
     .limit(GLOBAL_SEARCH_RESULT_LIMIT);
   if (error) throw error;
 
-  return (
-    (data ?? []) as unknown as Array<{
-      id: string;
-      customer_name: string | null;
-      company_name: string | null;
-      service_interest: string | null;
-      stage: string;
-      contacts: {
-        whatsapp_wa_id: string;
-        display_name: string | null;
-        profile_name: string | null;
-      } | null;
-    }>
-  ).map((row) => {
+  const rows = (data ?? []) as unknown as Array<{
+    id: string;
+    customer_name: string | null;
+    company_name: string | null;
+    service_interest: string | null;
+    stage: string;
+    contacts: { display_name: string | null; profile_name: string | null } | null;
+  }>;
+  const phoneDisplays = await getLeadPhoneDisplays(
+    supabase,
+    rows.map((row) => row.id),
+  );
+
+  return rows.map((row) => {
     const contactName = row.contacts?.display_name ?? row.contacts?.profile_name ?? null;
+    const phone = resolvePhoneDisplay(phoneDisplays, row.id);
     const displayName =
-      row.customer_name ??
-      contactName ??
-      row.company_name ??
-      (row.contacts ? maskPhoneNumber(row.contacts.whatsapp_wa_id) : null) ??
-      "Unnamed WhatsApp lead";
+      row.customer_name ?? contactName ?? row.company_name ?? phone.maskedPhoneNumber;
     return {
       leadId: row.id,
       displayName,

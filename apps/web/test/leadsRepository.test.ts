@@ -12,6 +12,7 @@ interface FakeChain {
   calls: { method: string; args: unknown[] }[];
   select: (...args: unknown[]) => FakeChain;
   eq: (...args: unknown[]) => FakeChain;
+  in: (...args: unknown[]) => FakeChain;
   or: (...args: unknown[]) => FakeChain;
   is: (...args: unknown[]) => FakeChain;
   order: (...args: unknown[]) => FakeChain;
@@ -33,6 +34,7 @@ function fakeChain(result: QueryResult): FakeChain {
     calls,
     select: record("select"),
     eq: record("eq"),
+    in: record("in"),
     or: record("or"),
     is: record("is"),
     order: record("order"),
@@ -43,8 +45,38 @@ function fakeChain(result: QueryResult): FakeChain {
   return chain;
 }
 
-function fakeSupabaseClient(chain: ReturnType<typeof fakeChain>): SupabaseClient {
-  return { from: vi.fn(() => chain) } as unknown as SupabaseClient;
+/**
+ * Phase 3A.1: leadsRepository.ts now resolves phone display via
+ * get_lead_phone_displays/search_company_leads RPCs (migration 25), never a
+ * raw `contacts.whatsapp_wa_id`/`leads.phone_number` embed or ilike filter.
+ * `rpcResponses` maps RPC name -> canned response; `searchIds` defaults to
+ * every row id already in `chain`'s data (so a search test doesn't need to
+ * separately stub which ids match unless it wants to test filtering itself).
+ */
+function fakeSupabaseClient(
+  chain: FakeChain,
+  rpcResponses: Record<string, { data: unknown; error: { message: string } | null }> = {},
+): SupabaseClient {
+  return {
+    from: vi.fn(() => chain),
+    rpc: vi.fn((name: string) => {
+      const response = rpcResponses[name] ?? { data: [], error: null };
+      return Promise.resolve(response) as unknown as ReturnType<SupabaseClient["rpc"]>;
+    }),
+  } as unknown as SupabaseClient;
+}
+
+function phoneDisplayRpc(
+  leadId: string,
+  display: string,
+  visibility: "full" | "masked" = "masked",
+) {
+  return {
+    get_lead_phone_displays: {
+      data: [{ lead_id: leadId, phone_display: display, phone_visibility: visibility }],
+      error: null,
+    },
+  };
 }
 
 const LEAD_ROW = {
@@ -52,7 +84,6 @@ const LEAD_ROW = {
   company_id: "company-a",
   customer_name: "Priya Nair",
   company_name: "Priya Clinic",
-  phone_number: "+919812345678",
   service_interest: "Website",
   product_interest: "E-commerce",
   budget: "50000",
@@ -68,13 +99,13 @@ const LEAD_ROW = {
   conversation_id: "conv-1",
   created_at: "2026-01-01T00:00:00.000Z",
   updated_at: "2026-01-02T00:00:00.000Z",
-  contacts: { whatsapp_wa_id: "+919812345678", display_name: "Priya", profile_name: "Priya N" },
+  contacts: { display_name: "Priya", profile_name: "Priya N" },
 };
 
 describe("listLeads", () => {
   it("always scopes the query to the caller's own companyId", async () => {
     const chain = fakeChain({ data: [LEAD_ROW], count: 1, error: null });
-    const client = fakeSupabaseClient(chain);
+    const client = fakeSupabaseClient(chain, phoneDisplayRpc("lead-1", "********5678"));
 
     await listLeads(client, {
       companyId: "company-a",
@@ -87,9 +118,9 @@ describe("listLeads", () => {
     expect(eqCalls).toContainEqual({ method: "eq", args: ["company_id", "company-a"] });
   });
 
-  it("maps rows into the list-item shape, masking the phone number", async () => {
+  it("maps rows into the list-item shape, using the secure RPC's phone display", async () => {
     const chain = fakeChain({ data: [LEAD_ROW], count: 1, error: null });
-    const client = fakeSupabaseClient(chain);
+    const client = fakeSupabaseClient(chain, phoneDisplayRpc("lead-1", "********5678", "full"));
 
     const { items, totalCount } = await listLeads(client, {
       companyId: "company-a",
@@ -106,6 +137,7 @@ describe("listLeads", () => {
         displayName: "Priya Nair",
         companyName: "Priya Clinic",
         maskedPhoneNumber: "********5678",
+        phoneVisibility: "full",
         serviceInterest: "Website",
         stage: "qualifying",
         score: 80,
@@ -117,7 +149,7 @@ describe("listLeads", () => {
     ]);
   });
 
-  it("selects the joined contacts columns needed for identity fallback", async () => {
+  it("never selects contacts.whatsapp_wa_id or leads.phone_number directly", async () => {
     const chain = fakeChain({ data: [], count: 0, error: null });
     const client = fakeSupabaseClient(chain);
 
@@ -129,9 +161,9 @@ describe("listLeads", () => {
     });
 
     const selectCall = chain.calls.find((c) => c.method === "select");
-    expect(String(selectCall?.args[0])).toContain(
-      "contacts (whatsapp_wa_id, display_name, profile_name)",
-    );
+    expect(String(selectCall?.args[0])).not.toContain("whatsapp_wa_id");
+    expect(String(selectCall?.args[0])).not.toContain("phone_number");
+    expect(String(selectCall?.args[0])).toContain("contacts (display_name, profile_name)");
   });
 
   it("filters by stage when a specific stage is requested", async () => {
@@ -197,9 +229,12 @@ describe("listLeads", () => {
     expect(chain.calls).toContainEqual({ method: "is", args: ["assigned_member_id", null] });
   });
 
-  it("applies a search filter across name/company/phone/email when a search term is given", async () => {
-    const chain = fakeChain({ data: [], count: 0, error: null });
-    const client = fakeSupabaseClient(chain);
+  it("resolves a search term via the search_company_leads RPC, never a raw ilike on phone_number", async () => {
+    const chain = fakeChain({ data: [LEAD_ROW], count: 1, error: null });
+    const client = fakeSupabaseClient(chain, {
+      search_company_leads: { data: [{ lead_id: "lead-1" }], error: null },
+      ...phoneDisplayRpc("lead-1", "********5678"),
+    });
 
     await listLeads(client, {
       companyId: "company-a",
@@ -209,9 +244,30 @@ describe("listLeads", () => {
       pageSize: 25,
     });
 
-    const orCall = chain.calls.find((c) => c.method === "or");
-    expect(orCall).toBeDefined();
-    expect(String(orCall?.args[0])).toContain("priya");
+    expect(client.rpc).toHaveBeenCalledWith(
+      "search_company_leads",
+      expect.objectContaining({ p_company_id: "company-a", p_term: "priya" }),
+    );
+    expect(chain.calls).toContainEqual({ method: "in", args: ["id", ["lead-1"]] });
+    expect(chain.calls.some((c) => c.method === "or")).toBe(false);
+  });
+
+  it("short-circuits to an empty page when the search RPC finds no matches, without querying leads at all", async () => {
+    const chain = fakeChain({ data: [], count: 0, error: null });
+    const client = fakeSupabaseClient(chain, {
+      search_company_leads: { data: [], error: null },
+    });
+
+    const result = await listLeads(client, {
+      companyId: "company-a",
+      callerMemberId: "member-1",
+      search: "nobody",
+      page: 1,
+      pageSize: 25,
+    });
+
+    expect(result).toEqual({ items: [], totalCount: 0 });
+    expect(chain.calls.some((c) => c.method === "select")).toBe(false);
   });
 
   it("paginates using range derived from page/pageSize", async () => {
@@ -247,9 +303,12 @@ describe("listLeads", () => {
 });
 
 describe("lead identity resolution (resolveLeadDisplayName via listLeads)", () => {
-  async function firstDisplayName(row: Record<string, unknown>): Promise<string> {
+  async function firstDisplayName(
+    row: Record<string, unknown>,
+    phoneDisplay = "********5678",
+  ): Promise<string> {
     const chain = fakeChain({ data: [row], count: 1, error: null });
-    const client = fakeSupabaseClient(chain);
+    const client = fakeSupabaseClient(chain, phoneDisplayRpc(row.id as string, phoneDisplay));
     const { items } = await listLeads(client, {
       companyId: "company-a",
       callerMemberId: "member-1",
@@ -290,55 +349,44 @@ describe("lead identity resolution (resolveLeadDisplayName via listLeads)", () =
     ).toBe("Priya Clinic");
   });
 
-  it("falls back to the masked WhatsApp phone number when no name or company exists", async () => {
+  it("falls back to the resolved phone display (from the secure RPC) when no name or company exists", async () => {
     expect(
-      await firstDisplayName({
-        ...LEAD_ROW,
-        customer_name: null,
-        company_name: null,
-        contacts: { ...LEAD_ROW.contacts, display_name: null, profile_name: null },
-      }),
+      await firstDisplayName(
+        {
+          ...LEAD_ROW,
+          customer_name: null,
+          company_name: null,
+          contacts: { ...LEAD_ROW.contacts, display_name: null, profile_name: null },
+        },
+        "********5678",
+      ),
     ).toBe("********5678");
   });
 
-  it("falls back to the contact's whatsapp_wa_id (not leads.phone_number) when the lead's own phone_number was never extracted", async () => {
-    expect(
-      await firstDisplayName({
-        ...LEAD_ROW,
-        customer_name: null,
-        company_name: null,
-        phone_number: null,
-        contacts: { whatsapp_wa_id: "+919999999999", display_name: null, profile_name: null },
-      }),
-    ).toBe("********9999");
-  });
-
   it("never shows 'Unknown lead' -- the last-resort fallback is a neutral, non-fabricated label", async () => {
-    expect(
-      await firstDisplayName({
-        ...LEAD_ROW,
-        customer_name: null,
-        company_name: null,
-        phone_number: null,
-        contacts: null,
-      }),
-    ).toBe("Unnamed WhatsApp lead");
-    expect(
-      await firstDisplayName({
-        ...LEAD_ROW,
-        customer_name: null,
-        company_name: null,
-        phone_number: null,
-        contacts: null,
-      }),
-    ).not.toBe("Unknown lead");
+    const chain = fakeChain({
+      data: [{ ...LEAD_ROW, customer_name: null, company_name: null, contacts: null }],
+      count: 1,
+      error: null,
+    });
+    const client = fakeSupabaseClient(chain, {
+      get_lead_phone_displays: { data: [], error: null },
+    });
+    const { items } = await listLeads(client, {
+      companyId: "company-a",
+      callerMemberId: "member-1",
+      page: 1,
+      pageSize: 25,
+    });
+    expect(items[0]!.displayName).toBe("Unnamed WhatsApp lead");
+    expect(items[0]!.displayName).not.toBe("Unknown lead");
   });
 });
 
 describe("getLead", () => {
   it("always scopes by both companyId and leadId", async () => {
     const chain = fakeChain({ data: LEAD_ROW, error: null });
-    const client = fakeSupabaseClient(chain);
+    const client = fakeSupabaseClient(chain, phoneDisplayRpc("lead-1", "********5678"));
 
     await getLead(client, "company-a", "lead-1");
 
@@ -354,9 +402,9 @@ describe("getLead", () => {
     expect(result).toBeNull();
   });
 
-  it("maps a found row into the full detail shape", async () => {
+  it("maps a found row into the full detail shape, using the secure RPC's phone display", async () => {
     const chain = fakeChain({ data: LEAD_ROW, error: null });
-    const client = fakeSupabaseClient(chain);
+    const client = fakeSupabaseClient(chain, phoneDisplayRpc("lead-1", "********5678", "full"));
 
     const result = await getLead(client, "company-a", "lead-1");
     expect(result).toEqual({
@@ -366,6 +414,7 @@ describe("getLead", () => {
       displayName: "Priya Nair",
       companyName: "Priya Clinic",
       maskedPhoneNumber: "********5678",
+      phoneVisibility: "full",
       serviceInterest: "Website",
       productInterest: "E-commerce",
       budget: "50000",

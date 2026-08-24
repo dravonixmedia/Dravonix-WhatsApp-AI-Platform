@@ -38,16 +38,38 @@ function fakeChain(result: QueryResult): FakeChain {
   return chain;
 }
 
-function fakeSupabaseClient(chainsByTable: Record<string, FakeChain>): SupabaseClient {
+/**
+ * Phase 3A.1: loadNotificationSummary resolves phone-display fallback via
+ * get_conversation_phone_displays (migration 25), never a raw
+ * `contacts.whatsapp_wa_id` embed. `phoneDisplays` maps conversation id ->
+ * the RPC's canned response for that id.
+ */
+function fakeSupabaseClient(
+  chainsByTable: Record<string, FakeChain>,
+  phoneDisplays: Record<string, string> = {},
+): SupabaseClient {
   return {
     from: vi.fn((table: string) => chainsByTable[table]),
+    rpc: vi.fn((name: string, params: { p_conversation_ids: string[] }) => {
+      if (name !== "get_conversation_phone_displays") {
+        throw new Error(`Unexpected RPC call: ${name}`);
+      }
+      const data = params.p_conversation_ids
+        .filter((id) => id in phoneDisplays)
+        .map((id) => ({
+          conversation_id: id,
+          phone_display: phoneDisplays[id],
+          phone_visibility: "masked",
+        }));
+      return Promise.resolve({ data, error: null }) as unknown as ReturnType<SupabaseClient["rpc"]>;
+    }),
   } as unknown as SupabaseClient;
 }
 
 const COMPANY_ID = "company-1";
 
-function contactRow(waId: string, displayName: string | null = null) {
-  return { whatsapp_wa_id: waId, display_name: displayName, profile_name: null };
+function contactRow(_waId: string, displayName: string | null = null) {
+  return { display_name: displayName, profile_name: null };
 }
 
 describe("loadNotificationSummary", () => {
@@ -176,14 +198,14 @@ describe("loadNotificationSummary", () => {
     expect(messagesChain.calls).toEqual([]);
   });
 
-  it("falls back to profile_name then a masked phone number when no display_name is set", async () => {
+  it("falls back to profile_name then the secure RPC's phone display when no display_name is set", async () => {
     const conversationsChain = fakeChain({
       data: [
         {
           id: "conv-1",
           handover_last_read_at: null,
           last_message_at: "2026-08-05T16:28:00Z",
-          contacts: { whatsapp_wa_id: "919820000001", display_name: null, profile_name: null },
+          contacts: { display_name: null, profile_name: null },
         },
       ],
       error: null,
@@ -192,14 +214,28 @@ describe("loadNotificationSummary", () => {
       data: [{ conversation_id: "conv-1", created_at: "2026-08-05T16:28:00Z" }],
       error: null,
     });
+    const client = fakeSupabaseClient(
+      { conversations: conversationsChain, messages: messagesChain },
+      { "conv-1": "*********0001" },
+    );
+
+    const result = await loadNotificationSummary(client, COMPANY_ID);
+
+    expect(result.unreadConversations[0]?.displayName).not.toBe("919820000001");
+    expect(result.unreadConversations[0]?.displayName).toBe("*********0001");
+  });
+
+  it("never selects contacts.whatsapp_wa_id directly", async () => {
+    const conversationsChain = fakeChain({ data: [], error: null });
+    const messagesChain = fakeChain({ data: [], error: null });
     const client = fakeSupabaseClient({
       conversations: conversationsChain,
       messages: messagesChain,
     });
 
-    const result = await loadNotificationSummary(client, COMPANY_ID);
+    await loadNotificationSummary(client, COMPANY_ID);
 
-    expect(result.unreadConversations[0]?.displayName).not.toBe("919820000001");
-    expect(result.unreadConversations[0]?.displayName).toMatch(/\*/); // masked, per maskPhoneNumber
+    const selectCall = conversationsChain.calls.find((c) => c.method === "select");
+    expect(String(selectCall?.args[0])).not.toContain("whatsapp_wa_id");
   });
 });

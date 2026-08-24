@@ -36,14 +36,42 @@ function fakeChain(result: QueryResult): FakeChain {
   return chain;
 }
 
-function fakeSupabaseClient(chainsByTable: Record<string, FakeChain>): SupabaseClient {
+interface RpcPhoneRow {
+  conversation_id?: string;
+  lead_id?: string;
+  phone_display: string;
+  phone_visibility: "full" | "masked";
+}
+
+/**
+ * Phase 3A security correction: loadChatAgentContext no longer selects
+ * contacts.whatsapp_wa_id or leads.phone_number as raw columns -- both are
+ * resolved via get_conversation_phone_displays/get_lead_phone_displays
+ * (migration 25), same as every other client-facing read path, then forced
+ * through an unconditional second mask. `conversationPhone`/`leadPhones`
+ * are the RPCs' canned responses for this test.
+ */
+function fakeSupabaseClient(
+  chainsByTable: Record<string, FakeChain>,
+  rpc: { conversationPhone?: RpcPhoneRow[]; leadPhones?: RpcPhoneRow[] } = {},
+): SupabaseClient {
   return {
     from: vi.fn((table: string) => chainsByTable[table]),
+    rpc: vi.fn((name: string) => {
+      if (name === "get_conversation_phone_displays") {
+        return Promise.resolve({ data: rpc.conversationPhone ?? [], error: null });
+      }
+      if (name === "get_lead_phone_displays") {
+        return Promise.resolve({ data: rpc.leadPhones ?? [], error: null });
+      }
+      throw new Error(`Unexpected RPC call: ${name}`);
+    }) as unknown as SupabaseClient["rpc"],
   } as unknown as SupabaseClient;
 }
 
 const COMPANY_ID = "company-1";
 const CONVERSATION_ID = "conv-1";
+const LEAD_ID = "lead-1";
 
 function threadMessage(
   overrides: Partial<ConversationThreadMessage> = {},
@@ -130,6 +158,18 @@ describe("loadChatAgentContext: tenant scoping", () => {
       expect(methods).not.toContain("upsert");
     }
   });
+
+  it("never selects contacts.whatsapp_wa_id or leads.phone_number as a raw column", async () => {
+    const chains = defaultChains();
+    const client = fakeSupabaseClient(chains);
+
+    await loadChatAgentContext(client, COMPANY_ID, CONVERSATION_ID, []);
+
+    const conversationsSelect = chains.conversations.calls.find((c) => c.method === "select");
+    const leadsSelect = chains.leads.calls.find((c) => c.method === "select");
+    expect(String(conversationsSelect?.args[0])).not.toContain("whatsapp_wa_id");
+    expect(String(leadsSelect?.args[0])).not.toContain("phone_number");
+  });
 });
 
 describe("loadChatAgentContext: company AI configuration", () => {
@@ -170,12 +210,11 @@ describe("loadChatAgentContext: contact and lead", () => {
     expect(context.lead).toBeNull();
   });
 
-  it("masks the phone number in the returned contact context", async () => {
+  it("masks the phone number in the returned contact context when the RPC reports it already masked", async () => {
     const chains = defaultChains({
       conversations: fakeChain({
         data: {
           contacts: {
-            whatsapp_wa_id: "919820000001",
             display_name: "Anjali",
             profile_name: null,
             last_detected_language: "ml",
@@ -184,7 +223,15 @@ describe("loadChatAgentContext: contact and lead", () => {
         error: null,
       }),
     });
-    const client = fakeSupabaseClient(chains);
+    const client = fakeSupabaseClient(chains, {
+      conversationPhone: [
+        {
+          conversation_id: CONVERSATION_ID,
+          phone_display: "********0001",
+          phone_visibility: "masked",
+        },
+      ],
+    });
 
     const context = await loadChatAgentContext(client, COMPANY_ID, CONVERSATION_ID, []);
 
@@ -193,13 +240,44 @@ describe("loadChatAgentContext: contact and lead", () => {
     expect(context.contact?.maskedPhoneNumber).toMatch(/\*/);
   });
 
+  it("Phase 3A: forces the mask itself when the RPC grants the caller full visibility -- the raw digits never reach the prompt", async () => {
+    const chains = defaultChains({
+      conversations: fakeChain({
+        data: {
+          contacts: {
+            display_name: "Anjali",
+            profile_name: null,
+            last_detected_language: "ml",
+          },
+        },
+        error: null,
+      }),
+    });
+    const client = fakeSupabaseClient(chains, {
+      conversationPhone: [
+        {
+          conversation_id: CONVERSATION_ID,
+          phone_display: "919820000001",
+          phone_visibility: "full",
+        },
+      ],
+    });
+
+    const context = await loadChatAgentContext(client, COMPANY_ID, CONVERSATION_ID, []);
+
+    expect(context.contact?.maskedPhoneNumber).not.toBe("919820000001");
+    expect(context.contact?.maskedPhoneNumber).not.toContain("919820000001");
+    expect(context.contact?.maskedPhoneNumber).toMatch(/\*/);
+    expect(context.contact?.maskedPhoneNumber).toBe("********0001");
+  });
+
   it("returns existing lead fields read-only, using the real column values", async () => {
     const chains = defaultChains({
       leads: fakeChain({
         data: {
+          id: LEAD_ID,
           customer_name: "Anjali",
           company_name: null,
-          phone_number: null,
           email: null,
           service_interest: "Website redesign",
           budget: null,
@@ -210,7 +288,7 @@ describe("loadChatAgentContext: contact and lead", () => {
         error: null,
       }),
     });
-    const client = fakeSupabaseClient(chains);
+    const client = fakeSupabaseClient(chains, { leadPhones: [] });
 
     const context = await loadChatAgentContext(client, COMPANY_ID, CONVERSATION_ID, []);
 
@@ -225,6 +303,34 @@ describe("loadChatAgentContext: contact and lead", () => {
       location: null,
       notes: null,
     });
+  });
+
+  it("Phase 3A.1: masks the lead's own phone before it ever enters the DRAIVA context/prompt, regardless of the caller's own phone-visibility permission", async () => {
+    const chains = defaultChains({
+      leads: fakeChain({
+        data: {
+          id: LEAD_ID,
+          customer_name: "Anjali",
+          company_name: null,
+          email: null,
+          service_interest: "Website redesign",
+          budget: null,
+          preferred_timeline: null,
+          location: null,
+          notes: null,
+        },
+        error: null,
+      }),
+    });
+    const client = fakeSupabaseClient(chains, {
+      leadPhones: [{ lead_id: LEAD_ID, phone_display: "919820000001", phone_visibility: "full" }],
+    });
+
+    const context = await loadChatAgentContext(client, COMPANY_ID, CONVERSATION_ID, []);
+
+    expect(context.lead?.phone).not.toBe("919820000001");
+    expect(context.lead?.phone).not.toContain("919820000001");
+    expect(context.lead?.phone).toMatch(/\*/);
   });
 });
 

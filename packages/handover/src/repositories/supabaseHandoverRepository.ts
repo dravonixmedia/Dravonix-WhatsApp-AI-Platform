@@ -198,7 +198,7 @@ export class SupabaseHandoverRepository implements HandoverRepository {
     let query = this.client
       .from("conversations")
       .select(
-        "id, state, ai_mode, assigned_member_id, handover_reason, state_changed_at, handover_last_read_at, contacts!inner(whatsapp_wa_id)",
+        "id, state, ai_mode, assigned_member_id, handover_reason, state_changed_at, handover_last_read_at, contacts!inner(id)",
       )
       .eq("company_id", input.companyId);
 
@@ -233,20 +233,41 @@ export class SupabaseHandoverRepository implements HandoverRepository {
       handover_reason: string | null;
       state_changed_at: string;
       handover_last_read_at: string | null;
-      contacts: { whatsapp_wa_id: string } | { whatsapp_wa_id: string }[];
     }>;
 
     if (rows.length === 0) return [];
 
-    const { data: inboundMessages, error: messagesError } = await this.client
-      .from("messages")
-      .select("conversation_id, created_at")
-      .in(
-        "conversation_id",
-        rows.map((row) => row.id),
-      )
-      .eq("direction", "inbound");
+    // Phase 3A.1: get_conversation_phone_displays (migration 25) resolves
+    // full-vs-masked per conversation, server-side, in one batched RPC call
+    // -- never a raw contacts.whatsapp_wa_id read here. See
+    // apps/web/lib/repositories/phoneDisplay.ts for the identical pattern
+    // used by every other conversation-keyed read path (this package can't
+    // import from apps/web, so the same small RPC call is inlined here).
+    const [{ data: inboundMessages, error: messagesError }, phoneDisplayResult] = await Promise.all(
+      [
+        this.client
+          .from("messages")
+          .select("conversation_id, created_at")
+          .in(
+            "conversation_id",
+            rows.map((row) => row.id),
+          )
+          .eq("direction", "inbound"),
+        this.client.rpc("get_conversation_phone_displays", {
+          p_conversation_ids: rows.map((row) => row.id),
+        }),
+      ],
+    );
     if (messagesError) throw new Error(messagesError.message);
+    if (phoneDisplayResult.error) throw new Error(phoneDisplayResult.error.message);
+
+    const phoneDisplayByConversation = new Map<string, string>();
+    for (const row of (phoneDisplayResult.data ?? []) as Array<{
+      conversation_id: string;
+      phone_display: string;
+    }>) {
+      phoneDisplayByConversation.set(row.conversation_id, row.phone_display);
+    }
 
     const inboundByConversation = new Map<string, string[]>();
     for (const message of inboundMessages ?? []) {
@@ -257,10 +278,9 @@ export class SupabaseHandoverRepository implements HandoverRepository {
 
     const now = new Date();
     return rows.map((row) => {
-      const contact = Array.isArray(row.contacts) ? row.contacts[0] : row.contacts;
       return {
         conversationId: row.id,
-        maskedPhoneNumber: maskPhoneNumber(contact?.whatsapp_wa_id ?? ""),
+        maskedPhoneNumber: phoneDisplayByConversation.get(row.id) ?? maskPhoneNumber(""),
         state: row.state,
         aiMode: row.ai_mode,
         priority: derivePriority(row.state, row.state_changed_at, now),

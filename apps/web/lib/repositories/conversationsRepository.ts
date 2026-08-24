@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { maskPhoneNumber } from "@dravonix/handover";
+import {
+  getConversationPhoneDisplays,
+  resolvePhoneDisplay,
+  searchCompanyConversationIds,
+} from "./phoneDisplay.js";
 
 export type ConversationListAiModeFilter = "all" | "active" | "paused";
 export type ConversationListAssignmentFilter = "all" | "mine" | "unassigned";
@@ -19,6 +23,7 @@ export interface ConversationListFilters {
 export interface ConversationListItem {
   conversationId: string;
   maskedPhoneNumber: string;
+  phoneVisibility: "full" | "masked";
   displayName: string | null;
   state: string;
   aiMode: "active" | "paused";
@@ -56,7 +61,6 @@ interface ConversationRow {
   last_message_at: string | null;
   handover_last_read_at: string | null;
   contacts: {
-    whatsapp_wa_id: string;
     display_name: string | null;
     profile_name: string | null;
   } | null;
@@ -80,18 +84,21 @@ export async function listConversations(
   client: SupabaseClient,
   filters: ConversationListFilters,
 ): Promise<ConversationListPage> {
-  let contactIdFilter: string[] | null = null;
+  // Phase 3A.1: search is resolved by search_company_conversations
+  // (migration 25) -- a SECURITY DEFINER RPC -- rather than a raw
+  // client-side `contacts.whatsapp_wa_id ilike ...` filter. Name matching
+  // is unrestricted; phone-digit matching is last-4-only for any
+  // conversation the caller isn't already authorized for full-number
+  // access on, so this can never be used as a company-wide full-number
+  // existence oracle. See phoneDisplay.ts and the migration's own comments.
+  let conversationIdFilter: string[] | null = null;
   if (filters.search && filters.search.trim().length > 0) {
-    const term = filters.search.trim();
-    const { data: matchingContacts } = await client
-      .from("contacts")
-      .select("id")
-      .eq("company_id", filters.companyId)
-      .or(
-        `display_name.ilike.%${term}%,profile_name.ilike.%${term}%,whatsapp_wa_id.ilike.%${term}%`,
-      );
-    contactIdFilter = (matchingContacts ?? []).map((c) => c.id as string);
-    if (contactIdFilter.length === 0) {
+    conversationIdFilter = await searchCompanyConversationIds(
+      client,
+      filters.companyId,
+      filters.search.trim(),
+    );
+    if (conversationIdFilter.length === 0) {
       return { items: [], totalCount: 0 };
     }
   }
@@ -100,7 +107,7 @@ export async function listConversations(
     .from("conversations")
     .select(
       `id, state, ai_mode, assigned_member_id, handover_reason, last_message_at, handover_last_read_at,
-       contacts (whatsapp_wa_id, display_name, profile_name),
+       contacts (display_name, profile_name),
        messages (body, channel_type, direction, created_at)`,
       { count: "exact" },
     )
@@ -108,8 +115,8 @@ export async function listConversations(
     .order("created_at", { foreignTable: "messages", ascending: false })
     .limit(1, { foreignTable: "messages" });
 
-  if (contactIdFilter) {
-    query = query.in("contact_id", contactIdFilter);
+  if (conversationIdFilter) {
+    query = query.in("id", conversationIdFilter);
   }
   if (filters.aiMode && filters.aiMode !== "all") {
     query = query.eq("ai_mode", filters.aiMode);
@@ -130,32 +137,38 @@ export async function listConversations(
   const { data, count, error } = await query;
   if (error) throw error;
 
-  const items: ConversationListItem[] = ((data ?? []) as unknown as ConversationRow[]).map(
-    (row) => {
-      const contact = row.contacts;
-      const latestMessage = row.messages?.[0] ?? null;
-      const hasUnreadActivity = row.last_message_at
-        ? !row.handover_last_read_at ||
-          new Date(row.last_message_at).getTime() > new Date(row.handover_last_read_at).getTime()
-        : false;
-
-      return {
-        conversationId: row.id,
-        maskedPhoneNumber: contact ? maskPhoneNumber(contact.whatsapp_wa_id) : "Unknown",
-        displayName: contact?.display_name ?? contact?.profile_name ?? null,
-        state: row.state,
-        aiMode: row.ai_mode,
-        assignedMemberId: row.assigned_member_id,
-        handoverReason: row.handover_reason,
-        lastMessageAt: row.last_message_at,
-        handoverLastReadAt: row.handover_last_read_at,
-        hasUnreadActivity,
-        latestMessagePreview: latestMessage?.body ?? null,
-        latestMessageChannelType: latestMessage?.channel_type ?? null,
-        latestMessageDirection: latestMessage?.direction ?? null,
-      };
-    },
+  const rows = (data ?? []) as unknown as ConversationRow[];
+  const phoneDisplays = await getConversationPhoneDisplays(
+    client,
+    rows.map((row) => row.id),
   );
+
+  const items: ConversationListItem[] = rows.map((row) => {
+    const contact = row.contacts;
+    const latestMessage = row.messages?.[0] ?? null;
+    const hasUnreadActivity = row.last_message_at
+      ? !row.handover_last_read_at ||
+        new Date(row.last_message_at).getTime() > new Date(row.handover_last_read_at).getTime()
+      : false;
+    const phone = resolvePhoneDisplay(phoneDisplays, row.id);
+
+    return {
+      conversationId: row.id,
+      maskedPhoneNumber: phone.maskedPhoneNumber,
+      phoneVisibility: phone.phoneVisibility,
+      displayName: contact?.display_name ?? contact?.profile_name ?? null,
+      state: row.state,
+      aiMode: row.ai_mode,
+      assignedMemberId: row.assigned_member_id,
+      handoverReason: row.handover_reason,
+      lastMessageAt: row.last_message_at,
+      handoverLastReadAt: row.handover_last_read_at,
+      hasUnreadActivity,
+      latestMessagePreview: latestMessage?.body ?? null,
+      latestMessageChannelType: latestMessage?.channel_type ?? null,
+      latestMessageDirection: latestMessage?.direction ?? null,
+    };
+  });
 
   return { items, totalCount: count ?? items.length };
 }
