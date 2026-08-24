@@ -15,6 +15,7 @@ export type PermissionKey =
   | "audit.view"
   | "billing.view"
   | "conversations.assign"
+  | "conversations.close"
   | "conversations.reassign"
   | "conversations.reconcile"
   | "conversations.reply"
@@ -24,21 +25,25 @@ export type PermissionKey =
   | "leads.view"
   | "settings.view"
   | "team.display_name.manage"
+  | "team.manage"
   | "team.view"
   | "usage.view"
   | "whatsapp.view";
 
 /**
- * Client Dashboard Permission Hardening (migration 00000000000022): every
- * *.manage permission that let a client role write configuration Dravonix
- * now owns exclusively (ai_settings.manage, knowledge.manage,
- * settings.manage, team.manage, whatsapp.manage, billing.manage) has been
- * removed from every company role at the database level -- this mirror
- * reflects that; it is not merely a UI-hiding change. team.view/
- * team.display_name.manage/settings.view are new, narrower permissions:
- * only company_owner/company_admin hold them (the same two roles that used
- * to hold team.manage/settings.manage), so no role gains new visibility it
- * didn't already effectively have.
+ * Phase 2 role model expansion (migrations 23/24): team.manage is revived
+ * for company_owner/company_admin (Client Dashboard Permission Hardening,
+ * migration 22, had moved team management to Super Admin-only -- Phase 2
+ * restores it to the client Team page, now with owner protection enforced
+ * server-side, see the RPC comments in migration 24). conversations.close
+ * is new -- split out of conversations.assign so Sales Person (which needs
+ * conversations.assign for the existing claim/assignment workflow) is
+ * excluded from End Human Assistance/Close Conversation specifically.
+ * team_leader/sales_person/company_accounts are new roles; agent/
+ * knowledge_editor/billing_viewer/viewer are legacy and dormant -- their
+ * entries below exist only so a historical row (if one is ever found)
+ * still resolves capabilities correctly, never offered anywhere in active
+ * UI (see apps/web/lib/companyRoles.ts).
  */
 const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
   company_owner: new Set([
@@ -46,6 +51,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "audit.view",
     "billing.view",
     "conversations.assign",
+    "conversations.close",
     "conversations.reassign",
     "conversations.reconcile",
     "conversations.reply",
@@ -55,6 +61,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "leads.view",
     "settings.view",
     "team.display_name.manage",
+    "team.manage",
     "team.view",
     "usage.view",
     "whatsapp.view",
@@ -64,6 +71,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "audit.view",
     "billing.view",
     "conversations.assign",
+    "conversations.close",
     "conversations.reassign",
     "conversations.reconcile",
     "conversations.reply",
@@ -73,6 +81,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "leads.view",
     "settings.view",
     "team.display_name.manage",
+    "team.manage",
     "team.view",
     "usage.view",
     "whatsapp.view",
@@ -80,6 +89,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
   manager: new Set([
     "ai_settings.view",
     "conversations.assign",
+    "conversations.close",
     "conversations.reassign",
     "conversations.reconcile",
     "conversations.reply",
@@ -87,9 +97,33 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "knowledge.view",
     "leads.manage",
     "leads.view",
+    "team.view",
     "usage.view",
     "whatsapp.view",
   ]),
+  team_leader: new Set([
+    "ai_settings.view",
+    "conversations.assign",
+    "conversations.close",
+    "conversations.reply",
+    "conversations.view",
+    "knowledge.view",
+    "leads.manage",
+    "leads.view",
+    "team.view",
+    "whatsapp.view",
+  ]),
+  sales_person: new Set([
+    "ai_settings.view",
+    "conversations.assign",
+    "conversations.reply",
+    "conversations.view",
+    "knowledge.view",
+    "leads.manage",
+    "leads.view",
+    "team.view",
+  ]),
+  company_accounts: new Set(["billing.view", "usage.view"]),
   agent: new Set([
     "conversations.reply",
     "conversations.view",
@@ -121,8 +155,10 @@ export interface DashboardCapabilities {
   canAssignConversations: boolean;
   canReassignConversations: boolean;
   canReconcileOutbound: boolean;
+  canCloseConversations: boolean;
   canPauseResumeAi: boolean;
   canViewTeam: boolean;
+  canManageTeam: boolean;
   canManageDisplayNames: boolean;
   canViewSettings: boolean;
   canViewWhatsapp: boolean;
@@ -138,19 +174,23 @@ export interface DashboardCapabilities {
 /**
  * The one place dashboard components should ask "can this role do X" --
  * never a raw `role === "company_admin"` check scattered across pages.
- * Pause/Resume AI and every assignment action are gated on
- * conversations.assign, matching exactly what handover_pause_ai/
- * handover_resume_ai/handover_assign_to_me check server-side in
- * migration 12 -- unchanged by client permission hardening (migration 22),
- * which never touches conversations.assign or any conversation-level
- * permission.
+ * Pause/Resume AI is gated on conversations.assign, matching exactly what
+ * handover_pause_ai/handover_resume_ai check server-side -- unchanged since
+ * migration 12, and deliberately NOT touched by Phase 2's
+ * conversations.close split. End Human Assistance/Close Conversation are
+ * gated on the new canCloseConversations (conversations.close) instead --
+ * see migration 24's handover_end_human_assistance/
+ * handover_close_conversation, which now check conversations.close, not
+ * conversations.assign.
  *
- * Every *.manage capability that used to let a client write company
- * configuration directly (canManageTeam, canManageSettings,
- * canManageWhatsapp, canManageAiSettings, canManageKnowledge,
- * canManageBilling) is gone: that configuration is now Dravonix-only,
- * managed from Super Admin. canManageDisplayNames (team.display_name.manage)
- * is the one narrow write capability clients keep on the Team page.
+ * Phase 2 role model expansion (migration 24) revives canManageTeam
+ * (team.manage) for company_owner/company_admin -- Client Dashboard
+ * Permission Hardening (migration 22) had moved all team management to
+ * Super Admin-only; the client Team page regains invite/role-change/
+ * deactivate controls, now with server-side owner protection (see the RPC
+ * comments in migration 24). canManageDisplayNames
+ * (team.display_name.manage) remains the separate, narrower capability it
+ * already was.
  */
 export function getDashboardCapabilities(role: CompanyRole | null): DashboardCapabilities {
   return {
@@ -159,8 +199,10 @@ export function getDashboardCapabilities(role: CompanyRole | null): DashboardCap
     canAssignConversations: hasPermission(role, "conversations.assign"),
     canReassignConversations: hasPermission(role, "conversations.reassign"),
     canReconcileOutbound: hasPermission(role, "conversations.reconcile"),
+    canCloseConversations: hasPermission(role, "conversations.close"),
     canPauseResumeAi: hasPermission(role, "conversations.assign"),
     canViewTeam: hasPermission(role, "team.view"),
+    canManageTeam: hasPermission(role, "team.manage"),
     canManageDisplayNames: hasPermission(role, "team.display_name.manage"),
     canViewSettings: hasPermission(role, "settings.view"),
     canViewWhatsapp: hasPermission(role, "whatsapp.view"),

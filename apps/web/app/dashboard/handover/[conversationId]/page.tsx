@@ -181,7 +181,9 @@ export default async function ConversationDetailPage({
                     <ActionButton>Resume AI</ActionButton>
                   </form>
                 )}
-                {conversation.state !== "closed" && conversation.state !== "ai_active" ? (
+                {capabilities.canCloseConversations &&
+                conversation.state !== "closed" &&
+                conversation.state !== "ai_active" ? (
                   <form
                     action={async () => {
                       "use server";
@@ -191,7 +193,7 @@ export default async function ConversationDetailPage({
                     <ActionButton>End human assistance</ActionButton>
                   </form>
                 ) : null}
-                {conversation.state !== "closed" ? (
+                {capabilities.canCloseConversations && conversation.state !== "closed" ? (
                   <form
                     action={async () => {
                       "use server";

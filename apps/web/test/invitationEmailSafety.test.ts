@@ -58,17 +58,21 @@ describe("Invitation creation and resend each trigger exactly one email attempt"
   });
 });
 
-describe("Invitations are now a Super Admin-only path, using a single shared invitation/email service", () => {
-  it("the Super Admin company page renders the shared InviteMemberForm component", () => {
+describe("Invitations use a single shared InviteMemberForm/email service on both the Super Admin and client Team pages", () => {
+  it("the Super Admin company page renders the shared InviteMemberForm component with the full active-role list (including company_owner)", () => {
     const adminPage = readSource("app/admin/companies/[id]/page.tsx");
     expect(adminPage).toContain(
       'import { InviteMemberForm } from "../../../dashboard/team/InviteMemberForm.js"',
     );
+    expect(adminPage).toContain("roles={ACTIVE_COMPANY_ROLES}");
   });
 
-  it("the client Team page no longer renders InviteMemberForm -- team.manage was revoked from every client role (migration 00000000000022), so inviting is Dravonix-only now", () => {
+  it("the client Team page (Phase 2, migration 24 revives team.manage) also renders InviteMemberForm, using its client-safe default role list that excludes company_owner", () => {
     const teamPage = readSource("app/dashboard/team/page.tsx");
-    expect(teamPage).not.toContain("InviteMemberForm");
+    expect(teamPage).toContain("InviteMemberForm");
+    expect(teamPage).not.toContain("roles={ACTIVE_COMPANY_ROLES}");
+    const formSource = readSource("app/dashboard/team/InviteMemberForm.tsx");
+    expect(formSource).toContain("CLIENT_ASSIGNABLE_ROLES");
   });
 
   it("InviteMemberForm calls only createCompanyInvitationAction -- no separate client-side email call", () => {

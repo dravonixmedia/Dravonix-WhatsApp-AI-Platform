@@ -29,10 +29,27 @@ export interface PlatformMemberRow {
   created_at: string;
 }
 
+/**
+ * Phase 2 role model expansion (migrations 23/24): the active six-role
+ * client model is company_owner/company_admin/manager/team_leader/
+ * sales_person/company_accounts. agent/knowledge_editor/billing_viewer/
+ * viewer are legacy values kept dormant in the Postgres enum for
+ * backward/history compatibility only -- agent and billing_viewer were
+ * remapped to sales_person/company_accounts (zero hosted usage at
+ * migration time, verified no-op), and knowledge_editor/viewer have no
+ * approved semantic mapping and were retired from active UI/permissions
+ * with zero hosted usage. None of the four legacy values are ever
+ * assignable through the client Team page, the client invitation/
+ * role-change RPCs, or the Super Admin role dropdowns going forward -- see
+ * apps/web/lib/companyRoles.ts for the canonical active-role list/labels.
+ */
 export type CompanyRole =
   | "company_owner"
   | "company_admin"
   | "manager"
+  | "team_leader"
+  | "sales_person"
+  | "company_accounts"
   | "agent"
   | "knowledge_editor"
   | "billing_viewer"

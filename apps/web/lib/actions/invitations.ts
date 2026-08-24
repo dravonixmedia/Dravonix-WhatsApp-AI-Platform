@@ -23,18 +23,9 @@
 
 import { loadEnv } from "@dravonix/config";
 import { revalidatePath } from "next/cache";
+import { companyRoleLabel, isActiveCompanyRole, isClientAssignableRole } from "../companyRoles.js";
 import { maskEmail, sendInvitationEmail } from "../email/sendInvitationEmail.js";
 import { createServerSupabaseClient } from "../supabase/server.js";
-
-const ROLE_LABELS: Record<string, string> = {
-  company_owner: "Owner",
-  company_admin: "Admin",
-  manager: "Manager",
-  agent: "Agent",
-  knowledge_editor: "Knowledge Editor",
-  billing_viewer: "Billing Viewer",
-  viewer: "Viewer",
-};
 
 export interface CreatedInvitation {
   id: string;
@@ -70,7 +61,7 @@ async function deliverInvitationEmail(params: {
   const result = await sendInvitationEmail({
     email: params.email,
     companyName: company?.name ?? "your workspace",
-    roleLabel: ROLE_LABELS[params.role] ?? params.role,
+    roleLabel: companyRoleLabel(params.role),
     acceptUrl: params.acceptUrl,
     expiresAt: new Date(params.expiresAt),
   });
@@ -103,6 +94,12 @@ export async function createCompanyInvitationAction(
   const email = String(formData.get("email") ?? "").trim();
   const role = String(formData.get("role") ?? "");
   if (!email || !role) throw new Error("Email and role are required");
+  // This action is shared by the client Team page (team.manage) and the
+  // Super Admin company page -- only the RPC itself knows which caller it
+  // is, so this only rejects a role outside the active six-role model
+  // (never assigns semantics to which caller may invite company_owner --
+  // create_company_invitation enforces that distinction server-side).
+  if (!isActiveCompanyRole(role)) throw new Error("Unsupported role");
 
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
@@ -193,6 +190,11 @@ export async function companyChangeMemberRoleAction(formData: FormData): Promise
   const memberId = String(formData.get("member_id") ?? "");
   const newRole = String(formData.get("new_role") ?? "");
   if (!memberId || !newRole) throw new Error("Member and role are required");
+  // company_change_member_role is the client-only role-change RPC (Super
+  // Admin uses admin_change_company_member_role instead, in admin.ts) --
+  // company_owner is never a valid target here, matching the RPC's own
+  // cannot_change_owner/invalid_target_role rejections.
+  if (!isClientAssignableRole(newRole)) throw new Error("Unsupported role");
 
   const supabase = await createServerSupabaseClient();
   const { error } = await supabase.rpc("company_change_member_role", {
@@ -209,6 +211,16 @@ export async function companyDeactivateMemberAction(formData: FormData): Promise
 
   const supabase = await createServerSupabaseClient();
   const { error } = await supabase.rpc("company_deactivate_member", { p_member_id: memberId });
+  if (error) throw error;
+  revalidatePath("/dashboard/team");
+}
+
+export async function companyReactivateMemberAction(formData: FormData): Promise<void> {
+  const memberId = String(formData.get("member_id") ?? "");
+  if (!memberId) throw new Error("Member is required");
+
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("company_reactivate_member", { p_member_id: memberId });
   if (error) throw error;
   revalidatePath("/dashboard/team");
 }

@@ -87,8 +87,13 @@ describe("The Super Admin company page uses the shared InvitationActions compone
   });
 });
 
-describe("The client Team page no longer renders invitation actions -- inviting/resending/revoking is Dravonix-only now", () => {
-  it("does not render InvitationActions (team.manage was revoked from every client role, migration 00000000000022)", () => {
-    expect(teamPageSource).not.toContain("InvitationActions");
+describe("The client Team page uses the shared InvitationActions component again (Phase 2 revives team.manage, migration 24)", () => {
+  it("renders <InvitationActions invitationId={...} /> for a pending invitation, gated on capabilities.canManageTeam", () => {
+    expect(teamPageSource).toMatch(/<InvitationActions\s+invitationId=\{invitation\.id\}\s*\/>/);
+    expect(teamPageSource).toContain("capabilities.canManageTeam");
+  });
+
+  it("imports InvitationActions from the shared components directory, the same one the Super Admin page uses", () => {
+    expect(teamPageSource).toMatch(/from ".*components\/InvitationActions\.js"/);
   });
 });

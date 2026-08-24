@@ -1,4 +1,5 @@
 import { handoverItemNeedsAttention, SupabaseHandoverRepository } from "@dravonix/handover";
+import { companyRoleLabel } from "../../lib/companyRoles.js";
 import { getDashboardCapabilities } from "../../lib/permissions.js";
 import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
@@ -160,16 +161,6 @@ export function buildNavItems(
   return entries;
 }
 
-const ROLE_LABELS: Record<string, string> = {
-  company_owner: "Owner",
-  company_admin: "Admin",
-  manager: "Manager",
-  agent: "Agent",
-  knowledge_editor: "Knowledge Editor",
-  billing_viewer: "Billing Viewer",
-  viewer: "Viewer",
-};
-
 function NoCompanyAccessPage() {
   return (
     <main
@@ -242,7 +233,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     notifications: notificationSummary.totalUnreadCustomerMessages,
   });
 
-  const roleLabel = ROLE_LABELS[session.activeRole] ?? session.activeRole;
+  const roleLabel = companyRoleLabel(session.activeRole);
   const activeCompanyName =
     session.memberships.find((m) => m.companyId === session.activeCompanyId)?.companyName ??
     session.memberships[0]?.companyName ??

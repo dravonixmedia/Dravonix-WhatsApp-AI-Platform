@@ -96,6 +96,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_client_onboar
 echo "Running invitation email audit (migration 19) RLS/RPC hardening assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_invitation_email_audit.sql"
 
+echo "Running Phase 2 role model expansion (migrations 23/24) RLS/RPC hardening assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_role_team_security.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
@@ -135,6 +138,11 @@ for f in "$MIGRATIONS_DIR"/*.sql; do
   [[ "$base" == "00000000000001_extensions.sql" ]] && continue
   [[ "$base" == "00000000000012_human_handover.sql" ]] && continue
   [[ "$base" == "00000000000013_dashboard_realtime.sql" ]] && continue
+  # Phase 2 role model expansion (migration 24) redefines two migration-12
+  # functions (handover_end_human_assistance/handover_close_conversation)
+  # using the conversation_ai_mode type migration 12 itself defines --
+  # deferred to right after 12/13 below, same reason 12/13 are deferred.
+  [[ "$base" == "00000000000024_client_role_team_security.sql" ]] && continue
   run_file "$LEGACY_DB_URL" "$f"
 done
 
@@ -146,6 +154,9 @@ run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000012_human_handover.sql"
 
 echo "[legacy-upgrade] Applying migration 13 (dashboard Realtime) against the upgraded database..."
 run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000013_dashboard_realtime.sql"
+
+echo "[legacy-upgrade] Applying migration 24 (Phase 2 role model expansion) now that migration 12's types/functions exist..."
+run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000024_client_role_team_security.sql"
 
 echo "[legacy-upgrade] Granting table privileges to authenticated/anon/service_role..."
 run_file "$LEGACY_DB_URL" "$ROOT_DIR/supabase/tests/support/roles.sql"
