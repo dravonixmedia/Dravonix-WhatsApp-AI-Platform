@@ -11,6 +11,16 @@
 -- raw column grant), can read contacts.whatsapp_wa_id or leads.phone_number
 -- via a bare SQL/PostgREST-shaped query, while every migration-25 RPC
 -- keeps working exactly as before.
+--
+-- Also proves the Phase 3A final security correction: an earlier draft's
+-- get_conversation_send_target RPC -- granted to `authenticated`, gated
+-- only by conversations.view (company-wide, not assignment-scoped) -- would
+-- have let ANY authenticated caller with conversations.view, including an
+-- unassigned Sales Person, call it directly for any conversation in their
+-- company and receive the raw wa_id, bypassing this entire migration. That
+-- function has been removed entirely (never applied anywhere); this file
+-- asserts it does not exist and that outbound-send routing still resolves
+-- correctly via service_role only.
 
 begin;
 
@@ -287,21 +297,52 @@ declare v_ids uuid[]; begin
   perform test_assert('owner: search_company_conversations still finds the row by full number after migration 26', v_ids @> array['f4000001-0000-0000-0000-000000000001'::uuid]);
 end; $$;
 
--- Outbound send-target RPC: still resolves the raw wa_id for the send
--- pipeline, server-side only.
+-- Sales Person (unassigned): full-number search must not surface a
+-- conversation they are not authorized for (no existence oracle); a short
+-- last-4 query still finds it, only ever rendered masked.
 do $$
-declare v_wa_id text; begin
-  perform test_set_current_user('b4000001-0000-0000-0000-000000000005'); -- sales-assigned, may view this conversation
-  select whatsapp_wa_id into v_wa_id from get_conversation_send_target('f4000001-0000-0000-0000-000000000001');
-  perform test_assert('get_conversation_send_target still resolves the raw wa_id needed to address an outbound reply after migration 26', v_wa_id = '971511112222');
+declare v_full_ids uuid[]; v_last4_ids uuid[]; begin
+  perform test_set_current_user('b4000001-0000-0000-0000-000000000006'); -- sales-unassigned
+  select array_agg(conversation_id) into v_full_ids from search_company_conversations('c4000001-0000-0000-0000-000000000001', '971511112222', 10);
+  perform test_assert(
+    'sales-unassigned: a full-number query never surfaces a conversation they are not authorized for, after migration 26',
+    v_full_ids is null or not (v_full_ids @> array['f4000001-0000-0000-0000-000000000001'::uuid])
+  );
+  select array_agg(conversation_id) into v_last4_ids from search_company_conversations('c4000001-0000-0000-0000-000000000001', '2222', 10);
+  perform test_assert(
+    'sales-unassigned: a last-4-digit query DOES find it (privacy-safe partial search), after migration 26',
+    v_last4_ids @> array['f4000001-0000-0000-0000-000000000001'::uuid]
+  );
 end; $$;
 
+-- Outbound send-target lookup: sendHumanReplyAction now resolves this via a
+-- server-only service_role client (apps/web/lib/supabase/serviceRole.ts),
+-- never a browser-callable RPC or the authenticated role -- proven two ways:
+-- (a) no such RPC exists at all, closing the earlier bypass permanently, and
+-- (b) service_role, which that server-only client authenticates as, can
+-- still resolve the same raw routing info directly, unaffected by this
+-- migration's REVOKE (which only ever names authenticated/anon).
 do $$
-declare v_count integer; begin
-  perform test_set_current_user('b4000002-0000-0000-0000-000000000001'); -- owner of Company B
-  select count(*) into v_count from get_conversation_send_target('f4000001-0000-0000-0000-000000000001'); -- Company A's conversation
-  perform test_assert('get_conversation_send_target: cross-tenant caller gets zero rows, never Company A''s wa_id', v_count = 0);
+begin
+  perform test_assert(
+    'get_conversation_send_target does not exist -- there is no browser-reachable raw-phone RPC route',
+    not exists (select 1 from pg_proc where proname = 'get_conversation_send_target')
+  );
+end;
+$$;
+
+reset role;
+set local role service_role;
+
+do $$
+declare v_wa_id text; begin
+  select ct.whatsapp_wa_id into v_wa_id
+    from public.conversations c join public.contacts ct on ct.id = c.contact_id
+    where c.id = 'f4000001-0000-0000-0000-000000000001';
+  perform test_assert('service_role can still resolve the raw wa_id directly for outbound routing, unaffected by migration 26', v_wa_id = '971511112222');
 end; $$;
+
+set local role authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 3. Network-payload invariant: a masked RPC row never carries the raw

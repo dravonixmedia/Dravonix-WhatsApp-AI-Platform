@@ -4,12 +4,16 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Guards the one narrow use of a service_role Supabase client in this app
- * (apps/web/lib/supabase/serviceRole.ts, consumed only by
- * apps/web/lib/actions/reconcileAiOutboundMessage.ts). These tests exist so
- * that a future accidental import from client-reachable code, or a widening
- * of the service-role surface to ordinary dashboard reads/writes, fails a
- * test immediately instead of only being caught by manual review.
+ * Guards the narrow, audited uses of a service_role Supabase client in this
+ * app (apps/web/lib/supabase/serviceRole.ts, consumed only by
+ * apps/web/lib/actions/reconcileAiOutboundMessage.ts and
+ * apps/web/lib/actions/handover.ts's sendHumanReplyAction -- the latter
+ * added during the Phase 3A security correction as the server-only
+ * replacement for a get_conversation_send_target RPC that had been
+ * callable, and exploitable, directly from the browser). These tests exist
+ * so that a future accidental import from client-reachable code, or a
+ * widening of the service-role surface to ordinary dashboard reads/writes,
+ * fails a test immediately instead of only being caught by manual review.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -68,7 +72,7 @@ describe("service-role client guard", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("only the audited AI-outbound-reconciliation Server Action imports the service-role client", () => {
+  it("only the two audited Server Actions import the service-role client", () => {
     const allSourceFiles = [
       ...listSourceFiles(join(webRoot, "app")),
       ...listSourceFiles(join(webRoot, "lib")),
@@ -78,9 +82,13 @@ describe("service-role client guard", () => {
       .filter((file) =>
         /from\s+["'].*supabase\/serviceRole(\.js)?["']/.test(readFileSync(file, "utf8")),
       )
-      .map((file) => relative(webRoot, file));
+      .map((file) => relative(webRoot, file))
+      .sort();
 
-    expect(importers).toEqual(["lib/actions/reconcileAiOutboundMessage.ts"]);
+    expect(importers).toEqual([
+      "lib/actions/handover.ts",
+      "lib/actions/reconcileAiOutboundMessage.ts",
+    ]);
   });
 
   it("the AI-outbound-reconciliation Server Action never accepts a client-supplied company/tenant id", () => {
@@ -99,5 +107,31 @@ describe("service-role client guard", () => {
     const signature = signatureMatch?.[1] ?? "";
     expect(signature).not.toMatch(/companyId|company_id|tenantId|tenant_id/i);
     expect(actionSource).toContain("session.activeCompanyId");
+  });
+
+  it("Phase 3A: sendHumanReplyAction authorizes via the normal authenticated session BEFORE ever touching the service-role client", () => {
+    const actionSource = readFileSync(join(webRoot, "lib/actions/handover.ts"), "utf8");
+    const fnMatch = actionSource.match(/export async function sendHumanReplyAction\([\s\S]*?\n}\n/);
+    expect(fnMatch).not.toBeNull();
+    const fnBody = fnMatch![0];
+
+    const authIndex = fnBody.indexOf("repo.getConversationForThread");
+    const serviceRoleIndex = fnBody.indexOf("createServerOnlyServiceRoleClient");
+    expect(authIndex).toBeGreaterThan(-1);
+    expect(serviceRoleIndex).toBeGreaterThan(-1);
+    expect(authIndex).toBeLessThan(serviceRoleIndex);
+  });
+
+  it("Phase 3A: no removed get_conversation_send_target RPC call remains anywhere in the app", () => {
+    // Matches an actual .rpc(...) call site, not the explanatory comments in
+    // handover.ts/serviceRoleGuard.test.ts describing why it was removed.
+    const allSourceFiles = [
+      ...listSourceFiles(join(webRoot, "app")),
+      ...listSourceFiles(join(webRoot, "lib")),
+    ];
+    const offenders = allSourceFiles.filter((file) =>
+      /\.rpc\(\s*["']get_conversation_send_target["']/.test(readFileSync(file, "utf8")),
+    );
+    expect(offenders).toEqual([]);
   });
 });

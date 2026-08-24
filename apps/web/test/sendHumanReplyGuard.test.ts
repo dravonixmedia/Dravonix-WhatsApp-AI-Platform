@@ -45,8 +45,21 @@ describe("sendHumanReplyAction required-configuration guard", () => {
     expect(guardIndex).toBeLessThan(sendHumanReplyCallIndex);
   });
 
-  it("does not read SUPABASE_SERVICE_ROLE_KEY -- the human-reply path never needs it", () => {
-    expect(actionSource).not.toMatch(/SUPABASE_SERVICE_ROLE_KEY/);
-    expect(actionSource).not.toMatch(/serviceRole/i);
+  it("Phase 3A: never reads the SUPABASE_SERVICE_ROLE_KEY env var directly -- only through the audited createServerOnlyServiceRoleClient() wrapper", () => {
+    // Updated from this file's original assertion (that the human-reply
+    // path never touches service_role at all): the Phase 3A security
+    // correction replaced a browser-callable get_conversation_send_target
+    // RPC -- which any authenticated caller with conversations.view could
+    // invoke directly for any conversation and receive the raw wa_id --
+    // with a server-only service-role lookup, gated by an explicit
+    // authorization check performed first via the caller's own
+    // authenticated session (see the serviceRoleGuard.test.ts ordering
+    // test). The invariant this test now encodes is narrower but still
+    // load-bearing: this file must never read the raw secret itself,
+    // reusing apps/web/lib/supabase/serviceRole.ts's one existing
+    // server-only client constructor instead of inventing a second way to
+    // reach the service_role key.
+    expect(actionSource).not.toMatch(/env\.SUPABASE_SERVICE_ROLE_KEY/);
+    expect(actionSource).toMatch(/createServerOnlyServiceRoleClient/);
   });
 });

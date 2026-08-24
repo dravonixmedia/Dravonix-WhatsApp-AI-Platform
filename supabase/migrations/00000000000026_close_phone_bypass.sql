@@ -40,11 +40,10 @@
 -- report for the full sweep). whatsapp_wa_id and phone_number are excluded
 -- from both allowlists; every other read path already switched to
 -- get_conversation_phone_displays/get_lead_phone_displays/
--- search_company_conversations/search_company_leads/
--- get_conversation_send_target (migration 25), all SECURITY DEFINER and
--- owned by this migration's applying role, so they are completely
--- unaffected by an authenticated-role grant change -- a SECURITY DEFINER
--- function runs with its owner's privileges, never the caller's (verified
+-- search_company_conversations/search_company_leads (migration 25), all
+-- SECURITY DEFINER and owned by this migration's applying role, so they are
+-- completely unaffected by an authenticated-role grant change -- a SECURITY
+-- DEFINER function runs with its owner's privileges, never the caller's (verified
 -- empirically: a role with no table-level or column-level SELECT on a
 -- column can still read it through a SECURITY DEFINER function that
 -- references it directly).
@@ -61,8 +60,10 @@
 -- only ever affects the authenticated role, and service_role already
 -- bypasses RLS and holds its own unrelated table-level grants (unaffected
 -- by design, verified on hosted staging). Every trusted backend path
--- (webhook ingest, message-consumer, voice-consumer) runs as service_role
--- and keeps reading whatsapp_wa_id directly, unaffected.
+-- (webhook ingest, message-consumer, voice-consumer, and
+-- sendHumanReplyAction's server-only outbound-routing lookup via
+-- apps/web/lib/supabase/serviceRole.ts) runs as service_role and keeps
+-- reading whatsapp_wa_id directly, unaffected.
 --
 -- No RLS policy changes, no function alterations, and no new indexes are
 -- required by this migration -- it is exactly the privilege GRANT/REVOKE

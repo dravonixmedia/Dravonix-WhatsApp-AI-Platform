@@ -55,8 +55,7 @@ declare
   fn text;
   fns text[] := array[
     'mask_wa_id', 'phone_is_full_for_caller', 'get_conversation_phone_displays',
-    'get_lead_phone_displays', 'search_company_conversations', 'search_company_leads',
-    'get_conversation_send_target'
+    'get_lead_phone_displays', 'search_company_conversations', 'search_company_leads'
   ];
 begin
   foreach fn in array fns loop
@@ -478,37 +477,31 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 13. get_conversation_send_target: the outbound-routing lookup added for
---     sendHumanReplyAction (Phase 3A security-review sweep found it running
---     under the invoking user's own `authenticated` session, reading
---     contacts.whatsapp_wa_id directly -- not actually a service_role
---     trusted-backend path as earlier phase notes had assumed). Returns the
---     RAW wa_id (never masked -- it addresses the real outbound Graph API
---     call), gated by the same conversations.view/is_platform_staff()
---     boundary this read already relied on before this migration existed.
+-- 13. Phase 3A final security correction: get_conversation_send_target must
+--     NOT exist. An earlier draft added this RPC as an outbound-routing
+--     lookup for sendHumanReplyAction, granted to `authenticated`, gated
+--     only by conversations.view (company-wide, not assignment-scoped) --
+--     which meant ANY authenticated caller with conversations.view,
+--     including an unassigned Sales Person, could call it directly via
+--     Supabase-JS/PostgREST for any conversation in their company and
+--     receive the raw whatsapp_wa_id, completely bypassing this entire
+--     migration's authorization model. It was removed before ever being
+--     applied anywhere (see the migration file's note in its place) --
+--     sendHumanReplyAction now resolves outbound routing via a server-only
+--     service_role client instead (apps/web/lib/supabase/serviceRole.ts),
+--     never through any RPC reachable by `authenticated`. This assertion is
+--     a permanent regression guard against that function -- or an
+--     equivalent one under any name -- ever being reintroduced.
 -- ---------------------------------------------------------------------------
 
 do $$
-declare v_wa_id text; v_phone_number_id text; begin
-  perform test_set_current_user('b3000001-0000-0000-0000-000000000005'); -- sales-a, may view conv 2
-  select whatsapp_wa_id, phone_number_id into v_wa_id, v_phone_number_id
-    from get_conversation_send_target('f3000001-0000-0000-0000-000000000002');
-  perform test_assert('get_conversation_send_target returns the real raw wa_id for an authorized caller', v_wa_id = '971501234567');
-end; $$;
-
-do $$
-declare v_count integer; begin
-  perform test_set_current_user('b3000001-0000-0000-0000-000000000007'); -- company_accounts (no conversations.view)
-  select count(*) into v_count from get_conversation_send_target('f3000001-0000-0000-0000-000000000002');
-  perform test_assert('get_conversation_send_target returns zero rows for a caller with no conversations.view', v_count = 0);
-end; $$;
-
-do $$
-declare v_count integer; begin
-  perform test_set_current_user('b3000002-0000-0000-0000-000000000001'); -- owner of Company B
-  select count(*) into v_count from get_conversation_send_target('f3000001-0000-0000-0000-000000000002'); -- Company A's conversation
-  perform test_assert('get_conversation_send_target returns zero rows for a cross-tenant caller', v_count = 0);
-end; $$;
+begin
+  perform test_assert(
+    'get_conversation_send_target does not exist as a database object -- no browser-callable raw-phone route remains',
+    not exists (select 1 from pg_proc where proname = 'get_conversation_send_target')
+  );
+end;
+$$;
 
 reset role;
 
