@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { label: "Usage", href: "/admin/usage" },
   { label: "Audit Logs", href: "/admin/audit" },
   { label: "Support Access", href: "/admin/support-access" },
+  { label: "Support & Requests", href: "/admin/support-requests" },
 ] as const;
 
 const PLACEHOLDER_ITEMS = ["Research", "Settings"] as const;

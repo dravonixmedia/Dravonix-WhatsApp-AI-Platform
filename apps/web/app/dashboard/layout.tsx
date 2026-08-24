@@ -77,6 +77,10 @@ export const dynamic = "force-dynamic";
  * handover/[conversationId]/page.tsx), and that /dashboard/draiva's own
  * page.tsx re-checks server-side. Human Handover stays unconditional,
  * matching its pre-existing (RLS-backed) visibility.
+ *
+ * Support & Requests (Phase 5, /dashboard/support) is gated on the new
+ * canViewSupportRequests (support_requests.view), granted to all six active
+ * roles including company_accounts -- see permissions.ts and migration 27.
  */
 export function buildNavItems(
   capabilities: ReturnType<typeof getDashboardCapabilities>,
@@ -109,6 +113,15 @@ export function buildNavItems(
 
   if (capabilities.canReplyToConversations) {
     entries.push({ kind: "draiva", href: "/dashboard/draiva" });
+  }
+
+  if (capabilities.canViewSupportRequests) {
+    entries.push({
+      kind: "link",
+      href: "/dashboard/support",
+      label: "Support & Requests",
+      icon: <SettingsIcon />,
+    });
   }
 
   if (capabilities.canViewAiSettings) {

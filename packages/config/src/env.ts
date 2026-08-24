@@ -137,6 +137,15 @@ const rawEnvSchema = z.object({
   EMAIL_API_KEY: z.string().optional(),
   EMAIL_FROM_ADDRESS: z.string().email().optional(),
   EMAIL_FROM_NAME: z.string().default("DRAIVA by Dravonix Media"),
+
+  // Phase 5 (Client Support & Requests): the mailbox that receives a
+  // notification email whenever a client submits a new support request.
+  // Optional and separate from EMAIL_FROM_ADDRESS (the *sender* identity) --
+  // staging and production can point this at different inboxes. When unset,
+  // the new-request notification email is simply not attempted (the request
+  // itself is still created either way -- see
+  // apps/web/lib/email/sendSupportEmails.ts).
+  SUPPORT_NOTIFICATION_EMAIL: z.string().email().optional(),
 });
 
 export type RawEnv = z.infer<typeof rawEnvSchema>;
@@ -154,6 +163,8 @@ export interface PlatformEnv extends RawEnv {
   /** Resolved email-provider token: ZEPTOMAIL_API_TOKEN, falling back to the transitional EMAIL_API_KEY name. */
   emailApiToken: string | undefined;
   emailConfigured: boolean;
+  /** True only when both a real email provider (emailConfigured) AND SUPPORT_NOTIFICATION_EMAIL are set. */
+  supportNotificationsConfigured: boolean;
 }
 
 export class EnvValidationError extends Error {
@@ -222,6 +233,11 @@ export function loadEnv(source: Record<string, string | undefined>): PlatformEnv
     emailApiToken: raw.ZEPTOMAIL_API_TOKEN ?? raw.EMAIL_API_KEY,
     emailConfigured: Boolean(
       (raw.ZEPTOMAIL_API_TOKEN ?? raw.EMAIL_API_KEY) && raw.EMAIL_FROM_ADDRESS,
+    ),
+    supportNotificationsConfigured: Boolean(
+      (raw.ZEPTOMAIL_API_TOKEN ?? raw.EMAIL_API_KEY) &&
+      raw.EMAIL_FROM_ADDRESS &&
+      raw.SUPPORT_NOTIFICATION_EMAIL,
     ),
   };
 }
