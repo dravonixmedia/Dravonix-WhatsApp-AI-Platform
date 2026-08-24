@@ -2,7 +2,7 @@
 
 import type { ConversationThreadMessage } from "@dravonix/handover";
 import { useRouter } from "next/navigation";
-import { useRef, useState, useTransition } from "react";
+import { useLayoutEffect, useRef, useState, useTransition } from "react";
 import {
   loadOlderMessagesAction,
   reconcileOutboundMessageAction,
@@ -14,6 +14,7 @@ import { MicIcon } from "../../Icons.js";
 import { resolveMessageBodyDisplay } from "./messageBodyDisplay.js";
 import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
 import { mapRealtimeMessageRow } from "./realtimeMessageMapper.js";
+import { bottomScrollTop, isNearBottom, scrollTopAfterPrepend } from "./scrollBehavior.js";
 import {
   appendRealtimeMessage,
   applyRealtimeMessagePatch,
@@ -22,6 +23,23 @@ import {
   prependOlderPage,
   type ThreadPageState,
 } from "./threadPagination.js";
+
+/**
+ * What the pending scroll-position effect below should do the next time
+ * `state.messages` changes -- set synchronously, in the same event handler
+ * that triggers the state update, from measurements taken from the DOM
+ * *before* that update (Phase 3B: latest-message opening & scroll
+ * behavior). A discriminated union rather than a single boolean because
+ * "prepend" needs to carry the pre-prepend scrollHeight forward to the
+ * effect, and "prepend" must never be confused with "stick to bottom" --
+ * conflating them was the bug in an earlier draft of this fix, where a
+ * length-keyed effect would also fire (and wrongly re-stick to the bottom)
+ * after "Load older messages" prepended a page.
+ */
+type PendingScroll =
+  | { type: "none" }
+  | { type: "stick-to-bottom" }
+  | { type: "preserve-anchor"; scrollHeightBefore: number };
 
 function ActionButton({ children }: { children: React.ReactNode }) {
   return (
@@ -41,10 +59,13 @@ interface ConversationThreadProps {
 
 /**
  * The scrollable message list plus its "Load older messages" control (final
- * plan section 16, extended for the dashboard-thread-pagination correction).
- * Keyed by companyId at its call site in page.tsx, so switching the active
- * company always remounts this component from scratch -- no locally
- * accumulated older-page state can ever survive a company switch.
+ * plan section 16, extended for the dashboard-thread-pagination correction;
+ * Phase 3B added the latest-message-on-open/switch scroll behavior below).
+ * Keyed by conversationId at its call site in page.tsx, so opening a
+ * different conversation -- or switching companies, since conversationId is
+ * a globally-unique id no two companies ever share -- always remounts this
+ * component from scratch: no locally accumulated older-page state, and no
+ * stale scroll position, can ever survive a switch.
  */
 export function ConversationThread({
   conversationId,
@@ -59,6 +80,11 @@ export function ConversationThread({
   const [isPending, startTransition] = useTransition();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+  // Defaults to "stick-to-bottom" so the very first layout effect run (right
+  // after this fresh mount, since the component is remounted per
+  // conversationId) lands the reader on the latest message -- see the
+  // effect below.
+  const pendingScrollRef = useRef<PendingScroll>({ type: "stick-to-bottom" });
 
   const { status: realtimeStatus } = useTenantRealtimeChannel({
     namespace: "conversation-thread",
@@ -67,6 +93,24 @@ export function ConversationThread({
     watches: MESSAGE_THREAD_WATCHES,
     onChange: (_table, payload) => {
       if (payload.eventType === "INSERT") {
+        // Measured *before* the state update below, from the DOM as it
+        // exists right now -- i.e. "was the reader at the bottom just
+        // before this message arrived". Covers the current user's own
+        // just-sent reply too, with no special case: sending a reply is
+        // itself only possible while reading at/near the live edge of the
+        // conversation, so the same near-bottom check already follows it.
+        const container = scrollContainerRef.current;
+        pendingScrollRef.current = {
+          type:
+            !container ||
+            isNearBottom({
+              scrollTop: container.scrollTop,
+              scrollHeight: container.scrollHeight,
+              clientHeight: container.clientHeight,
+            })
+              ? "stick-to-bottom"
+              : "none",
+        };
         setState((prev) => appendRealtimeMessage(prev, mapRealtimeMessageRow(payload.new)));
       } else if (payload.eventType === "UPDATE") {
         const id = (payload.new as { id?: string }).id;
@@ -86,28 +130,49 @@ export function ConversationThread({
     },
   });
 
+  // Runs synchronously after the DOM reflects the current state.messages,
+  // but before the browser paints -- applying the scroll position here
+  // (rather than in a plain useEffect) is what keeps the reader from ever
+  // seeing a visible top-then-jump-to-bottom flash on initial open. Keyed
+  // on message *count* specifically: a realtime UPDATE (outbound_status
+  // patch) never changes the count, so it correctly never re-triggers this,
+  // and both "stick to bottom" (initial mount, realtime append) and
+  // "preserve anchor" (Load older) are exactly the two ways the count can
+  // change.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    const pending = pendingScrollRef.current;
+    if (!container || pending.type === "none") return;
+
+    if (pending.type === "stick-to-bottom") {
+      container.scrollTop = bottomScrollTop(container.scrollHeight, container.clientHeight);
+    } else {
+      container.scrollTop = scrollTopAfterPrepend(
+        container.scrollTop,
+        pending.scrollHeightBefore,
+        container.scrollHeight,
+      );
+    }
+    pendingScrollRef.current = { type: "none" };
+  }, [state.messages.length]);
+
   function loadOlder() {
     const before = oldestCursor(state);
     if (!before) return;
     setLoadError(null);
 
     const container = scrollContainerRef.current;
-    const previousScrollHeight = container?.scrollHeight ?? 0;
+    pendingScrollRef.current = {
+      type: "preserve-anchor",
+      scrollHeightBefore: container?.scrollHeight ?? 0,
+    };
 
     startTransition(async () => {
       try {
         const olderPage = await loadOlderMessagesAction(conversationId, before);
         setState((prev) => prependOlderPage(prev, olderPage));
-        // Preserve scroll position: prepending grows the container from the
-        // top, which would otherwise visually jump the reader down to the
-        // newly-added messages -- restoring scrollTop by exactly the added
-        // height keeps whatever was on screen in the same place.
-        requestAnimationFrame(() => {
-          if (container) {
-            container.scrollTop += container.scrollHeight - previousScrollHeight;
-          }
-        });
       } catch {
+        pendingScrollRef.current = { type: "none" };
         setLoadError("Could not load older messages. Please try again.");
       }
     });
