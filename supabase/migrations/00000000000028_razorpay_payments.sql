@@ -160,19 +160,28 @@ grant execute on function attach_razorpay_order(uuid, text) to authenticated;
 --    subscription actually transitions on a completed or failed payment.
 --    service_role only -- there is no authenticated-caller path to this
 --    function at all, matching migration 12's service_role-only
---    reconcile_outbound_message precedent exactly. Idempotent via
---    payment_attempts' existing unique(provider, provider_event_id)
---    constraint (a duplicate delivery hits that unique violation and
---    returns immediately without reprocessing); also idempotent against a
---    payment that has already reached the one truly terminal state,
---    'succeeded' (webhook-then-callback or callback-then-webhook both
---    converge to the same final state, and a retried webhook for an
---    already-succeeded payment is a safe no-op). 'failed' is deliberately
---    NOT treated as terminal here: a single Razorpay order commonly accepts
---    more than one payment attempt (e.g. a declined card followed by a
---    successful retry), so an earlier failed attempt must never block a
---    later, genuinely successful capture for the same order from being
---    reconciled.
+--    reconcile_outbound_message precedent exactly.
+--
+--    The payment row is looked up (and locked) BEFORE anything is ever
+--    persisted. An unknown Razorpay order id -- validly signed, but not
+--    matching any payment this platform created -- has no company to
+--    attach a record to; it is handled as a safe, deterministic,
+--    non-mutating no-op right there (see the no_data_found branch below),
+--    never by inventing or borrowing a company_id just to satisfy
+--    payment_attempts' NOT NULL company_id. Only once a real row is found
+--    does payment_attempts get its idempotency-marker insert, using that
+--    row's own company_id -- a duplicate delivery of the same event then
+--    hits payment_attempts' existing unique(provider, provider_event_id)
+--    constraint and returns immediately without reprocessing. Idempotency
+--    is also preserved against a payment that has already reached the one
+--    truly terminal state, 'succeeded' (webhook-then-callback or
+--    callback-then-webhook both converge to the same final state, and a
+--    retried webhook for an already-succeeded payment is a safe no-op).
+--    'failed' is deliberately NOT treated as terminal here: a single
+--    Razorpay order commonly accepts more than one payment attempt (e.g. a
+--    declined card followed by a successful retry), so an earlier failed
+--    attempt must never block a later, genuinely successful capture for
+--    the same order from being reconciled.
 --
 --    Before marking a captured payment succeeded, the webhook's own
 --    reported amount/currency (passed in as discrete typed parameters --
@@ -229,32 +238,45 @@ declare
   v_now timestamptz := now();
   v_new_period_start timestamptz;
   v_new_period_end timestamptz;
-  v_company_id uuid;
   v_expected_amount bigint;
 begin
-  select company_id into v_company_id from public.payments where provider_reference = p_razorpay_order_id;
-
-  begin
-    insert into public.payment_attempts (company_id, provider, provider_event_id, status, raw_payload, processed_at)
-      values (v_company_id, 'razorpay', p_provider_event_id, p_event_status, p_raw_payload, v_now);
-  exception when unique_violation then
-    -- Razorpay already delivered this exact event (retry) -- never reprocess.
-    return;
-  end;
-
+  -- Resolve (and lock) the payment row FIRST, before any persistence.
+  -- payment_attempts.company_id is NOT NULL: it is only ever a valid
+  -- reference to a real DRAIVA company, because every row it tracks
+  -- belongs to a known tenant's payment. A validly-signed Razorpay webhook
+  -- referencing an order id this platform has no record of (a foreign/
+  -- stray event, or an order DRAIVA never created) has no company to
+  -- attach to -- it must never be assigned a fabricated or unrelated
+  -- tenant, so it is handled here, before any company-scoped write is
+  -- attempted, and is never persisted at all (nothing to dedupe against,
+  -- since nothing was ever recorded for it -- repeated delivery of the
+  -- same unknown order independently and deterministically no-ops every
+  -- time). This is the exact same "return, no tenant touched" outcome the
+  -- old no_data_found branch already produced -- reordering it ahead of
+  -- the payment_attempts insert is what makes that outcome reachable
+  -- without ever attempting a write that requires a company_id that does
+  -- not exist.
   begin
     select * into strict v_payment from public.payments
       where provider_reference = p_razorpay_order_id and method = 'razorpay'
       for update;
   exception
     when no_data_found then
-      -- Unknown order id (e.g. a stray/foreign test event) -- nothing to reconcile.
+      -- Unknown order id -- safe, deterministic, non-mutating no-op.
       return;
     when too_many_rows then
       -- Structurally prevented by payments_provider_reference_key above;
       -- refuse to guess which row to touch rather than silently picking
       -- one if that guarantee were ever somehow violated.
       raise exception 'ambiguous_provider_reference';
+  end;
+
+  begin
+    insert into public.payment_attempts (company_id, provider, provider_event_id, status, raw_payload, processed_at)
+      values (v_payment.company_id, 'razorpay', p_provider_event_id, p_event_status, p_raw_payload, v_now);
+  exception when unique_violation then
+    -- Razorpay already delivered this exact event (retry) -- never reprocess.
+    return;
   end;
 
   if p_event_status = 'captured' then
@@ -354,7 +376,7 @@ end;
 $$;
 
 comment on function reconcile_razorpay_payment(text, text, text, text, bigint, text, jsonb) is
-  'Phase 6B step 3 (webhook only): the sole place payment/invoice/subscription state actually transitions. Idempotent (payment_attempts unique(provider, provider_event_id) + a succeeded-is-terminal guard that never blocks a later capture on top of an earlier failed attempt) and safe regardless of callback/webhook delivery order. Verifies the webhook''s reported amount/currency against the internal payment record before ever marking it succeeded. service_role only -- never callable with an end-user JWT.';
+  'Phase 6B step 3 (webhook only): the sole place payment/invoice/subscription state actually transitions. An unknown Razorpay order id (no matching payment row) is a safe, non-mutating, unpersisted no-op -- never assigned to a fabricated or unrelated tenant. Idempotent for known orders (payment_attempts unique(provider, provider_event_id) + a succeeded-is-terminal guard that never blocks a later capture on top of an earlier failed attempt) and safe regardless of callback/webhook delivery order. Verifies the webhook''s reported amount/currency against the internal payment record before ever marking it succeeded. service_role only -- never callable with an end-user JWT.';
 
 revoke all on function reconcile_razorpay_payment(text, text, text, text, bigint, text, jsonb) from public, anon, authenticated;
 grant execute on function reconcile_razorpay_payment(text, text, text, text, bigint, text, jsonb) to service_role;

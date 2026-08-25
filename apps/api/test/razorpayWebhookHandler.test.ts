@@ -168,4 +168,34 @@ describe("handleRazorpayWebhookPost", () => {
     expect(result.status).toBe(200);
     expect(ctx.repo.calls).toHaveLength(0);
   });
+
+  it("acknowledges 200 with no unhandled exception for a validly-signed event referencing an order the repository doesn't recognize -- reconcile_razorpay_payment treats an unknown order as a safe no-op and resolves normally, so the route needs no special-case branching for it", async () => {
+    const body = capturedPayload("pay_UNKNOWN_0001", "order_DOES_NOT_EXIST_0001");
+    const signature = await sign(body);
+
+    const result = await handleRazorpayWebhookPost(ctx.deps, body, signature);
+
+    expect(result.status).toBe(200);
+    expect(ctx.repo.calls).toHaveLength(1);
+    expect(ctx.repo.calls[0]?.razorpayOrderId).toBe("order_DOES_NOT_EXIST_0001");
+  });
+
+  it("documents the current repository/handler contract: there is no typed reconciliation outcome distinguishing 'known order, processed' from 'unknown order, safely ignored' -- both resolve the same Promise<void>. Safe handling of an unknown order is entirely reconcile_razorpay_payment's own responsibility (it must never throw for that case); this route has no try/catch and still propagates any other repository error uncaught, exactly as before this fix", async () => {
+    class ThrowingRepository implements RazorpayPaymentRepository {
+      async reconcilePayment(): Promise<void> {
+        throw new Error(
+          'simulated database error: null value in column "company_id" violates not-null constraint',
+        );
+      }
+    }
+    const deps: RazorpayWebhookDeps = {
+      webhookSecret: WEBHOOK_SECRET,
+      repo: new ThrowingRepository(),
+      logger: silentLogger,
+    };
+    const body = capturedPayload("pay_UNKNOWN_0002", "order_DOES_NOT_EXIST_0002");
+    const signature = await sign(body);
+
+    await expect(handleRazorpayWebhookPost(deps, body, signature)).rejects.toThrow();
+  });
 });

@@ -203,6 +203,7 @@ insert into invoices (id, company_id, kind, invoice_number, status, currency, to
   ('14400001-0000-0000-0000-000000000011', 'd1000001-0000-0000-0000-000000000001', 'service_charge', 'INV-PAY-A-0011', 'pending', 'INR', 1500.00),
   ('14400001-0000-0000-0000-000000000012', 'd1000001-0000-0000-0000-000000000001', 'service_charge', 'INV-PAY-A-0012', 'pending', 'INR', 1500.00),
   ('14400001-0000-0000-0000-000000000013', 'd1000001-0000-0000-0000-000000000001', 'service_charge', 'INV-PAY-A-0013', 'pending', 'INR', 1500.00),
+  ('14400001-0000-0000-0000-000000000014', 'd1000001-0000-0000-0000-000000000001', 'service_charge', 'INV-PAY-A-0014', 'pending', 'INR', 750.00),
   ('14400002-0000-0000-0000-000000000001', 'd2000001-0000-0000-0000-000000000001', 'subscription', 'INV-PAY-B-0001', 'pending', 'INR', 1000.00);
 
 set local role authenticated;
@@ -1070,6 +1071,115 @@ begin
   perform test_assert('a zero provider-reported amount is rejected rather than treated as a match',
     (select status from payments where id = v_payment_id) = 'pending');
   raise notice 'OK: a zero/invalid provider amount is rejected';
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 12. Unknown Razorpay order id: a validly-signed webhook referencing an
+--     order this platform never created (no matching payments row) must be
+--     a safe, deterministic, non-mutating no-op -- never a 500 from a
+--     payment_attempts.company_id NOT NULL violation, and never persisted
+--     under a fabricated or borrowed company_id.
+-- ---------------------------------------------------------------------------
+
+-- 12a. Unknown order -- captured: no exception, nothing created anywhere.
+do $$
+begin
+  perform reconcile_razorpay_payment('payment.captured:pay_UNKNOWN_0001', 'captured', 'order_DOES_NOT_EXIST_0001', 'pay_UNKNOWN_0001', 100000, 'INR', '{}'::jsonb);
+
+  perform test_assert('an unknown order id (captured) raises no exception and creates no payment_attempts row',
+    not exists (select 1 from payment_attempts where provider_event_id = 'payment.captured:pay_UNKNOWN_0001'));
+  perform test_assert('an unknown order id (captured) creates no payments row',
+    not exists (select 1 from payments where provider_reference = 'order_DOES_NOT_EXIST_0001'));
+  perform test_assert('an unknown order id (captured) creates no audit_logs row',
+    not exists (select 1 from audit_logs where metadata->>'provider_payment_id' = 'pay_UNKNOWN_0001'));
+  raise notice 'OK: an unknown order id on a captured event is a safe, unpersisted no-op (no not_null_violation, no 500)';
+end;
+$$;
+
+-- 12b. Unknown order -- failed: same safe behavior.
+do $$
+begin
+  perform reconcile_razorpay_payment('payment.failed:pay_UNKNOWN_0002', 'failed', 'order_DOES_NOT_EXIST_0002', 'pay_UNKNOWN_0002', 100000, 'INR', '{}'::jsonb);
+
+  perform test_assert('an unknown order id (failed) raises no exception and creates no payment_attempts row',
+    not exists (select 1 from payment_attempts where provider_event_id = 'payment.failed:pay_UNKNOWN_0002'));
+  perform test_assert('an unknown order id (failed) creates no payments row',
+    not exists (select 1 from payments where provider_reference = 'order_DOES_NOT_EXIST_0002'));
+  perform test_assert('an unknown order id (failed) creates no audit_logs row',
+    not exists (select 1 from audit_logs where metadata->>'provider_payment_id' = 'pay_UNKNOWN_0002'));
+  raise notice 'OK: an unknown order id on a failed event is a safe, unpersisted no-op';
+end;
+$$;
+
+-- 12c. Duplicate delivery of the same unknown-order event: deterministic,
+--      no uncontrolled row growth (nothing was ever persisted for it, so
+--      there is nothing to grow).
+do $$
+declare
+  v_count_before int;
+  v_count_after int;
+begin
+  select count(*) into v_count_before from payment_attempts where provider_event_id = 'payment.captured:pay_UNKNOWN_0003';
+
+  perform reconcile_razorpay_payment('payment.captured:pay_UNKNOWN_0003', 'captured', 'order_DOES_NOT_EXIST_0003', 'pay_UNKNOWN_0003', 100000, 'INR', '{}'::jsonb);
+  perform reconcile_razorpay_payment('payment.captured:pay_UNKNOWN_0003', 'captured', 'order_DOES_NOT_EXIST_0003', 'pay_UNKNOWN_0003', 100000, 'INR', '{}'::jsonb);
+
+  select count(*) into v_count_after from payment_attempts where provider_event_id = 'payment.captured:pay_UNKNOWN_0003';
+  perform test_assert('repeated delivery of the same unknown-order event stays at zero persisted rows (no 500, no growth)',
+    v_count_before = 0 and v_count_after = 0);
+  raise notice 'OK: repeated delivery of an unknown-order event converges deterministically with no persistence and no growth';
+end;
+$$;
+
+-- 12d. Cross-company protection: an unknown order has no order-to-company
+--      resolution path at all, so it cannot affect any company -- and
+--      reconciling one alongside a real, already-known order for Company A
+--      never disturbs either Company A's or Company B's own data.
+do $$
+declare
+  v_b_period_end_before timestamptz;
+  v_b_period_end_after timestamptz;
+  v_a_payment_status_before payment_status;
+  v_a_payment_status_after payment_status;
+begin
+  select current_period_end into v_b_period_end_before from subscriptions where company_id = 'd2000001-0000-0000-0000-000000000001';
+  select status into v_a_payment_status_before from payments where provider_reference = 'order_TESTORDER0001';
+
+  perform reconcile_razorpay_payment('payment.captured:pay_UNKNOWN_XCOMPANY', 'captured', 'order_DOES_NOT_EXIST_XCOMPANY', 'pay_UNKNOWN_XCOMPANY', 100000, 'INR', '{}'::jsonb);
+
+  select current_period_end into v_b_period_end_after from subscriptions where company_id = 'd2000001-0000-0000-0000-000000000001';
+  select status into v_a_payment_status_after from payments where provider_reference = 'order_TESTORDER0001';
+
+  perform test_assert('reconciling an unknown order never touches Company B''s subscription',
+    v_b_period_end_before = v_b_period_end_after);
+  perform test_assert('reconciling an unknown order never disturbs Company A''s own real, already-known order',
+    v_a_payment_status_before = v_a_payment_status_after);
+  raise notice 'OK: an unknown order id has no order-to-company resolution path and cannot affect any company (the real order-to-payment relationship remains authoritative)';
+end;
+$$;
+
+-- 12e. Known-order regression: the reordered lookup-before-persist logic
+--      must not have broken normal, legitimate reconciliation of a real,
+--      known order.
+do $$
+declare
+  v_payment_id uuid;
+begin
+  insert into payments (company_id, invoice_id, method, status, amount, currency, submitted_by_user_id)
+    values ('d1000001-0000-0000-0000-000000000001', '14400001-0000-0000-0000-000000000014', 'razorpay', 'pending', 750.00, 'INR', 'e0000001-0000-0000-0000-000000000001')
+    returning id into v_payment_id;
+  update payments set provider_reference = 'order_REGRESSION_0014' where id = v_payment_id;
+
+  perform reconcile_razorpay_payment('payment.captured:pay_REGRESSION_0014', 'captured', 'order_REGRESSION_0014', 'pay_REGRESSION_0014', 75000, 'INR', '{}'::jsonb);
+
+  perform test_assert('a normal, known-order capture still succeeds correctly after the unknown-order fix',
+    (select status from payments where id = v_payment_id) = 'succeeded');
+  perform test_assert('the invoice behind a normal, known-order capture is still marked paid',
+    exists (select 1 from invoices where id = '14400001-0000-0000-0000-000000000014' and status = 'paid'));
+  perform test_assert('a payment_attempts row is recorded for the known order (idempotency preserved for real events)',
+    exists (select 1 from payment_attempts where provider_event_id = 'payment.captured:pay_REGRESSION_0014' and company_id = 'd1000001-0000-0000-0000-000000000001'));
+  raise notice 'OK: known-order reconciliation is unaffected by the unknown-order handling fix';
 end;
 $$;
 
