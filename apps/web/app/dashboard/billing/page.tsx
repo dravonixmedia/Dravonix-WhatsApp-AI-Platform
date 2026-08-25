@@ -1,15 +1,266 @@
-import { redirect } from "next/navigation";
+import Link from "next/link";
+import { formatDateTime } from "../../../lib/formatDateTime.js";
+import {
+  buildMemberIdentityByUserId,
+  resolveMemberIdentity,
+  type CompanyMemberIdentityRow,
+} from "../../../lib/memberIdentity.js";
+import { getDashboardCapabilities } from "../../../lib/permissions.js";
+import { getCompanyTimezone } from "../../../lib/repositories/companyTimezone.js";
+import {
+  getBillingSubscription,
+  listBillingInvoices,
+  listBillingPayments,
+} from "../../../lib/repositories/billingRepository.js";
+import { SupabaseEntitlementRepository } from "../../../lib/repositories/supabaseEntitlementRepository.js";
+import { getDashboardSession } from "../../../lib/session.js";
+import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
+
+export const dynamic = "force-dynamic";
+
+const INVOICE_STATUS_BADGE: Record<string, string> = {
+  draft: "dvx-badge--neutral",
+  pending: "dvx-badge--warning",
+  partially_paid: "dvx-badge--warning",
+  paid: "dvx-badge--success",
+  void: "dvx-badge--neutral",
+  refunded: "dvx-badge--neutral",
+};
+
+const PAYMENT_STATUS_BADGE: Record<string, string> = {
+  pending: "dvx-badge--warning",
+  succeeded: "dvx-badge--success",
+  failed: "dvx-badge--danger",
+  refunded: "dvx-badge--neutral",
+};
+
+function PermissionDenied() {
+  return (
+    <div className="dvx-card" style={{ maxWidth: 480 }}>
+      <h1 style={{ fontSize: "1.1rem", margin: "0 0 0.5rem" }}>Billing</h1>
+      <p className="dvx-muted" style={{ margin: 0 }}>
+        Your role does not have permission to view billing.
+      </p>
+    </div>
+  );
+}
+
+function money(amount: number, currency: string): string {
+  return `${currency} ${amount.toFixed(2)}`;
+}
 
 /**
- * No client-ready billing/subscription system exists yet: this page used to
- * render a fabricated "Starter (trial) — demo tenant" plan with no real data
- * behind it. The full subscription system (plans, Razorpay, invoices,
- * upgrades/downgrades, usage metering) is deferred to a separate branch
- * (claude/subscriptions-team-management); until then, the honest
- * "not configured" subscription status lives in Settings. Removed from the
- * sidebar nav; this route redirects rather than showing a developer
- * placeholder in case anything still links here.
+ * Company Accounts' primary landing page (Phase 6) -- also available to
+ * company_owner/company_admin (all three already hold billing.view). No
+ * "Make Payment" section: the billing audit found no real payment-
+ * processing capability wired anywhere in the codebase (Razorpay webhook
+ * signature verification and event-mapping exist, but no order/checkout
+ * creation does; the manual bank-transfer/UPI payment schema exists but
+ * has been unreachable by any company role since migration 22 revoked
+ * billing.manage). Building that is Phase 6B, pending a separate review --
+ * this page only reads and displays data that already exists.
  */
-export default function BillingPage() {
-  redirect("/dashboard/settings");
+export default async function BillingPage() {
+  const session = await getDashboardSession();
+  if (!session) return null;
+
+  const capabilities = getDashboardCapabilities(session.activeRole);
+  if (!capabilities.canViewBilling) return <PermissionDenied />;
+
+  const supabase = await createServerSupabaseClient();
+  const entitlementRepo = new SupabaseEntitlementRepository(supabase);
+
+  const [
+    subscription,
+    invoices,
+    payments,
+    entitlementSnapshot,
+    companyTimezone,
+    memberIdentityRows,
+  ] = await Promise.all([
+    getBillingSubscription(supabase, session.activeCompanyId),
+    listBillingInvoices(supabase, session.activeCompanyId),
+    listBillingPayments(supabase, session.activeCompanyId),
+    entitlementRepo.getSnapshot(session.activeCompanyId),
+    getCompanyTimezone(supabase, session.activeCompanyId),
+    supabase
+      .rpc("list_company_member_identities", { p_company_id: session.activeCompanyId })
+      .then(({ data }) => (data ?? []) as CompanyMemberIdentityRow[]),
+  ]);
+  const memberIdentityByUserId = buildMemberIdentityByUserId(memberIdentityRows);
+
+  const ownUserId = session.userId;
+  function submitterLabel(userId: string | null): string {
+    if (!userId) return "—";
+    if (userId === ownUserId) return "You";
+    const identity = memberIdentityByUserId.get(userId);
+    return resolveMemberIdentity({ name: identity?.displayName ?? null, email: null, userId })
+      .primary;
+  }
+
+  const messagesLimit = entitlementSnapshot.features.monthly_messages?.numericLimit ?? null;
+  const messagesUsed = entitlementSnapshot.usage.monthly_messages ?? 0;
+
+  return (
+    <div>
+      <h1 className="dvx-page-title">Billing</h1>
+      <p className="dvx-muted">Your plan, subscription, usage, invoices, and payment history.</p>
+
+      <div className="dvx-card-grid dvx-card-grid--wide" style={{ marginTop: "1.5rem" }}>
+        <div className="dvx-card">
+          <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.6rem" }}>
+            Finance overview
+          </div>
+          {subscription ? (
+            <>
+              <div
+                style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}
+              >
+                <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+                  Current plan
+                </span>
+                <span style={{ fontSize: "0.85rem" }}>
+                  {subscription.plan?.name ?? "Not assigned"}
+                </span>
+              </div>
+              <div
+                style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}
+              >
+                <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+                  Subscription status
+                </span>
+                <span style={{ fontSize: "0.85rem" }}>{subscription.state.replace(/_/g, " ")}</span>
+              </div>
+              {subscription.plan ? (
+                <div
+                  style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}
+                >
+                  <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+                    Monthly price
+                  </span>
+                  <span style={{ fontSize: "0.85rem" }}>
+                    {money(subscription.plan.monthlyPrice, subscription.plan.currency)}
+                  </span>
+                </div>
+              ) : null}
+              <div
+                style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}
+              >
+                <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+                  Billing period
+                </span>
+                <span style={{ fontSize: "0.85rem" }}>
+                  {subscription.currentPeriodStart
+                    ? `${formatDateTime(subscription.currentPeriodStart, companyTimezone)} – ${
+                        subscription.currentPeriodEnd
+                          ? formatDateTime(subscription.currentPeriodEnd, companyTimezone)
+                          : "ongoing"
+                      }`
+                    : "Not started"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+              No subscription yet.
+            </p>
+          )}
+        </div>
+
+        <div className="dvx-card">
+          <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.6rem" }}>Usage</div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}>
+            <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+              Messages this billing period
+            </span>
+            <span style={{ fontSize: "0.85rem" }}>
+              {messagesUsed}
+              {messagesLimit !== null ? ` / ${messagesLimit}` : ""}
+            </span>
+          </div>
+          <p className="dvx-muted" style={{ fontSize: "0.8rem", marginTop: "0.5rem" }}>
+            Aggregate usage against your plan limits. Contact your account representative for a
+            detailed breakdown.
+          </p>
+        </div>
+      </div>
+
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.6rem" }}>Invoices</div>
+        {invoices.length === 0 ? (
+          <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+            No invoices yet.
+          </p>
+        ) : (
+          <div className="dvx-team-member-list">
+            {invoices.map((invoice) => (
+              <div key={invoice.id} className="dvx-team-member-row">
+                <span className="dvx-team-member-name">
+                  {invoice.invoiceNumber}
+                  <span className="dvx-muted" style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}>
+                    {formatDateTime(invoice.createdAt, companyTimezone)}
+                  </span>
+                </span>
+                <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <span className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+                    {money(invoice.total, invoice.currency)}
+                  </span>
+                  <span
+                    className={`dvx-badge ${INVOICE_STATUS_BADGE[invoice.status] ?? "dvx-badge--neutral"}`}
+                    style={{ fontSize: "0.7rem" }}
+                  >
+                    {invoice.status.replace(/_/g, " ")}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.6rem" }}>
+          Payment history
+        </div>
+        {payments.length === 0 ? (
+          <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+            No payments recorded yet.
+          </p>
+        ) : (
+          <div className="dvx-team-member-list">
+            {payments.map((payment) => (
+              <div key={payment.id} className="dvx-team-member-row">
+                <span className="dvx-team-member-name">
+                  {payment.method.replace(/_/g, " ")}
+                  <span className="dvx-muted" style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}>
+                    {formatDateTime(payment.createdAt, companyTimezone)} · submitted by{" "}
+                    {submitterLabel(payment.submittedByUserId)}
+                  </span>
+                </span>
+                <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <span className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+                    {money(payment.amount, payment.currency)}
+                  </span>
+                  <span
+                    className={`dvx-badge ${PAYMENT_STATUS_BADGE[payment.status] ?? "dvx-badge--neutral"}`}
+                    style={{ fontSize: "0.7rem" }}
+                  >
+                    {payment.status}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="dvx-muted" style={{ fontSize: "0.8rem", marginTop: "0.75rem" }}>
+          Making a payment isn&apos;t available yet -- contact your account representative, or open
+          a{" "}
+          <Link href="/dashboard/support" className="dvx-muted">
+            support request
+          </Link>{" "}
+          for a billing, payment, or invoice question.
+        </p>
+      </div>
+    </div>
+  );
 }

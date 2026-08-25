@@ -5,13 +5,18 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Dashboard sidebar navigation -- covers the original dashboard correction
- * pass (Knowledge Base/Billing must never appear; Settings/WhatsApp
- * Connection gated by real permissions, never a hardcoded email or role),
- * the sidebar UI/UX polish pass (exact 9-item order, the DRAIVA two-line
- * entry, the split Team Settings/Company Settings gate), and the dedicated
- * Notifications/DRAIVA sections pass: both are now plain routed links
- * (/dashboard/notifications, /dashboard/draiva), not a popup toggle or a
- * conditional redirect to Live Conversations.
+ * pass (Knowledge Base must never appear unless canViewKnowledge; Settings/
+ * WhatsApp Connection gated by real permissions, never a hardcoded email or
+ * role), the sidebar UI/UX polish pass (9-item baseline order, the DRAIVA
+ * two-line entry, the split Team Settings/Company Settings gate), the
+ * dedicated Notifications/DRAIVA sections pass (both are plain routed links
+ * -- /dashboard/notifications, /dashboard/draiva -- not a popup toggle or a
+ * conditional redirect to Live Conversations), and Phase 6 (Company
+ * Accounts + Billing): Billing went from "never appears, no client-ready
+ * subscription system exists" to a real finance dashboard gated on
+ * canViewBilling, and Live Conversations/Human Handover/Leads went from
+ * unconditional (RLS-only enforcement) to gated on canViewConversations/
+ * canViewLeads, matching every other operational nav entry.
  *
  * Static source assertions rather than importing app/dashboard/layout.tsx
  * directly: that file transitively imports lib/session.ts, which wraps
@@ -52,9 +57,11 @@ describe("dashboard sidebar navigation", () => {
     expect(block?.[0]).toContain('href: "/dashboard/knowledge"');
   });
 
-  it("never constructs a Billing nav entry -- no client-ready subscription system exists yet", () => {
-    expect(layoutSource).not.toMatch(/label:\s*"Billing"/);
-    expect(layoutSource).not.toMatch(/href:\s*"\/dashboard\/billing"/);
+  it("gates the Billing nav entry behind capabilities.canViewBilling -- Phase 6 replaced the dead redirect with a real finance dashboard", () => {
+    const block = layoutSource.match(/if \(capabilities\.canViewBilling\) \{[\s\S]*?\}/);
+    expect(block).not.toBeNull();
+    expect(block?.[0]).toContain('label: "Billing"');
+    expect(block?.[0]).toContain('href: "/dashboard/billing"');
   });
 
   it("builds the sidebar in the exact approved order: Overview, Live Conversations, Human Handover, Leads, Notifications, DRAIVA, Team Settings, Company Settings, WhatsApp Connection", () => {
@@ -134,14 +141,15 @@ describe("dashboard sidebar navigation", () => {
     expect(companyBlock?.[0]).toContain("exact: true");
   });
 
-  it("the Billing route itself redirects rather than rendering a fabricated placeholder plan", () => {
+  it("the Billing route is a real finance dashboard (Phase 6) -- no longer a redirect, and never a fabricated placeholder plan", () => {
     const billingRouteSource = readFileSync(
       join(webRoot, "app/dashboard/billing/page.tsx"),
       "utf8",
     );
     const rendered = withoutComments(billingRouteSource);
-    expect(billingRouteSource).toContain('redirect("/dashboard/settings")');
+    expect(billingRouteSource).not.toContain('redirect("/dashboard/settings")');
     expect(rendered).not.toContain("Starter (trial)");
+    expect(billingRouteSource).toContain("canViewBilling");
   });
 
   it("gates the WhatsApp Connection nav entry behind capabilities.canViewWhatsapp, never a hardcoded email or role", () => {
