@@ -1,6 +1,11 @@
 import { notFound } from "next/navigation";
 import { replySupportRequestAction } from "../../../../lib/actions/supportRequests.js";
 import { formatDateTime } from "../../../../lib/formatDateTime.js";
+import {
+  buildMemberIdentityByUserId,
+  resolveMemberIdentity,
+  type CompanyMemberIdentityRow,
+} from "../../../../lib/memberIdentity.js";
 import { getDashboardCapabilities } from "../../../../lib/permissions.js";
 import { RealtimeRefreshBoundary } from "../../../../lib/realtime/RealtimeRefreshBoundary.js";
 import { SUPPORT_REQUEST_DETAIL_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
@@ -13,11 +18,26 @@ import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { SupportRequestStatusBadge } from "../../badges.js";
 
-/** No display-name resolution exists for an arbitrary company member id from the client side -- masks the same way leads/[leadId]/page.tsx already masks assignedMemberId. */
-function submittedByLabel(createdByUserId: string | null, ownUserId: string): string {
+/**
+ * Resolves via the same company-scoped list_company_member_identities RPC/
+ * resolveMemberIdentity precedence as Team Settings -- never a second,
+ * competing identity system. Email is deliberately never passed through
+ * here (unlike Team Settings, which intentionally shows it): this line has
+ * never displayed an address, and this correction isn't the place to start.
+ */
+function submittedByLabel(
+  createdByUserId: string | null,
+  ownUserId: string,
+  memberIdentityByUserId: Map<string, { displayName: string | null }>,
+): string {
   if (!createdByUserId) return "Unknown";
   if (createdByUserId === ownUserId) return "You";
-  return `Member ••${createdByUserId.slice(-4)}`;
+  const identity = memberIdentityByUserId.get(createdByUserId);
+  return resolveMemberIdentity({
+    name: identity?.displayName ?? null,
+    email: null,
+    userId: createdByUserId,
+  }).primary;
 }
 
 export default async function SupportRequestDetailPage({
@@ -41,11 +61,15 @@ export default async function SupportRequestDetailPage({
   }
 
   const supabase = await createServerSupabaseClient();
-  const [request, companyTimezone] = await Promise.all([
+  const [request, companyTimezone, memberIdentityRows] = await Promise.all([
     getSupportRequest(supabase, session.activeCompanyId, requestId),
     getCompanyTimezone(supabase, session.activeCompanyId),
+    supabase
+      .rpc("list_company_member_identities", { p_company_id: session.activeCompanyId })
+      .then(({ data }) => (data ?? []) as CompanyMemberIdentityRow[]),
   ]);
   if (!request) notFound();
+  const memberIdentityByUserId = buildMemberIdentityByUserId(memberIdentityRows);
 
   return (
     <div>
@@ -74,7 +98,8 @@ export default async function SupportRequestDetailPage({
           {request.subject}
         </div>
         <p className="dvx-muted" style={{ fontSize: "0.78rem", marginBottom: "0.75rem" }}>
-          Submitted by {submittedByLabel(request.createdByUserId, session.userId)} ·{" "}
+          Submitted by{" "}
+          {submittedByLabel(request.createdByUserId, session.userId, memberIdentityByUserId)} ·{" "}
           {formatDateTime(request.createdAt, companyTimezone)}
         </p>
         <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{request.description}</p>

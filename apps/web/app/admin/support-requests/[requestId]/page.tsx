@@ -8,6 +8,11 @@ import {
   adminUpdateSupportRequestStatusAction,
 } from "../../../../lib/actions/adminSupport.js";
 import { formatDateTime } from "../../../../lib/formatDateTime.js";
+import {
+  buildMemberIdentityByUserId,
+  resolveMemberIdentity,
+  type CompanyMemberIdentityRow,
+} from "../../../../lib/memberIdentity.js";
 import { getCompanyTimezone } from "../../../../lib/repositories/companyTimezone.js";
 import {
   getAdminSupportRequest,
@@ -24,9 +29,31 @@ import {
   SupportRequestStatusBadge,
 } from "../../../dashboard/badges.js";
 
-/** platform_members has no display-name column (confirmed by audit) -- same masked-id precedent as support_access_sessions' own UI. */
+/**
+ * platform_members has no display-name column (confirmed by audit) -- this
+ * stays the fallback for platform-staff identities (assigned-to, and the
+ * assignment dropdown), which list_company_member_identities cannot resolve
+ * since platform staff are not necessarily company_members rows. Same
+ * masked-id precedent as support_access_sessions' own UI. The request
+ * creator (always a company member) is resolved separately below via the
+ * shared resolveMemberIdentity/list_company_member_identities architecture.
+ */
 function maskUserId(userId: string): string {
   return `User ••${userId.slice(-4)}`;
+}
+
+/** Same company-scoped resolution, and the same deliberate email omission, as the client support detail page. */
+function submittedByLabel(
+  createdByUserId: string | null,
+  memberIdentityByUserId: Map<string, { displayName: string | null }>,
+): string {
+  if (!createdByUserId) return "Unknown";
+  const identity = memberIdentityByUserId.get(createdByUserId);
+  return resolveMemberIdentity({
+    name: identity?.displayName ?? null,
+    email: null,
+    userId: createdByUserId,
+  }).primary;
 }
 
 const NON_TERMINAL_STATUSES: SupportRequestStatus[] = [
@@ -57,11 +84,17 @@ export default async function AdminSupportRequestDetailPage({
   ]);
   if (!request) notFound();
 
-  // The company *being administered* -- never Dravonix Media's own timezone,
-  // regardless of which platform staff member is viewing this page.
-  const companyTimezone = request.companyId
-    ? await getCompanyTimezone(supabase, request.companyId)
-    : null;
+  // The company *being administered* -- never Dravonix Media's own timezone
+  // or identities, regardless of which platform staff member is viewing.
+  const [companyTimezone, memberIdentityRows] = request.companyId
+    ? await Promise.all([
+        getCompanyTimezone(supabase, request.companyId),
+        supabase
+          .rpc("list_company_member_identities", { p_company_id: request.companyId })
+          .then(({ data }) => (data ?? []) as CompanyMemberIdentityRow[]),
+      ])
+    : [null, []];
+  const memberIdentityByUserId = buildMemberIdentityByUserId(memberIdentityRows);
 
   const isTerminal = request.status === "resolved" || request.status === "closed";
 
@@ -97,7 +130,7 @@ export default async function AdminSupportRequestDetailPage({
             <div className="dvx-muted" style={{ fontSize: "0.75rem" }}>
               Submitted by
             </div>
-            <div>{request.createdByUserId ? maskUserId(request.createdByUserId) : "Unknown"}</div>
+            <div>{submittedByLabel(request.createdByUserId, memberIdentityByUserId)}</div>
           </div>
           <div style={{ marginBottom: "0.5rem" }}>
             <div className="dvx-muted" style={{ fontSize: "0.75rem" }}>
