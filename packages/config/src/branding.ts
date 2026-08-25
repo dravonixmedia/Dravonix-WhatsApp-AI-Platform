@@ -46,8 +46,8 @@ const defaultBrand: PlatformBrand = {
   internalSlug: "dravonix-whatsapp-ai-platform",
   tagline: "AI-powered WhatsApp conversations for growing businesses.",
   websiteUrl: "https://dravonix.example",
-  supportEmail: "Support@dravonixmedia.com",
-  supportEmailHref: "mailto:support@dravonixmedia.com",
+  supportEmail: "admin@dravonixmedia.com",
+  supportEmailHref: "mailto:admin@dravonixmedia.com",
   // Official asset, provided as-is (uploaded WebP, not converted/re-encoded).
   logoPath: "/branding/logo.webp",
   iconPath: "/branding/icon.webp",

@@ -177,3 +177,34 @@ describe("No automatic retry/queue mechanism exists that could send a duplicate 
     }
   });
 });
+
+describe("The nonexistent support@dravonixmedia.com mailbox is never reintroduced", () => {
+  // Fixed whitelist of the actual runtime/config sources that render or
+  // configure a Dravonix contact address (confirmed by a repo-wide audit
+  // during the Phase 5 email-address correction) -- deliberately not a
+  // repo-wide recursive scan, so this test's own literal "support@
+  // dravonixmedia.com" search string below can never match itself, and a
+  // doc file merely explaining this historical issue can never trip it.
+  const repoRoot = join(webRoot, "..", "..");
+  const filesToCheck = [
+    join(webRoot, "..", "..", "packages/config/src/branding.ts"),
+    join(webRoot, "..", "..", "packages/email/src/supportRequestEmail.ts"),
+    join(webRoot, "..", "..", "packages/email/src/supportReplyEmail.ts"),
+    join(webRoot, "app/login/page.tsx"),
+    join(repoRoot, ".env.example"),
+  ];
+
+  it("none of the known contact-address sources reference the nonexistent support@dravonixmedia.com mailbox", () => {
+    for (const filePath of filesToCheck) {
+      const source = readFileSync(filePath, "utf8");
+      expect(source.toLowerCase()).not.toContain("support@dravonixmedia.com");
+    }
+  });
+
+  it("the branding default and both Phase 5 email templates use the real admin@dravonixmedia.com address", () => {
+    for (const filePath of filesToCheck.filter((f) => f !== join(webRoot, "app/login/page.tsx"))) {
+      const source = readFileSync(filePath, "utf8");
+      expect(source).toContain("admin@dravonixmedia.com");
+    }
+  });
+});
