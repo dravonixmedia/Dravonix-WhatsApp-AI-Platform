@@ -15,8 +15,12 @@ import {
 import { SupabaseEntitlementRepository } from "../../../lib/repositories/supabaseEntitlementRepository.js";
 import { getDashboardSession } from "../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
+import { MakePaymentButton } from "./MakePaymentButton.js";
 
 export const dynamic = "force-dynamic";
+
+/** Invoice statuses a payment can actually be made against -- draft (not yet finalized), paid, void, and refunded are all excluded. */
+const PAYABLE_INVOICE_STATUSES = new Set(["pending", "partially_paid"]);
 
 const INVOICE_STATUS_BADGE: Record<string, string> = {
   draft: "dvx-badge--neutral",
@@ -51,14 +55,12 @@ function money(amount: number, currency: string): string {
 
 /**
  * Company Accounts' primary landing page (Phase 6) -- also available to
- * company_owner/company_admin (all three already hold billing.view). No
- * "Make Payment" section: the billing audit found no real payment-
- * processing capability wired anywhere in the codebase (Razorpay webhook
- * signature verification and event-mapping exist, but no order/checkout
- * creation does; the manual bank-transfer/UPI payment schema exists but
- * has been unreachable by any company role since migration 22 revoked
- * billing.manage). Building that is Phase 6B, pending a separate review --
- * this page only reads and displays data that already exists.
+ * company_owner/company_admin (all three hold billing.view). Phase 6B adds
+ * a real Pay Now action per payable invoice, gated on capabilities.canPayBilling
+ * (billing.pay) -- never a role-name check, so Manager/Team Leader/Sales
+ * Person (who hold neither billing.view nor billing.pay) never see this
+ * page or the button at all, and it is capability-derived so any future
+ * role with billing.pay gets it automatically.
  */
 export default async function BillingPage() {
   const session = await getDashboardSession();
@@ -211,6 +213,9 @@ export default async function BillingPage() {
                   >
                     {invoice.status.replace(/_/g, " ")}
                   </span>
+                  {capabilities.canPayBilling && PAYABLE_INVOICE_STATUSES.has(invoice.status) ? (
+                    <MakePaymentButton invoiceId={invoice.id} />
+                  ) : null}
                 </span>
               </div>
             ))}
@@ -253,8 +258,7 @@ export default async function BillingPage() {
           </div>
         )}
         <p className="dvx-muted" style={{ fontSize: "0.8rem", marginTop: "0.75rem" }}>
-          Making a payment isn&apos;t available yet -- contact your account representative, or open
-          a{" "}
+          Use Pay Now on a due invoice above to pay online, or open a{" "}
           <Link href="/dashboard/support" className="dvx-muted">
             support request
           </Link>{" "}

@@ -138,8 +138,12 @@ describe("The Billing page is a real finance dashboard, not the old dead redirec
     expect(source).not.toMatch(/\{payment\.submittedByUserId\}/);
   });
 
-  it("does not offer a Make Payment action -- no real payment capability exists yet (Phase 6B, pending review)", () => {
-    expect(stripComments(source).toLowerCase()).not.toMatch(/razorpay|create.?order|checkout/);
+  it("Phase 6B: offers a Pay Now action per invoice, gated on capabilities.canPayBilling and a payable invoice status -- never a role-name check", () => {
+    expect(source).toContain('import { MakePaymentButton } from "./MakePaymentButton.js"');
+    expect(source).toMatch(
+      /capabilities\.canPayBilling\s*&&\s*PAYABLE_INVOICE_STATUSES\.has\(invoice\.status\)/,
+    );
+    expect(stripComments(source)).not.toMatch(/role\s*===\s*["']company_accounts["']/);
   });
 
   it("links to Support & Requests for billing questions instead of building a second support surface", () => {
@@ -147,20 +151,32 @@ describe("The Billing page is a real finance dashboard, not the old dead redirec
   });
 });
 
-describe("billing.manage/billing.pay are not resurrected by this phase", () => {
-  it("permissions.ts's PermissionKey union still has no billing.manage or billing.pay entry", () => {
+describe("billing.manage is still not resurrected; billing.pay (Phase 6B) is scoped correctly", () => {
+  it("permissions.ts's PermissionKey union still has no billing.manage entry", () => {
     const source = readSource("lib/permissions.ts");
     expect(source).not.toMatch(/"billing\.manage"/);
-    expect(source).not.toMatch(/"billing\.pay"/);
   });
 
-  it("no Server Action or page grants billing.manage/billing.pay to any company role", () => {
+  it("permissions.ts grants billing.pay to company_owner/company_admin/company_accounts only, never manager/team_leader/sales_person", () => {
+    const source = readSource("lib/permissions.ts");
+    expect(source).toMatch(/"billing\.pay"/);
+    for (const role of ["company_owner", "company_admin", "company_accounts"]) {
+      const roleBlockMatch = source.match(new RegExp(`${role}:\\s*new Set\\(\\[[\\s\\S]*?\\]\\)`));
+      expect(roleBlockMatch?.[0]).toContain('"billing.pay"');
+    }
+    for (const role of ["manager", "team_leader", "sales_person"]) {
+      const roleBlockMatch = source.match(new RegExp(`${role}:\\s*new Set\\(\\[[\\s\\S]*?\\]\\)`));
+      expect(roleBlockMatch?.[0]).not.toContain('"billing.pay"');
+    }
+  });
+
+  it("no Server Action or page grants billing.manage to any company role, and billing.pay only appears where the Pay Now flow needs it", () => {
     for (const relativePath of [
       "app/dashboard/billing/page.tsx",
       "lib/repositories/billingRepository.ts",
     ]) {
       const source = stripComments(readSource(relativePath));
-      expect(source).not.toMatch(/billing\.manage|billing\.pay/);
+      expect(source).not.toMatch(/billing\.manage/);
     }
   });
 });

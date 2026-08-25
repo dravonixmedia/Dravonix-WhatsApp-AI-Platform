@@ -102,6 +102,23 @@ describe("hasPermission", () => {
     expect(hasPermission("company_accounts", "ai_settings.view")).toBe(false);
     expect(hasPermission("company_accounts", "whatsapp.view")).toBe(false);
   });
+
+  it("Phase 6B: billing.pay is held by company_owner, company_admin, and company_accounts only", () => {
+    expect(hasPermission("company_owner", "billing.pay")).toBe(true);
+    expect(hasPermission("company_admin", "billing.pay")).toBe(true);
+    expect(hasPermission("company_accounts", "billing.pay")).toBe(true);
+  });
+
+  it("Phase 6B: manager, team_leader, and sales_person do not hold billing.pay", () => {
+    expect(hasPermission("manager", "billing.pay")).toBe(false);
+    expect(hasPermission("team_leader", "billing.pay")).toBe(false);
+    expect(hasPermission("sales_person", "billing.pay")).toBe(false);
+  });
+
+  it("Phase 6B: billing_viewer and viewer do not hold billing.pay", () => {
+    expect(hasPermission("billing_viewer", "billing.pay")).toBe(false);
+    expect(hasPermission("viewer", "billing.pay")).toBe(false);
+  });
 });
 
 describe("getDashboardCapabilities", () => {
@@ -214,6 +231,32 @@ describe("getDashboardCapabilities", () => {
     expect(capabilities.canViewKnowledge).toBe(false);
     expect(capabilities.canViewAiSettings).toBe(false);
     expect(capabilities.canViewWhatsapp).toBe(false);
+  });
+
+  it("Phase 6B: canPayBilling is true for company_owner, company_admin, and company_accounts", () => {
+    expect(getDashboardCapabilities("company_owner").canPayBilling).toBe(true);
+    expect(getDashboardCapabilities("company_admin").canPayBilling).toBe(true);
+    expect(getDashboardCapabilities("company_accounts").canPayBilling).toBe(true);
+  });
+
+  it("Phase 6B: canPayBilling is false for manager, team_leader, and sales_person even though they may see other capabilities", () => {
+    expect(getDashboardCapabilities("manager").canPayBilling).toBe(false);
+    expect(getDashboardCapabilities("team_leader").canPayBilling).toBe(false);
+    expect(getDashboardCapabilities("sales_person").canPayBilling).toBe(false);
+  });
+
+  it("Phase 6B: canPayBilling never implies any operational capability, and canViewBilling never implies canPayBilling", () => {
+    const accounts = getDashboardCapabilities("company_accounts");
+    expect(accounts.canPayBilling).toBe(true);
+    expect(accounts.canViewConversations).toBe(false);
+    expect(accounts.canViewLeads).toBe(false);
+    expect(accounts.canViewTeam).toBe(false);
+    expect(accounts.canViewAiSettings).toBe(false);
+    expect(accounts.canViewKnowledge).toBe(false);
+
+    const billingViewer = getDashboardCapabilities("billing_viewer");
+    expect(billingViewer.canViewBilling).toBe(true);
+    expect(billingViewer.canPayBilling).toBe(false);
   });
 
   it("viewer can view AI settings and WhatsApp connection info but cannot edit display names", () => {
