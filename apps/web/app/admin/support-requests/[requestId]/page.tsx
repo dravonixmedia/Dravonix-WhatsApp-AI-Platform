@@ -7,6 +7,8 @@ import {
   adminUpdateSupportRequestPriorityAction,
   adminUpdateSupportRequestStatusAction,
 } from "../../../../lib/actions/adminSupport.js";
+import { formatDateTime } from "../../../../lib/formatDateTime.js";
+import { getCompanyTimezone } from "../../../../lib/repositories/companyTimezone.js";
 import {
   getAdminSupportRequest,
   listActivePlatformStaff,
@@ -55,6 +57,12 @@ export default async function AdminSupportRequestDetailPage({
   ]);
   if (!request) notFound();
 
+  // The company *being administered* -- never Dravonix Media's own timezone,
+  // regardless of which platform staff member is viewing this page.
+  const companyTimezone = request.companyId
+    ? await getCompanyTimezone(supabase, request.companyId)
+    : null;
+
   const isTerminal = request.status === "resolved" || request.status === "closed";
 
   return (
@@ -95,7 +103,7 @@ export default async function AdminSupportRequestDetailPage({
             <div className="dvx-muted" style={{ fontSize: "0.75rem" }}>
               Created
             </div>
-            <div>{new Date(request.createdAt).toLocaleString()}</div>
+            <div>{formatDateTime(request.createdAt, companyTimezone)}</div>
           </div>
           <div>
             <div className="dvx-muted" style={{ fontSize: "0.75rem" }}>
@@ -244,7 +252,7 @@ export default async function AdminSupportRequestDetailPage({
               <div className="dvx-muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
                 {message.authorType === "client" ? "Client" : "Dravonix Support"}
                 {message.isInternal ? " · Internal note" : ""} ·{" "}
-                {new Date(message.createdAt).toLocaleString()}
+                {formatDateTime(message.createdAt, companyTimezone)}
               </div>
               <div style={{ whiteSpace: "pre-wrap" }}>{message.message}</div>
             </div>

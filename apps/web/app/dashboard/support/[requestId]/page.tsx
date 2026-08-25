@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
 import { replySupportRequestAction } from "../../../../lib/actions/supportRequests.js";
+import { formatDateTime } from "../../../../lib/formatDateTime.js";
 import { getDashboardCapabilities } from "../../../../lib/permissions.js";
 import { RealtimeRefreshBoundary } from "../../../../lib/realtime/RealtimeRefreshBoundary.js";
 import { SUPPORT_REQUEST_DETAIL_WATCHES } from "../../../../lib/realtime/watchConfigs.js";
+import { getCompanyTimezone } from "../../../../lib/repositories/companyTimezone.js";
 import {
   getSupportRequest,
   SUPPORT_REQUEST_TYPE_LABELS,
@@ -39,7 +41,10 @@ export default async function SupportRequestDetailPage({
   }
 
   const supabase = await createServerSupabaseClient();
-  const request = await getSupportRequest(supabase, session.activeCompanyId, requestId);
+  const [request, companyTimezone] = await Promise.all([
+    getSupportRequest(supabase, session.activeCompanyId, requestId),
+    getCompanyTimezone(supabase, session.activeCompanyId),
+  ]);
   if (!request) notFound();
 
   return (
@@ -70,7 +75,7 @@ export default async function SupportRequestDetailPage({
         </div>
         <p className="dvx-muted" style={{ fontSize: "0.78rem", marginBottom: "0.75rem" }}>
           Submitted by {submittedByLabel(request.createdByUserId, session.userId)} ·{" "}
-          {new Date(request.createdAt).toLocaleString()}
+          {formatDateTime(request.createdAt, companyTimezone)}
         </p>
         <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{request.description}</p>
       </div>
@@ -92,7 +97,7 @@ export default async function SupportRequestDetailPage({
             <div key={message.id} className="dvx-card" style={{ fontSize: "0.85rem" }}>
               <div className="dvx-muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
                 {message.authorType === "client" ? "You" : "Dravonix Support"} ·{" "}
-                {new Date(message.createdAt).toLocaleString()}
+                {formatDateTime(message.createdAt, companyTimezone)}
               </div>
               <div style={{ whiteSpace: "pre-wrap" }}>{message.message}</div>
             </div>
