@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveMemberIdentity } from "../lib/memberIdentity.js";
+import { buildMemberIdentityByUserId, resolveMemberIdentity } from "../lib/memberIdentity.js";
 
 const USER_ID = "82000001-0000-0000-0000-00000000bfe1";
 
@@ -67,5 +67,27 @@ describe("resolveMemberIdentity", () => {
       userId: USER_ID,
     });
     expect(identity.primary).toBe("Renée O'Malley-García");
+  });
+});
+
+describe("buildMemberIdentityByUserId", () => {
+  it("indexes list_company_member_identities rows by user_id, not member_id", () => {
+    const map = buildMemberIdentityByUserId([
+      { member_id: "cm-1", user_id: USER_ID, email: "halo@example.test", display_name: "Halo" },
+    ]);
+    expect(map.get(USER_ID)).toEqual({ email: "halo@example.test", displayName: "Halo" });
+    expect(map.get("cm-1")).toBeUndefined();
+  });
+
+  it("returns an empty map for no rows", () => {
+    expect(buildMemberIdentityByUserId([]).size).toBe(0);
+  });
+
+  it("last row wins when the same user_id appears twice (defensive; the RPC itself never duplicates a member)", () => {
+    const map = buildMemberIdentityByUserId([
+      { member_id: "cm-1", user_id: USER_ID, email: "old@example.test", display_name: "Old Name" },
+      { member_id: "cm-1", user_id: USER_ID, email: "new@example.test", display_name: "New Name" },
+    ]);
+    expect(map.get(USER_ID)).toEqual({ email: "new@example.test", displayName: "New Name" });
   });
 });

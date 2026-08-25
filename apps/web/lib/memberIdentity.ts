@@ -37,3 +37,26 @@ export function resolveMemberIdentity(source: MemberIdentitySource): ResolvedMem
   }
   return { primary: maskUserId(source.userId) };
 }
+
+/** One row of `list_company_member_identities`'s result shape. */
+export interface CompanyMemberIdentityRow {
+  member_id: string;
+  user_id: string;
+  email: string | null;
+  display_name: string | null;
+}
+
+/**
+ * Indexes `list_company_member_identities` rows by `user_id` rather than
+ * `member_id` -- for call sites (Support & Requests, Audit Logs) that only
+ * have a bare auth user id to resolve, not a company_members row. Shared so
+ * every such call site batches the same one RPC call per company rather than
+ * re-deriving this index inline.
+ */
+export function buildMemberIdentityByUserId(
+  rows: CompanyMemberIdentityRow[],
+): Map<string, { email: string | null; displayName: string | null }> {
+  return new Map(
+    rows.map((row) => [row.user_id, { email: row.email, displayName: row.display_name }]),
+  );
+}
