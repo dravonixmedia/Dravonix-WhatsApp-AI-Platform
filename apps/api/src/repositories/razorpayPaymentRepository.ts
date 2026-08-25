@@ -5,6 +5,9 @@ export interface ReconcileRazorpayPaymentInput {
   eventStatus: "captured" | "failed";
   razorpayOrderId: string;
   razorpayPaymentId: string;
+  /** Smallest currency unit (e.g. paise for INR), exactly as Razorpay's payment entity represents it -- reconcile_razorpay_payment verifies this against the internal payment's own expected amount before ever marking it succeeded. */
+  amountInSmallestUnit: number;
+  currency: string;
   rawPayload: unknown;
 }
 
@@ -30,6 +33,8 @@ export class SupabaseRazorpayPaymentRepository implements RazorpayPaymentReposit
       p_event_status: input.eventStatus,
       p_razorpay_order_id: input.razorpayOrderId,
       p_razorpay_payment_id: input.razorpayPaymentId,
+      p_amount_in_smallest_unit: input.amountInSmallestUnit,
+      p_currency: input.currency,
       p_raw_payload: input.rawPayload,
     });
     if (error) throw error;

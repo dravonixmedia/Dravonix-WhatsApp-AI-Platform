@@ -62,6 +62,8 @@ export async function handleRazorpayWebhookPost(
     eventStatus: event.status,
     razorpayOrderId: event.orderId,
     razorpayPaymentId: event.paymentId,
+    amountInSmallestUnit: event.amountInSmallestUnit,
+    currency: event.currency,
     rawPayload: payload,
   });
 

@@ -113,29 +113,47 @@ describe("verifyRazorpayPaymentSignature", () => {
 });
 
 describe("parseRazorpayPaymentWebhookEvent", () => {
-  function capturedPayload(paymentId: string, orderId: string) {
+  function capturedPayload(
+    paymentId: string,
+    orderId: string,
+    amount: unknown = 100000,
+    currency: unknown = "INR",
+  ) {
     return {
       event: "payment.captured",
-      payload: { payment: { entity: { id: paymentId, order_id: orderId } } },
+      payload: {
+        payment: { entity: { id: paymentId, order_id: orderId, amount, currency } },
+      },
     };
   }
 
-  it("parses a payment.captured event", () => {
+  it("parses a payment.captured event, including its amount/currency", () => {
     const result = parseRazorpayPaymentWebhookEvent(
-      capturedPayload("pay_TEST0001", "order_TESTORDER0001"),
+      capturedPayload("pay_TEST0001", "order_TESTORDER0001", 150000, "INR"),
     );
     expect(result).toEqual({
       eventId: "payment.captured:pay_TEST0001",
       status: "captured",
       orderId: "order_TESTORDER0001",
       paymentId: "pay_TEST0001",
+      amountInSmallestUnit: 150000,
+      currency: "INR",
     });
   });
 
-  it("parses a payment.failed event", () => {
+  it("parses a payment.failed event, including its amount/currency", () => {
     const payload = {
       event: "payment.failed",
-      payload: { payment: { entity: { id: "pay_TEST0002", order_id: "order_TESTORDER0002" } } },
+      payload: {
+        payment: {
+          entity: {
+            id: "pay_TEST0002",
+            order_id: "order_TESTORDER0002",
+            amount: 50000,
+            currency: "INR",
+          },
+        },
+      },
     };
     const result = parseRazorpayPaymentWebhookEvent(payload);
     expect(result).toEqual({
@@ -143,6 +161,8 @@ describe("parseRazorpayPaymentWebhookEvent", () => {
       status: "failed",
       orderId: "order_TESTORDER0002",
       paymentId: "pay_TEST0002",
+      amountInSmallestUnit: 50000,
+      currency: "INR",
     });
   });
 
@@ -163,9 +183,52 @@ describe("parseRazorpayPaymentWebhookEvent", () => {
   it("returns null when the payment entity is missing an id or order_id", () => {
     const missingOrderId = {
       event: "payment.captured",
-      payload: { payment: { entity: { id: "pay_TEST0003" } } },
+      payload: { payment: { entity: { id: "pay_TEST0003", amount: 100000, currency: "INR" } } },
     };
     expect(parseRazorpayPaymentWebhookEvent(missingOrderId)).toBeNull();
+  });
+
+  it("returns null when the amount is missing, non-numeric, zero, or negative", () => {
+    // null (not undefined) bypasses capturedPayload's default parameter,
+    // exercising a payload that genuinely omits/nulls the amount field.
+    expect(parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", null))).toBeNull();
+    expect(
+      parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", "100000")),
+    ).toBeNull();
+    expect(parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", 0))).toBeNull();
+    expect(parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", -100))).toBeNull();
+    expect(
+      parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", Number.NaN)),
+    ).toBeNull();
+  });
+
+  it("returns null when the currency is missing, empty, or non-string", () => {
+    expect(
+      parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", 100000, null)),
+    ).toBeNull();
+    expect(
+      parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", 100000, "")),
+    ).toBeNull();
+    expect(
+      parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", 100000, "   ")),
+    ).toBeNull();
+    expect(
+      parseRazorpayPaymentWebhookEvent(capturedPayload("pay_1", "order_1", 100000, 356)),
+    ).toBeNull();
+  });
+
+  it("parses a fractional-rupee amount (already in paise, as Razorpay represents it) without alteration", () => {
+    const result = parseRazorpayPaymentWebhookEvent(
+      capturedPayload("pay_TEST0004", "order_TESTORDER0004", 99950, "INR"),
+    );
+    expect(result?.amountInSmallestUnit).toBe(99950);
+  });
+
+  it("preserves the currency exactly as received, case included -- normalization happens at the comparison site, not here", () => {
+    const result = parseRazorpayPaymentWebhookEvent(
+      capturedPayload("pay_TEST0005", "order_TESTORDER0005", 100000, "inr"),
+    );
+    expect(result?.currency).toBe("inr");
   });
 });
 

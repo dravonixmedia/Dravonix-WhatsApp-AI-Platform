@@ -15,6 +15,10 @@ const verifyRazorpayPaymentSignature = vi.fn();
 vi.mock("@dravonix/billing", () => ({
   createRazorpayOrder: (...args: unknown[]) => createRazorpayOrder(...args),
   verifyRazorpayPaymentSignature: (...args: unknown[]) => verifyRazorpayPaymentSignature(...args),
+  // Real implementation (not a mock): billing.ts imports this from
+  // @dravonix/billing as the one canonical conversion, so the test must
+  // exercise the same real rounding behavior rather than a stub.
+  toSmallestCurrencyUnit: (decimalAmount: number) => Math.round(decimalAmount * 100),
 }));
 
 const revalidatePath = vi.fn();

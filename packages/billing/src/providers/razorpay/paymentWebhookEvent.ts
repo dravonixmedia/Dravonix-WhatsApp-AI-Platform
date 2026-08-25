@@ -4,6 +4,18 @@ export interface RazorpayPaymentWebhookEvent {
   status: "captured" | "failed";
   orderId: string;
   paymentId: string;
+  /**
+   * Smallest currency unit (e.g. paise for INR), exactly as Razorpay's
+   * payment entity represents it -- never converted/normalized here.
+   * reconcile_razorpay_payment compares this against the internal payment
+   * row's own amount (converted via the same rule as
+   * packages/billing/src/providers/razorpay/currency.ts) before ever
+   * marking a payment succeeded, so a captured amount that doesn't match
+   * what was actually billed can never silently reconcile.
+   */
+  amountInSmallestUnit: number;
+  /** Razorpay's own currency code for this payment entity, exactly as received -- not case-normalized here (the comparison site normalizes both sides). */
+  currency: string;
 }
 
 /**
@@ -17,6 +29,11 @@ export interface RazorpayPaymentWebhookEvent {
  * event) -- the webhook handler acknowledges those without attempting
  * reconciliation, since there is nothing this endpoint's scope covers to do
  * with them.
+ *
+ * Also returns null for a payment entity missing a positive amount or a
+ * non-empty currency -- a genuine Razorpay payment entity always carries
+ * both, so their absence is itself a signal of a malformed/untrustworthy
+ * payload, rejected here for the same reason a missing id/order_id is.
  */
 export function parseRazorpayPaymentWebhookEvent(
   payload: unknown,
@@ -31,12 +48,18 @@ export function parseRazorpayPaymentWebhookEvent(
   const entity = paymentContainer?.entity as Record<string, unknown> | undefined;
   const paymentId = entity?.id;
   const orderId = entity?.order_id;
+  const amount = entity?.amount;
+  const currency = entity?.currency;
   if (typeof paymentId !== "string" || typeof orderId !== "string") return null;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) return null;
+  if (typeof currency !== "string" || currency.trim() === "") return null;
 
   return {
     eventId: `${event}:${paymentId}`,
     status: event === "payment.captured" ? "captured" : "failed",
     orderId,
     paymentId,
+    amountInSmallestUnit: amount,
+    currency,
   };
 }

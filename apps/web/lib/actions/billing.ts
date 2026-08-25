@@ -18,7 +18,11 @@
  */
 
 import { loadEnv } from "@dravonix/config";
-import { createRazorpayOrder, verifyRazorpayPaymentSignature } from "@dravonix/billing";
+import {
+  createRazorpayOrder,
+  toSmallestCurrencyUnit,
+  verifyRazorpayPaymentSignature,
+} from "@dravonix/billing";
 import { revalidatePath } from "next/cache";
 import { getDashboardSession } from "../session.js";
 import { createServerSupabaseClient } from "../supabase/server.js";
@@ -46,18 +50,6 @@ const ERROR_MESSAGES: Record<string, string> = {
 
 function friendlyError(message: string): string {
   return ERROR_MESSAGES[message] ?? "Could not start the payment. Please try again.";
-}
-
-/**
- * Converts a decimal invoice amount into the smallest currency unit
- * Razorpay's API requires (paise for INR, the only currency this platform
- * currently issues invoices in -- see companies.default_currency/
- * plan_versions.currency, both defaulting to 'INR'). Razorpay's minor-unit
- * convention is 2 decimal places for every currency it supports, so a flat
- * x100 is correct without a currency-specific lookup table.
- */
-function toSmallestCurrencyUnit(amount: number): number {
-  return Math.round(amount * 100);
 }
 
 export async function createPaymentOrderAction(

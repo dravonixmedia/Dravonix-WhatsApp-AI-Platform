@@ -2,6 +2,7 @@ export * from "./stateMachine.js";
 export * from "./entitlementGuard.js";
 export * from "./manualPayments.js";
 export * from "./gracePeriod.js";
+export * from "./providers/razorpay/currency.js";
 export * from "./providers/razorpay/eventMapper.js";
 export * from "./providers/razorpay/ordersApi.js";
 export * from "./providers/razorpay/paymentWebhookEvent.js";

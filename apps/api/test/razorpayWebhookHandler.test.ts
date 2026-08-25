@@ -36,17 +36,17 @@ async function sign(body: string): Promise<string> {
   return hmacSha256Hex(WEBHOOK_SECRET, body);
 }
 
-function capturedPayload(paymentId: string, orderId: string) {
+function capturedPayload(paymentId: string, orderId: string, amount = 100000, currency = "INR") {
   return JSON.stringify({
     event: "payment.captured",
-    payload: { payment: { entity: { id: paymentId, order_id: orderId } } },
+    payload: { payment: { entity: { id: paymentId, order_id: orderId, amount, currency } } },
   });
 }
 
-function failedPayload(paymentId: string, orderId: string) {
+function failedPayload(paymentId: string, orderId: string, amount = 100000, currency = "INR") {
   return JSON.stringify({
     event: "payment.failed",
-    payload: { payment: { entity: { id: paymentId, order_id: orderId } } },
+    payload: { payment: { entity: { id: paymentId, order_id: orderId, amount, currency } } },
   });
 }
 
@@ -108,6 +108,8 @@ describe("handleRazorpayWebhookPost", () => {
       eventStatus: "captured",
       razorpayOrderId: "order_TESTORDER0001",
       razorpayPaymentId: "pay_TEST0001",
+      amountInSmallestUnit: 100000,
+      currency: "INR",
       rawPayload: JSON.parse(body),
     });
   });
@@ -142,5 +144,28 @@ describe("handleRazorpayWebhookPost", () => {
 
     expect(ctx.repo.calls).toHaveLength(2);
     expect(ctx.repo.calls[0]).toEqual(ctx.repo.calls[1]);
+  });
+
+  it("passes the webhook's own reported amount/currency through to reconcile untouched", async () => {
+    const body = capturedPayload("pay_TEST0006", "order_TESTORDER0006", 250050, "inr");
+    const signature = await sign(body);
+
+    await handleRazorpayWebhookPost(ctx.deps, body, signature);
+
+    expect(ctx.repo.calls[0]?.amountInSmallestUnit).toBe(250050);
+    expect(ctx.repo.calls[0]?.currency).toBe("inr");
+  });
+
+  it("returns 200 without calling reconcile for a validly-signed event whose payment entity is missing an amount (rejected by the parser before it ever reaches the repository)", async () => {
+    const body = JSON.stringify({
+      event: "payment.captured",
+      payload: { payment: { entity: { id: "pay_TEST0007", order_id: "order_TESTORDER0007" } } },
+    });
+    const signature = await sign(body);
+
+    const result = await handleRazorpayWebhookPost(ctx.deps, body, signature);
+
+    expect(result.status).toBe(200);
+    expect(ctx.repo.calls).toHaveLength(0);
   });
 });

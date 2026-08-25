@@ -194,7 +194,16 @@ describe("POST /webhooks/razorpay", () => {
 
     const body = JSON.stringify({
       event: "payment.captured",
-      payload: { payment: { entity: { id: "pay_TEST0001", order_id: "order_TESTORDER0001" } } },
+      payload: {
+        payment: {
+          entity: {
+            id: "pay_TEST0001",
+            order_id: "order_TESTORDER0001",
+            amount: 100000,
+            currency: "INR",
+          },
+        },
+      },
     });
     const signature = await hmacSha256Hex(RAZORPAY_WEBHOOK_SECRET, body);
 
@@ -207,6 +216,8 @@ describe("POST /webhooks/razorpay", () => {
     expect(response.status).toBe(200);
     expect(repo.calls).toHaveLength(1);
     expect(repo.calls[0]?.razorpayOrderId).toBe("order_TESTORDER0001");
+    expect(repo.calls[0]?.amountInSmallestUnit).toBe(100000);
+    expect(repo.calls[0]?.currency).toBe("INR");
   });
 
   it("rejects an invalid signature end to end through the Hono app", async () => {
