@@ -1183,6 +1183,320 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- 13. Migration 29 (production-safety closeout): at-most-one-actionable-
+--     order-per-invoice reuse in create_payment_order, and trial -> active
+--     first-payment activation in reconcile_razorpay_payment. Everything in
+--     sections 1-12 above already re-runs against this same migrated
+--     function set (this file executes after all 29 migrations are applied),
+--     so those sections are this migration's regression coverage -- no
+--     existing assertion needed to change.
+-- ---------------------------------------------------------------------------
+
+select test_assert(
+  'create_payment_order locks the invoice row with FOR UPDATE (the concurrency guarantee behind at-most-one-actionable-order-per-invoice -- a true concurrent-connections test is outside what this single-session psql harness can exercise, exactly like the equivalent reconcile_razorpay_payment check above)',
+  pg_get_functiondef((select oid from pg_proc where proname = 'create_payment_order' limit 1)) ilike '%for update%'
+);
+
+insert into invoices (id, company_id, kind, invoice_number, status, currency, total) values
+  ('14400001-0000-0000-0000-000000000015', 'd1000001-0000-0000-0000-000000000001', 'service_charge', 'INV-PAY-A-0015', 'pending', 'INR', 300.00),
+  ('14400001-0000-0000-0000-000000000016', 'd1000001-0000-0000-0000-000000000001', 'service_charge', 'INV-PAY-A-0016', 'pending', 'INR', 300.00),
+  ('14400001-0000-0000-0000-000000000017', 'd1000001-0000-0000-0000-000000000001', 'service_charge', 'INV-PAY-A-0017', 'pending', 'INR', 300.00);
+
+reset role;
+set local role authenticated;
+select test_set_current_user('e0000001-0000-0000-0000-000000000001'); -- owner-a
+
+-- 13a. Sequential duplicate Pay Now: a second click before any order is
+--      attached reuses the first click's payment row; a third click after
+--      an order IS attached reuses that same row and returns the order id
+--      for reuse. At no point does a second row get created.
+do $$
+declare
+  v_row1 record;
+  v_row2 record;
+  v_row3 record;
+begin
+  select * into v_row1 from create_payment_order('14400001-0000-0000-0000-000000000015');
+  perform test_assert('first Pay Now click: no existing order yet, existing_provider_reference is null',
+    v_row1.existing_provider_reference is null);
+
+  select * into v_row2 from create_payment_order('14400001-0000-0000-0000-000000000015');
+  perform test_assert('second Pay Now click before any order is attached: reuses the exact same payment row',
+    v_row2.payment_id = v_row1.payment_id);
+  perform test_assert('second Pay Now click before any order is attached: still no order id (nothing to attach yet)',
+    v_row2.existing_provider_reference is null);
+  perform test_assert('exactly one payment row exists for this invoice after two Pay Now clicks',
+    (select count(*) from payments where invoice_id = '14400001-0000-0000-0000-000000000015') = 1);
+  perform test_assert('exactly one payment_order_created audit row exists (the second click never re-audited)',
+    (select count(*) from audit_logs where action = 'payment_order_created' and target_id = v_row1.payment_id::text) = 1);
+
+  perform attach_razorpay_order(v_row1.payment_id, 'order_REUSE_A0015');
+
+  select * into v_row3 from create_payment_order('14400001-0000-0000-0000-000000000015');
+  perform test_assert('third Pay Now click after an order is already attached: reuses the same payment row',
+    v_row3.payment_id = v_row1.payment_id);
+  perform test_assert('third Pay Now click after an order is already attached: returns that exact order id for reuse',
+    v_row3.existing_provider_reference = 'order_REUSE_A0015');
+  perform test_assert('still exactly one payment row for this invoice after three Pay Now clicks total',
+    (select count(*) from payments where invoice_id = '14400001-0000-0000-0000-000000000015') = 1);
+  raise notice 'OK: repeated Pay Now clicks reuse the single unresolved payment/order for an invoice instead of creating a new one each time';
+end;
+$$;
+
+-- 13b/13c fixtures: a payment row left without a provider_reference
+-- (order-creation interrupted before attach_razorpay_order ran) and an
+-- already-failed payment. Both must be inserted directly under
+-- service_role (bypassrls) -- exactly like every other direct payments
+-- fixture in this file -- since authenticated has no INSERT policy on
+-- payments at all (the only allowed write path is the SECURITY DEFINER
+-- RPC). A temp table carries the resulting ids across the role switch back
+-- to authenticated for the create_payment_order calls below.
+create temp table reuse_scratch_13 (label text, id uuid) on commit drop;
+grant select, insert on reuse_scratch_13 to authenticated, service_role;
+
+reset role;
+set local role service_role;
+
+with ins as (
+  insert into payments (company_id, invoice_id, method, status, amount, currency, submitted_by_user_id)
+    values ('d1000001-0000-0000-0000-000000000001', '14400001-0000-0000-0000-000000000016', 'razorpay', 'pending', 300.00, 'INR', 'e0000001-0000-0000-0000-000000000001')
+    returning id
+)
+insert into reuse_scratch_13 (label, id) select 'interrupted', id from ins;
+
+with ins as (
+  insert into payments (company_id, invoice_id, method, status, amount, currency, submitted_by_user_id, provider_reference)
+    values ('d1000001-0000-0000-0000-000000000001', '14400001-0000-0000-0000-000000000017', 'razorpay', 'failed', 300.00, 'INR', 'e0000001-0000-0000-0000-000000000001', 'order_FAILED_A0017')
+    returning id
+)
+insert into reuse_scratch_13 (label, id) select 'failed', id from ins;
+
+reset role;
+set local role authenticated;
+select test_set_current_user('e0000001-0000-0000-0000-000000000001'); -- owner-a
+
+-- 13b. A payment row left without a provider_reference (order-creation
+--      interrupted before attach_razorpay_order ran) is reused
+--      deterministically, never duplicated.
+do $$
+declare
+  v_interrupted_id uuid;
+  v_row record;
+begin
+  select id into v_interrupted_id from reuse_scratch_13 where label = 'interrupted';
+
+  select * into v_row from create_payment_order('14400001-0000-0000-0000-000000000016');
+  perform test_assert('an interrupted (order-less) pending payment is reused rather than duplicated',
+    v_row.payment_id = v_interrupted_id and v_row.existing_provider_reference is null);
+  perform test_assert('exactly one payment row exists for this invoice',
+    (select count(*) from payments where invoice_id = '14400001-0000-0000-0000-000000000016') = 1);
+  raise notice 'OK: a payment row left without a provider_reference is reused deterministically, never duplicated';
+end;
+$$;
+
+-- 13c. A failed payment is never reused: the next Pay Now click for the
+--      same invoice creates a genuinely new row/order, matching Razorpay's
+--      own one-order-per-attempt model for retrying a declined payment.
+do $$
+declare
+  v_failed_id uuid;
+  v_row record;
+begin
+  select id into v_failed_id from reuse_scratch_13 where label = 'failed';
+
+  select * into v_row from create_payment_order('14400001-0000-0000-0000-000000000017');
+  perform test_assert('a failed payment is not reused -- the next Pay Now click creates a genuinely new row',
+    v_row.payment_id <> v_failed_id and v_row.existing_provider_reference is null);
+  perform test_assert('both the old failed row and the new pending row now exist for this invoice',
+    (select count(*) from payments where invoice_id = '14400001-0000-0000-0000-000000000017') = 2);
+  raise notice 'OK: a failed payment does not block a fresh retry attempt from getting its own new order';
+end;
+$$;
+
+-- 13d. A paid invoice is still rejected outright regardless of the reuse
+--      logic -- the invoice-status guard runs before the reuse lookup.
+select test_assert_raises_like(
+  'a paid invoice is rejected by create_payment_order regardless of the reuse logic',
+  $sql$ select * from create_payment_order('14400001-0000-0000-0000-000000000002') $sql$,
+  'invoice_not_payable'
+);
+
+reset role;
+set local role service_role;
+
+-- ---------------------------------------------------------------------------
+-- 13e-13k. Trial -> active first-payment activation.
+-- ---------------------------------------------------------------------------
+
+insert into companies (id, name, slug, status, is_demo) values
+  ('d1000010-0000-0000-0000-000000000001', 'Pay Co J (trial, unexpired)', 'pay-co-j', 'active', true),
+  ('d1000011-0000-0000-0000-000000000001', 'Pay Co K (trial, expired)', 'pay-co-k', 'active', true),
+  ('d1000012-0000-0000-0000-000000000001', 'Pay Co L (trial, amount mismatch)', 'pay-co-l', 'active', true),
+  ('d1000013-0000-0000-0000-000000000001', 'Pay Co M (trial, currency mismatch)', 'pay-co-m', 'active', true),
+  ('d1000014-0000-0000-0000-000000000001', 'Pay Co N (trial, failed payment)', 'pay-co-n', 'active', true);
+
+insert into subscriptions (id, company_id, plan_version_id, state, current_period_start, current_period_end) values
+  ('13300010-0000-0000-0000-000000000001', 'd1000010-0000-0000-0000-000000000001', '11200001-0000-0000-0000-000000000001', 'trial', now() - interval '10 days', now() + interval '4 days'),
+  ('13300011-0000-0000-0000-000000000001', 'd1000011-0000-0000-0000-000000000001', '11200001-0000-0000-0000-000000000001', 'trial', now() - interval '17 days', now() - interval '3 days'),
+  ('13300012-0000-0000-0000-000000000001', 'd1000012-0000-0000-0000-000000000001', '11200001-0000-0000-0000-000000000001', 'trial', now() - interval '5 days', now() + interval '9 days'),
+  ('13300013-0000-0000-0000-000000000001', 'd1000013-0000-0000-0000-000000000001', '11200001-0000-0000-0000-000000000001', 'trial', now() - interval '5 days', now() + interval '9 days'),
+  ('13300014-0000-0000-0000-000000000001', 'd1000014-0000-0000-0000-000000000001', '11200001-0000-0000-0000-000000000001', 'trial', now() - interval '5 days', now() + interval '9 days');
+
+insert into invoices (id, company_id, kind, invoice_number, status, currency, total) values
+  ('14400010-0000-0000-0000-000000000001', 'd1000010-0000-0000-0000-000000000001', 'subscription', 'INV-PAY-J-0001', 'pending', 'INR', 1000.00),
+  ('14400011-0000-0000-0000-000000000001', 'd1000011-0000-0000-0000-000000000001', 'subscription', 'INV-PAY-K-0001', 'pending', 'INR', 1000.00),
+  ('14400012-0000-0000-0000-000000000001', 'd1000012-0000-0000-0000-000000000001', 'subscription', 'INV-PAY-L-0001', 'pending', 'INR', 1000.00),
+  ('14400013-0000-0000-0000-000000000001', 'd1000013-0000-0000-0000-000000000001', 'subscription', 'INV-PAY-M-0001', 'pending', 'INR', 1000.00),
+  ('14400014-0000-0000-0000-000000000001', 'd1000014-0000-0000-0000-000000000001', 'subscription', 'INV-PAY-N-0001', 'pending', 'INR', 1000.00);
+
+-- 13e. Canonical success case, using an UNEXPIRED trial (4 days still
+--      remaining) to prove the new paid period starts at reconciliation
+--      time, never waiting for the trial's own remaining days to elapse.
+--      Also covers duplicate-webhook idempotency for this new branch.
+do $$
+declare
+  v_payment_id uuid;
+begin
+  insert into payments (company_id, invoice_id, method, status, amount, currency, submitted_by_user_id)
+    values ('d1000010-0000-0000-0000-000000000001', '14400010-0000-0000-0000-000000000001', 'razorpay', 'pending', 1000.00, 'INR', 'e0000001-0000-0000-0000-000000000001')
+    returning id into v_payment_id;
+  update payments set provider_reference = 'order_TRIAL_J0001' where id = v_payment_id;
+
+  perform reconcile_razorpay_payment('payment.captured:pay_TRIAL_J0001', 'captured', 'order_TRIAL_J0001', 'pay_TRIAL_J0001', 100000, 'INR', '{}'::jsonb);
+
+  perform test_assert('trial + successful payment: subscription state becomes active',
+    (select state from subscriptions where company_id = 'd1000010-0000-0000-0000-000000000001') = 'active');
+  perform test_assert('trial + successful payment (unexpired trial): new period starts at reconciliation time (now()), never waiting for the remaining trial days',
+    (select current_period_start from subscriptions where company_id = 'd1000010-0000-0000-0000-000000000001') = now());
+  perform test_assert('trial + successful payment: new period end is exactly one month after the new start',
+    (select current_period_end from subscriptions where company_id = 'd1000010-0000-0000-0000-000000000001') = now() + interval '1 month');
+  perform test_assert('trial + successful payment: the invoice is marked paid',
+    (select status from invoices where id = '14400010-0000-0000-0000-000000000001') = 'paid');
+  perform test_assert('trial + successful payment: exactly one subscription_event was recorded, using the activate event (never payment_recovered)',
+    (select count(*) from subscription_events where subscription_id = '13300010-0000-0000-0000-000000000001') = 1
+    and (select event from subscription_events where subscription_id = '13300010-0000-0000-0000-000000000001') = 'activate'
+    and (select from_state from subscription_events where subscription_id = '13300010-0000-0000-0000-000000000001') = 'trial'
+    and (select to_state from subscription_events where subscription_id = '13300010-0000-0000-0000-000000000001') = 'active');
+
+  perform reconcile_razorpay_payment('payment.captured:pay_TRIAL_J0001', 'captured', 'order_TRIAL_J0001', 'pay_TRIAL_J0001', 100000, 'INR', '{}'::jsonb);
+  perform test_assert('duplicate captured webhook for the same trial activation: still exactly one subscription_event',
+    (select count(*) from subscription_events where subscription_id = '13300010-0000-0000-0000-000000000001') = 1);
+  perform test_assert('duplicate captured webhook for the same trial activation: the period is not extended a second time',
+    (select current_period_end from subscriptions where company_id = 'd1000010-0000-0000-0000-000000000001') = now() + interval '1 month');
+  raise notice 'OK: a trial subscription''s first successful payment activates it exactly once, with the activate event and a period starting from now()';
+end;
+$$;
+
+-- 13f. Trial + expired period: same success path, proving the new period
+--      starts at now() and NOT at the trial's own (already past)
+--      current_period_end -- an expired trial must never grant a paid
+--      period that starts in the past.
+do $$
+declare
+  v_payment_id uuid;
+begin
+  insert into payments (company_id, invoice_id, method, status, amount, currency, submitted_by_user_id)
+    values ('d1000011-0000-0000-0000-000000000001', '14400011-0000-0000-0000-000000000001', 'razorpay', 'pending', 1000.00, 'INR', 'e0000001-0000-0000-0000-000000000001')
+    returning id into v_payment_id;
+  update payments set provider_reference = 'order_TRIAL_K0001' where id = v_payment_id;
+
+  perform reconcile_razorpay_payment('payment.captured:pay_TRIAL_K0001', 'captured', 'order_TRIAL_K0001', 'pay_TRIAL_K0001', 100000, 'INR', '{}'::jsonb);
+
+  perform test_assert('trial + successful payment (expired trial): subscription state becomes active',
+    (select state from subscriptions where company_id = 'd1000011-0000-0000-0000-000000000001') = 'active');
+  perform test_assert('trial + successful payment (expired trial): new period starts at now(), never at the stale expired trial end',
+    (select current_period_start from subscriptions where company_id = 'd1000011-0000-0000-0000-000000000001') = now());
+  raise notice 'OK: an already-expired trial''s first payment still gets a fresh period starting from now(), never in the past';
+end;
+$$;
+
+-- 13g. Trial + amount mismatch: never activated, invoice never paid,
+--      exactly like the existing (non-trial) amount-mismatch protection.
+do $$
+declare
+  v_payment_id uuid;
+begin
+  insert into payments (company_id, invoice_id, method, status, amount, currency, submitted_by_user_id)
+    values ('d1000012-0000-0000-0000-000000000001', '14400012-0000-0000-0000-000000000001', 'razorpay', 'pending', 1000.00, 'INR', 'e0000001-0000-0000-0000-000000000001')
+    returning id into v_payment_id;
+  update payments set provider_reference = 'order_TRIAL_L0001' where id = v_payment_id;
+
+  perform reconcile_razorpay_payment('payment.captured:pay_TRIAL_L0001', 'captured', 'order_TRIAL_L0001', 'pay_TRIAL_L0001', 50000, 'INR', '{}'::jsonb);
+
+  perform test_assert('trial + amount mismatch: subscription remains trial',
+    (select state from subscriptions where company_id = 'd1000012-0000-0000-0000-000000000001') = 'trial');
+  perform test_assert('trial + amount mismatch: invoice remains unpaid',
+    (select status from invoices where id = '14400012-0000-0000-0000-000000000001') = 'pending');
+  perform test_assert('trial + amount mismatch: no subscription_event was recorded',
+    not exists (select 1 from subscription_events where subscription_id = '13300012-0000-0000-0000-000000000001'));
+  perform test_assert('trial + amount mismatch: a payment_amount_mismatch audit row was recorded',
+    exists (select 1 from audit_logs where action = 'payment_amount_mismatch' and target_id = v_payment_id::text));
+  raise notice 'OK: an amount mismatch never activates a trial subscription, exactly like the existing non-trial protection';
+end;
+$$;
+
+-- 13h. Trial + currency mismatch: never activated.
+do $$
+declare
+  v_payment_id uuid;
+begin
+  insert into payments (company_id, invoice_id, method, status, amount, currency, submitted_by_user_id)
+    values ('d1000013-0000-0000-0000-000000000001', '14400013-0000-0000-0000-000000000001', 'razorpay', 'pending', 1000.00, 'INR', 'e0000001-0000-0000-0000-000000000001')
+    returning id into v_payment_id;
+  update payments set provider_reference = 'order_TRIAL_M0001' where id = v_payment_id;
+
+  perform reconcile_razorpay_payment('payment.captured:pay_TRIAL_M0001', 'captured', 'order_TRIAL_M0001', 'pay_TRIAL_M0001', 100000, 'USD', '{}'::jsonb);
+
+  perform test_assert('trial + currency mismatch: subscription remains trial',
+    (select state from subscriptions where company_id = 'd1000013-0000-0000-0000-000000000001') = 'trial');
+  perform test_assert('trial + currency mismatch: invoice remains unpaid',
+    (select status from invoices where id = '14400013-0000-0000-0000-000000000001') = 'pending');
+  raise notice 'OK: a currency mismatch never activates a trial subscription';
+end;
+$$;
+
+-- 13i. Trial + failed payment: never activated.
+do $$
+declare
+  v_payment_id uuid;
+begin
+  insert into payments (company_id, invoice_id, method, status, amount, currency, submitted_by_user_id)
+    values ('d1000014-0000-0000-0000-000000000001', '14400014-0000-0000-0000-000000000001', 'razorpay', 'pending', 1000.00, 'INR', 'e0000001-0000-0000-0000-000000000001')
+    returning id into v_payment_id;
+  update payments set provider_reference = 'order_TRIAL_N0001' where id = v_payment_id;
+
+  perform reconcile_razorpay_payment('payment.failed:pay_TRIAL_N0001', 'failed', 'order_TRIAL_N0001', 'pay_TRIAL_N0001', 100000, 'INR', '{}'::jsonb);
+
+  perform test_assert('trial + failed payment: subscription remains trial',
+    (select state from subscriptions where company_id = 'd1000014-0000-0000-0000-000000000001') = 'trial');
+  perform test_assert('trial + failed payment: the payment row itself is marked failed',
+    (select status from payments where id = v_payment_id) = 'failed');
+  perform test_assert('trial + failed payment: invoice remains unpaid',
+    (select status from invoices where id = '14400014-0000-0000-0000-000000000001') = 'pending');
+  raise notice 'OK: a failed payment never activates a trial subscription';
+end;
+$$;
+
+-- 13j. Cross-tenant isolation of trial activation: Company J's and Company
+--      K's activations (13e, 13f) never leaked into each other, and neither
+--      touched the mismatch/failed companies (13g-13i), which correctly
+--      remain in trial.
+do $$
+begin
+  perform test_assert('Company J and Company K each activated independently, with no cross-tenant leakage',
+    (select state from subscriptions where company_id = 'd1000010-0000-0000-0000-000000000001') = 'active'
+    and (select state from subscriptions where company_id = 'd1000011-0000-0000-0000-000000000001') = 'active'
+    and (select count(*) from subscription_events where subscription_id = '13300010-0000-0000-0000-000000000001') = 1
+    and (select count(*) from subscription_events where subscription_id = '13300011-0000-0000-0000-000000000001') = 1);
+  perform test_assert('Companies L, M, N (mismatch/failed) remain in trial, untouched by J/K''s activation',
+    (select state from subscriptions where company_id = 'd1000012-0000-0000-0000-000000000001') = 'trial'
+    and (select state from subscriptions where company_id = 'd1000013-0000-0000-0000-000000000001') = 'trial'
+    and (select state from subscriptions where company_id = 'd1000014-0000-0000-0000-000000000001') = 'trial');
+  raise notice 'OK: trial activation is fully tenant-isolated, exactly like every other reconciliation path';
+end;
+$$;
+
 reset role;
 
 rollback;
