@@ -31,15 +31,49 @@ function resolveActorLabel(
   }).primary;
 }
 
-export default async function AdminAuditPage() {
+const RESULT_LIMIT = 200;
+
+export default async function AdminAuditPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ company?: string; action?: string; from?: string; to?: string }>;
+}) {
+  const { company, action, from, to } = await searchParams;
   const supabase = await createServerSupabaseClient();
-  const { data, error } = await supabase
+
+  let query = supabase
     .from("audit_logs")
     .select(
       "id, action, actor_user_id, actor_type, target_type, target_id, company_id, created_at, companies (name)",
     )
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(RESULT_LIMIT);
+
+  if (action) query = query.ilike("action", `%${action}%`);
+  // Postgres date (no time component) is treated as that day's start in UTC;
+  // "to" is made exclusive of the following day so a single day range (e.g.
+  // from=to=2026-08-26) includes every event recorded that day.
+  if (from) query = query.gte("created_at", from);
+  if (to) {
+    const toExclusive = new Date(`${to}T00:00:00.000Z`);
+    toExclusive.setUTCDate(toExclusive.getUTCDate() + 1);
+    query = query.lt("created_at", toExclusive.toISOString());
+  }
+
+  if (company) {
+    const { data: matchingCompanies, error: companyError } = await supabase
+      .from("companies")
+      .select("id")
+      .ilike("name", `%${company}%`);
+    if (companyError) throw companyError;
+    const companyIds = (matchingCompanies ?? []).map((c) => c.id);
+    query = query.in(
+      "company_id",
+      companyIds.length > 0 ? companyIds : ["00000000-0000-0000-0000-000000000000"],
+    );
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
   const logs = data ?? [];
 
@@ -61,12 +95,34 @@ export default async function AdminAuditPage() {
   return (
     <div>
       <h1 className="dvx-page-title">Audit Logs</h1>
-      <p className="dvx-muted">The most recent 100 platform-wide audit events.</p>
+      <p className="dvx-muted">
+        The most recent {RESULT_LIMIT} platform-wide audit events matching this filter.
+      </p>
 
       <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
+        <form style={{ display: "flex", gap: "0.75rem", marginBottom: "1rem", flexWrap: "wrap" }}>
+          <input
+            className="dvx-input"
+            name="company"
+            placeholder="Search by company name"
+            defaultValue={company ?? ""}
+          />
+          <input
+            className="dvx-input"
+            name="action"
+            placeholder="Search by action (e.g. suspend)"
+            defaultValue={action ?? ""}
+          />
+          <input className="dvx-input" type="date" name="from" defaultValue={from ?? ""} />
+          <input className="dvx-input" type="date" name="to" defaultValue={to ?? ""} />
+          <button className="dvx-button dvx-button--secondary" type="submit">
+            Filter
+          </button>
+        </form>
+
         {logs.length === 0 ? (
           <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
-            No audit events yet.
+            No audit events match this filter.
           </p>
         ) : (
           <div className="dvx-team-member-list">

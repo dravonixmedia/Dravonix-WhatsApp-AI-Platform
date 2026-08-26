@@ -12,6 +12,10 @@ import { usePathname } from "next/navigation";
  * a route with no real page behind it would be exactly the "fake
  * functionality" this project's Super Admin instructions repeatedly warn
  * against.
+ *
+ * Phase 7A adds only the three new read-only routes it built (Billing,
+ * Invoices, Payments) in-place, without the broader sidebar
+ * grouping/reordering Phase 8 is reserved for.
  */
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/admin" },
@@ -21,6 +25,9 @@ const NAV_ITEMS = [
   { label: "Subscriptions", href: "/admin/subscriptions" },
   { label: "Entitlements", href: "/admin/entitlements" },
   { label: "Usage", href: "/admin/usage" },
+  { label: "Billing", href: "/admin/billing" },
+  { label: "Invoices", href: "/admin/invoices" },
+  { label: "Payments", href: "/admin/payments" },
   { label: "Audit Logs", href: "/admin/audit" },
   { label: "Support Access", href: "/admin/support-access" },
   { label: "Support & Requests", href: "/admin/support-requests" },

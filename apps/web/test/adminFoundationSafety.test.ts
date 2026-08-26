@@ -94,9 +94,13 @@ describe("Super Admin foundation: /admin is server-side gated and independent of
     );
     const hrefMatches = navItemsSection.match(/href: "\/admin[^"]*"/g) ?? [];
     // Dashboard, Companies, Users & Roles, Plans, Subscriptions,
-    // Entitlements, Usage, Audit Logs, Support Access, Support & Requests
-    // (Phase 5) -- every route this pass actually built a real page for.
-    expect(hrefMatches.length).toBe(10);
+    // Entitlements, Usage, Billing, Invoices, Payments (Phase 7A), Audit
+    // Logs, Support Access, Support & Requests (Phase 5) -- every route
+    // this pass actually built a real page for.
+    expect(hrefMatches.length).toBe(13);
+    expect(navItemsSection).toContain('href: "/admin/billing"');
+    expect(navItemsSection).toContain('href: "/admin/invoices"');
+    expect(navItemsSection).toContain('href: "/admin/payments"');
     expect(navItemsSection).toContain('href: "/admin"');
     expect(navItemsSection).toContain('href: "/admin/companies"');
 
