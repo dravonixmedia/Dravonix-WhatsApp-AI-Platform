@@ -13,6 +13,7 @@ import type { CompanyRole } from "@dravonix/database";
 export type PermissionKey =
   | "ai_settings.view"
   | "audit.view"
+  | "billing.pay"
   | "billing.view"
   | "contacts.phone.view_full"
   | "conversations.assign"
@@ -61,6 +62,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
   company_owner: new Set([
     "ai_settings.view",
     "audit.view",
+    "billing.pay",
     "billing.view",
     "contacts.phone.view_full",
     "conversations.assign",
@@ -83,6 +85,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
   company_admin: new Set([
     "ai_settings.view",
     "audit.view",
+    "billing.pay",
     "billing.view",
     "contacts.phone.view_full",
     "conversations.assign",
@@ -144,7 +147,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "support_requests.view",
     "team.view",
   ]),
-  company_accounts: new Set(["billing.view", "support_requests.view", "usage.view"]),
+  company_accounts: new Set(["billing.pay", "billing.view", "support_requests.view", "usage.view"]),
   agent: new Set([
     "conversations.reply",
     "conversations.view",
@@ -197,6 +200,8 @@ export interface DashboardCapabilities {
   canViewAiSettings: boolean;
   canViewKnowledge: boolean;
   canViewBilling: boolean;
+  /** Phase 6B: billing.pay -- initiate a Razorpay payment for the company's own invoice. Never implies any operational (conversations/leads/etc.) permission. */
+  canPayBilling: boolean;
   canViewLeads: boolean;
   canManageLeads: boolean;
   canViewUsage: boolean;
@@ -243,6 +248,7 @@ export function getDashboardCapabilities(role: CompanyRole | null): DashboardCap
     canViewAiSettings: hasPermission(role, "ai_settings.view"),
     canViewKnowledge: hasPermission(role, "knowledge.view"),
     canViewBilling: hasPermission(role, "billing.view"),
+    canPayBilling: hasPermission(role, "billing.pay"),
     canViewLeads: hasPermission(role, "leads.view"),
     canManageLeads: hasPermission(role, "leads.manage"),
     canViewUsage: hasPermission(role, "usage.view"),

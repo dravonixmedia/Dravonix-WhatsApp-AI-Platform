@@ -3,6 +3,7 @@ import { createServiceRoleClient } from "@dravonix/database";
 import { createLogger } from "@dravonix/observability";
 import { createApp } from "./app.js";
 import type { MessageJobPayload, VoiceJobPayload } from "./queuePayloads.js";
+import { SupabaseRazorpayPaymentRepository } from "./repositories/razorpayPaymentRepository.js";
 import { SupabaseWhatsAppIngestRepository } from "./repositories/supabaseWhatsAppIngestRepository.js";
 
 /** Minimal Cloudflare Queue binding shape this Worker depends on. */
@@ -23,6 +24,10 @@ export interface WorkerEnv {
   // missing binding fails with a clear message instead of a runtime crash.
   MESSAGE_QUEUE?: QueueLike<MessageJobPayload>;
   VOICE_QUEUE?: QueueLike<VoiceJobPayload>;
+  // Phase 6B: optional, same reasoning as MESSAGE_QUEUE/VOICE_QUEUE above --
+  // absence degrades to "the /webhooks/razorpay route is not mounted",
+  // never a Worker-wide failure.
+  RAZORPAY_WEBHOOK_SECRET?: string;
 }
 
 /**
@@ -60,6 +65,10 @@ export default {
     });
     const repo = new SupabaseWhatsAppIngestRepository(supabase);
 
+    if (!env.RAZORPAY_WEBHOOK_SECRET) {
+      logger.warn("RAZORPAY_WEBHOOK_SECRET not configured -- /webhooks/razorpay is not mounted");
+    }
+
     const app = createApp({
       health: {
         checkDatabase: async () => {
@@ -75,6 +84,13 @@ export default {
         voiceQueue: env.VOICE_QUEUE,
         logger,
       },
+      razorpayWebhook: env.RAZORPAY_WEBHOOK_SECRET
+        ? {
+            webhookSecret: env.RAZORPAY_WEBHOOK_SECRET,
+            repo: new SupabaseRazorpayPaymentRepository(supabase),
+            logger,
+          }
+        : null,
     });
 
     return app.fetch(request);

@@ -16,3 +16,31 @@ export async function verifyRazorpayWebhookSignature(
   const expected = await hmacSha256Hex(webhookSecret, rawBody);
   return timingSafeEqualHex(expected, signatureHeader.toLowerCase());
 }
+
+/**
+ * Verifies a Razorpay Checkout success callback's `razorpay_signature`
+ * (HMAC-SHA256 of `"{order_id}|{payment_id}"`, keyed by RAZORPAY_KEY_SECRET
+ * -- a different secret and payload shape than the webhook signature above,
+ * but the same HMAC/timing-safe-compare primitives from @dravonix/core, so
+ * this reuses them rather than introducing a second crypto implementation).
+ *
+ * A true result here is only proof the browser is relaying a genuinely
+ * Razorpay-signed completion -- it is NOT proof of payment and must never
+ * by itself flip any payment/invoice/subscription state. That only ever
+ * happens in reconcile_razorpay_payment (service_role, webhook-driven);
+ * this function exists purely to give the client fast, honest UI feedback
+ * ("Razorpay confirms this looks real, waiting for confirmation") while the
+ * webhook -- which Razorpay retries and which this app processes
+ * idempotently -- is the sole source of truth for state changes.
+ */
+export async function verifyRazorpayPaymentSignature(
+  razorpayOrderId: string,
+  razorpayPaymentId: string,
+  signature: string | null | undefined,
+  keySecret: string,
+): Promise<boolean> {
+  if (!signature) return false;
+  const payload = `${razorpayOrderId}|${razorpayPaymentId}`;
+  const expected = await hmacSha256Hex(keySecret, payload);
+  return timingSafeEqualHex(expected, signature.toLowerCase());
+}

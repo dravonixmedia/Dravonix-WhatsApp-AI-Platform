@@ -46,10 +46,13 @@ export const dynamic = "force-dynamic";
  * real, client-ready dashboard destinations added during the client
  * onboarding foundation pass -- see app/dashboard/ai-settings/page.tsx and
  * app/dashboard/knowledge/page.tsx. Setup Checklist is unconditional (every
- * dashboard user can see their own onboarding progress). Billing is still
- * omitted: it has no client-ready subscription system yet (its route
- * redirects to Settings, which shows the real plan/subscription state
- * instead -- see app/dashboard/billing/page.tsx).
+ * dashboard user can see their own onboarding progress). Billing
+ * (/dashboard/billing, Phase 6) is gated on canViewBilling -- the same
+ * permission (billing.view) already held by company_owner/company_admin/
+ * company_accounts. It is the one dedicated finance destination now;
+ * Company Settings' own read-only "Subscription status" summary is
+ * intentionally left in place alongside it (not removed, to avoid
+ * regressing existing behavior) rather than duplicated as new UI here.
  *
  * The former single "Settings" entry is split into two nav cards pointing at
  * two genuinely distinct routes -- Team Settings (/dashboard/team, view +
@@ -75,8 +78,9 @@ export const dynamic = "force-dynamic";
  * whether ConversationComposerWithAssistant renders the "Ask DRAIVA" entry
  * point at all (see conversations/[conversationId]/page.tsx and
  * handover/[conversationId]/page.tsx), and that /dashboard/draiva's own
- * page.tsx re-checks server-side. Human Handover stays unconditional,
- * matching its pre-existing (RLS-backed) visibility.
+ * page.tsx re-checks server-side. Human Handover is gated on
+ * canViewConversations (Phase 6) alongside Live Conversations -- both
+ * pages' own application-level checks now match this.
  *
  * Support & Requests (Phase 5, /dashboard/support) is gated on the new
  * canViewSupportRequests (support_requests.view), granted to all six active
@@ -88,28 +92,40 @@ export function buildNavItems(
 ): SidebarNavEntry[] {
   const entries: SidebarNavEntry[] = [
     { kind: "link", href: "/dashboard", label: "Overview", icon: <OverviewIcon /> },
-    {
+  ];
+
+  // Phase 6: previously unconditional for every role, including
+  // company_accounts (finance-only) -- these three link to pages that
+  // already deny company_accounts at the RLS layer (conversations.view/
+  // leads.view), so this was inaccurate/confusing sidebar visibility (a
+  // link to a page that will show a permission-denied card or an
+  // all-empty list), not a data leak. Gated the same way every other
+  // operational nav entry below already is.
+  if (capabilities.canViewConversations) {
+    entries.push({
       kind: "link",
       href: "/dashboard/conversations",
       label: "Live Conversations",
       icon: <ConversationsIcon />,
-    },
-    {
+    });
+    entries.push({
       kind: "link",
       href: "/dashboard/handover",
       label: "Human Handover",
       icon: <HandoverIcon />,
       badgeCount: badgeCounts.handover,
-    },
-    { kind: "link", href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> },
-    {
-      kind: "link",
-      href: "/dashboard/notifications",
-      label: "Notifications",
-      icon: <BellIcon size={18} />,
-      badgeCount: badgeCounts.notifications,
-    },
-  ];
+    });
+  }
+  if (capabilities.canViewLeads) {
+    entries.push({ kind: "link", href: "/dashboard/leads", label: "Leads", icon: <LeadsIcon /> });
+  }
+  entries.push({
+    kind: "link",
+    href: "/dashboard/notifications",
+    label: "Notifications",
+    icon: <BellIcon size={18} />,
+    badgeCount: badgeCounts.notifications,
+  });
 
   if (capabilities.canReplyToConversations) {
     entries.push({ kind: "draiva", href: "/dashboard/draiva" });
@@ -151,6 +167,14 @@ export function buildNavItems(
       kind: "link",
       href: "/dashboard/team",
       label: "Team Settings",
+      icon: <SettingsIcon />,
+    });
+  }
+  if (capabilities.canViewBilling) {
+    entries.push({
+      kind: "link",
+      href: "/dashboard/billing",
+      label: "Billing",
       icon: <SettingsIcon />,
     });
   }

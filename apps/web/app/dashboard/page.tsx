@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getDashboardCapabilities } from "../../lib/permissions.js";
 import { listConversations } from "../../lib/repositories/conversationsRepository.js";
 import { listLeads } from "../../lib/repositories/leadsRepository.js";
 import { loadNotificationSummary } from "../../lib/repositories/notificationsRepository.js";
@@ -106,6 +108,20 @@ async function loadOverviewCounts(companyId: string): Promise<OverviewCounts> {
 export default async function DashboardOverviewPage() {
   const session = await getDashboardSession();
   if (!session) return null; // middleware.ts already guarantees this can't happen for /dashboard/*
+
+  // Phase 6: a role with no operational visibility at all (currently only
+  // company_accounts -- finance-only) must never land on a page built around
+  // conversation/lead counts and a "Recent conversations"/"Recent leads"
+  // feed of customer names and masked phone numbers. RLS already prevents
+  // the underlying rows from leaking to such a role (every query below is
+  // conversations.view/leads.view-gated), but an all-zero, empty-feed
+  // Overview is still the wrong landing experience, not a finance one.
+  // Capability-based, not a role-name check, so any future finance-only
+  // role gets the same safe redirect automatically.
+  const capabilities = getDashboardCapabilities(session.activeRole);
+  if (!capabilities.canViewConversations && !capabilities.canViewLeads) {
+    redirect("/dashboard/billing");
+  }
 
   const supabase = await createServerSupabaseClient();
   const [counts, recentConversations, recentLeads] = await Promise.all([

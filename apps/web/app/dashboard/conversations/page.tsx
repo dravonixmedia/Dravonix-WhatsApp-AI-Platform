@@ -1,3 +1,4 @@
+import { getDashboardCapabilities } from "../../../lib/permissions.js";
 import { RealtimeRefreshBoundary } from "../../../lib/realtime/RealtimeRefreshBoundary.js";
 import { CONVERSATIONS_LIST_WATCHES } from "../../../lib/realtime/watchConfigs.js";
 import { getDashboardSession } from "../../../lib/session.js";
@@ -12,6 +13,18 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/** Phase 6: this page previously relied on RLS alone (conversations_select_member) to filter rows -- correct, but no application-level denial existed, unlike every other operational page (Leads, DRAIVA, AI Settings, Knowledge, Team). Company Accounts (finance-only) never held conversations.view; this makes that explicit here too, matching the existing pattern. */
+function PermissionDenied() {
+  return (
+    <div className="dvx-card" style={{ maxWidth: 480 }}>
+      <h1 style={{ fontSize: "1.1rem", margin: "0 0 0.5rem" }}>Live Conversations</h1>
+      <p className="dvx-muted" style={{ margin: 0 }}>
+        Your role does not have permission to view conversations.
+      </p>
+    </div>
+  );
+}
+
 export default async function ConversationsPage({
   searchParams,
 }: {
@@ -20,6 +33,9 @@ export default async function ConversationsPage({
   const params = await searchParams;
   const session = await getDashboardSession();
   if (!session) return null;
+
+  const capabilities = getDashboardCapabilities(session.activeRole);
+  if (!capabilities.canViewConversations) return <PermissionDenied />;
 
   const supabase = await createServerSupabaseClient();
   const data = await loadConversationsListData(

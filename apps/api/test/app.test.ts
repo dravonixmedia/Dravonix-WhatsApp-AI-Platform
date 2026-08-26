@@ -3,8 +3,22 @@ import { createLogger } from "@dravonix/observability";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { InMemoryWhatsAppIngestRepository } from "../src/repositories/inMemoryWhatsAppIngestRepository.js";
+import type {
+  ReconcileRazorpayPaymentInput,
+  RazorpayPaymentRepository,
+} from "../src/repositories/razorpayPaymentRepository.js";
 import { FakeQueueSender } from "./support/fakeQueue.js";
 import type { MessageJobPayload, VoiceJobPayload } from "../src/queuePayloads.js";
+
+const RAZORPAY_WEBHOOK_SECRET = "whsec_test_secret";
+
+class FakeRazorpayPaymentRepository implements RazorpayPaymentRepository {
+  calls: ReconcileRazorpayPaymentInput[] = [];
+
+  async reconcilePayment(input: ReconcileRazorpayPaymentInput): Promise<void> {
+    this.calls.push(input);
+  }
+}
 
 const APP_SECRET = "test_app_secret";
 const VERIFY_TOKEN = "test_verify_token";
@@ -25,6 +39,7 @@ function makeApp() {
       voiceQueue,
       logger: createLogger({ environment: "test" }, { write: () => {} }),
     },
+    razorpayWebhook: null,
   });
 
   return { app, repo, messageQueue };
@@ -144,5 +159,93 @@ describe("unknown routes", () => {
     const { app } = makeApp();
     const response = await app.request("/webhooks/meta");
     expect(response.status).toBe(404);
+  });
+});
+
+describe("POST /webhooks/razorpay", () => {
+  it("returns 404 when RAZORPAY_WEBHOOK_SECRET isn't configured (route not mounted)", async () => {
+    const { app } = makeApp();
+    const response = await app.request("/webhooks/razorpay", {
+      method: "POST",
+      headers: { "x-razorpay-signature": "deadbeef".repeat(8) },
+      body: JSON.stringify({ event: "payment.captured", payload: {} }),
+    });
+    expect(response.status).toBe(404);
+  });
+
+  it("is mounted and reachable end to end when RAZORPAY_WEBHOOK_SECRET is configured", async () => {
+    const repo = new FakeRazorpayPaymentRepository();
+    const app = createApp({
+      health: { checkDatabase: async () => true },
+      whatsappWebhook: {
+        appSecret: APP_SECRET,
+        verifyToken: VERIFY_TOKEN,
+        repo: new InMemoryWhatsAppIngestRepository(),
+        messageQueue: new FakeQueueSender<MessageJobPayload>(),
+        voiceQueue: new FakeQueueSender<VoiceJobPayload>(),
+        logger: createLogger({ environment: "test" }, { write: () => {} }),
+      },
+      razorpayWebhook: {
+        webhookSecret: RAZORPAY_WEBHOOK_SECRET,
+        repo,
+        logger: createLogger({ environment: "test" }, { write: () => {} }),
+      },
+    });
+
+    const body = JSON.stringify({
+      event: "payment.captured",
+      payload: {
+        payment: {
+          entity: {
+            id: "pay_TEST0001",
+            order_id: "order_TESTORDER0001",
+            amount: 100000,
+            currency: "INR",
+          },
+        },
+      },
+    });
+    const signature = await hmacSha256Hex(RAZORPAY_WEBHOOK_SECRET, body);
+
+    const response = await app.request("/webhooks/razorpay", {
+      method: "POST",
+      headers: { "x-razorpay-signature": signature, "content-type": "application/json" },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(repo.calls).toHaveLength(1);
+    expect(repo.calls[0]?.razorpayOrderId).toBe("order_TESTORDER0001");
+    expect(repo.calls[0]?.amountInSmallestUnit).toBe(100000);
+    expect(repo.calls[0]?.currency).toBe("INR");
+  });
+
+  it("rejects an invalid signature end to end through the Hono app", async () => {
+    const repo = new FakeRazorpayPaymentRepository();
+    const app = createApp({
+      health: { checkDatabase: async () => true },
+      whatsappWebhook: {
+        appSecret: APP_SECRET,
+        verifyToken: VERIFY_TOKEN,
+        repo: new InMemoryWhatsAppIngestRepository(),
+        messageQueue: new FakeQueueSender<MessageJobPayload>(),
+        voiceQueue: new FakeQueueSender<VoiceJobPayload>(),
+        logger: createLogger({ environment: "test" }, { write: () => {} }),
+      },
+      razorpayWebhook: {
+        webhookSecret: RAZORPAY_WEBHOOK_SECRET,
+        repo,
+        logger: createLogger({ environment: "test" }, { write: () => {} }),
+      },
+    });
+
+    const response = await app.request("/webhooks/razorpay", {
+      method: "POST",
+      headers: { "x-razorpay-signature": "deadbeef".repeat(8) },
+      body: JSON.stringify({ event: "payment.captured", payload: {} }),
+    });
+
+    expect(response.status).toBe(401);
+    expect(repo.calls).toHaveLength(0);
   });
 });

@@ -37,6 +37,18 @@ function ActionButton({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Phase 6: same application-level denial added to the list page -- this detail route previously relied on RLS alone. */
+function PermissionDenied() {
+  return (
+    <div className="dvx-card" style={{ maxWidth: 480 }}>
+      <h1 style={{ fontSize: "1.1rem", margin: "0 0 0.5rem" }}>Live Conversations</h1>
+      <p className="dvx-muted" style={{ margin: 0 }}>
+        Your role does not have permission to view conversations.
+      </p>
+    </div>
+  );
+}
+
 export default async function ConversationDetailPage({
   params,
   searchParams,
@@ -50,6 +62,8 @@ export default async function ConversationDetailPage({
   if (!session) return null;
 
   const capabilities = getDashboardCapabilities(session.activeRole);
+  if (!capabilities.canViewConversations) return <PermissionDenied />;
+
   const supabase = await createServerSupabaseClient();
   const repo = new SupabaseHandoverRepository(supabase);
 
