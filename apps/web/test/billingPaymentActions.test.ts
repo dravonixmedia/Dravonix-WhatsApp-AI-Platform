@@ -128,6 +128,37 @@ describe("createPaymentOrderAction", () => {
     expect(JSON.stringify(result)).not.toContain("rzp_test_key_secret");
   });
 
+  it("Migration 29 reuse: when create_payment_order returns an existing_provider_reference, reuses it without ever calling the Razorpay Orders API or attach_razorpay_order", async () => {
+    rpc.mockReturnValueOnce(
+      rpcChain({
+        data: {
+          payment_id: "payment-1",
+          amount: 1000,
+          currency: "INR",
+          invoice_number: "INV-2026-001",
+          existing_provider_reference: "order_ALREADYATTACHED",
+        },
+        error: null,
+      }),
+    );
+
+    const result = await createPaymentOrderAction("invoice-1");
+
+    expect(createRazorpayOrder).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).not.toHaveBeenCalledWith("attach_razorpay_order", expect.anything());
+    expect(result).toEqual({
+      success: true,
+      checkout: {
+        keyId: "rzp_test_key_id",
+        orderId: "order_ALREADYATTACHED",
+        amount: 100000,
+        currency: "INR",
+        invoiceNumber: "INV-2026-001",
+      },
+    });
+  });
+
   it("returns a friendly error and never attaches an order id when Razorpay order creation fails", async () => {
     rpc.mockReturnValueOnce(
       rpcChain({

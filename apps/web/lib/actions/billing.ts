@@ -77,7 +77,29 @@ export async function createPaymentOrderAction(
     amount: number;
     currency: string;
     invoice_number: string;
+    existing_provider_reference: string | null;
   };
+
+  // Migration 29 (production-safety closeout): create_payment_order now
+  // returns an already-attached order id when this invoice already has an
+  // unresolved (pending) payment -- reuse it verbatim instead of ever
+  // calling the Razorpay Orders API or attach_razorpay_order again. This is
+  // what makes repeated Pay Now clicks (or two tabs, or a retried request)
+  // resolve to the same Razorpay order rather than creating a new one each
+  // time; the server/database boundary (create_payment_order's invoice
+  // row lock) is what's actually authoritative here, not this check.
+  if (row.existing_provider_reference) {
+    return {
+      success: true,
+      checkout: {
+        keyId: env.RAZORPAY_KEY_ID!,
+        orderId: row.existing_provider_reference,
+        amount: toSmallestCurrencyUnit(row.amount),
+        currency: row.currency,
+        invoiceNumber: row.invoice_number,
+      },
+    };
+  }
 
   let order;
   try {
