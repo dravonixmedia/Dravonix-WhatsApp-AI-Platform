@@ -1,4 +1,10 @@
 import Link from "next/link";
+import {
+  daysBetween,
+  invoiceDisplayStatus,
+  localDateString,
+  toLocalDateString,
+} from "../../../lib/billingLifecycleDisplay.js";
 import { formatDateTime } from "../../../lib/formatDateTime.js";
 import {
   buildMemberIdentityByUserId,
@@ -29,6 +35,7 @@ const INVOICE_STATUS_BADGE: Record<string, string> = {
   paid: "dvx-badge--success",
   void: "dvx-badge--neutral",
   refunded: "dvx-badge--neutral",
+  overdue: "dvx-badge--danger",
 };
 
 const PAYMENT_STATUS_BADGE: Record<string, string> = {
@@ -103,6 +110,21 @@ export default async function BillingPage() {
   const messagesLimit = entitlementSnapshot.features.monthly_messages?.numericLimit ?? null;
   const messagesUsed = entitlementSnapshot.usage.monthly_messages ?? 0;
 
+  // Phase 6C derived billing-lifecycle display data -- all computed from
+  // data already fetched above, no additional query needed. localToday is
+  // the company's own local calendar date (never server/UTC "today").
+  const localToday = localDateString(companyTimezone);
+  const daysUntilRenewal =
+    subscription?.currentPeriodEnd != null
+      ? daysBetween(
+          localToday,
+          toLocalDateString(new Date(subscription.currentPeriodEnd), companyTimezone),
+        )
+      : null;
+  const lastPaidInvoice = invoices
+    .filter((invoice) => invoice.status === "paid" && invoice.paidDate)
+    .sort((a, b) => (b.paidDate! > a.paidDate! ? 1 : -1))[0];
+
   return (
     <div>
       <h1 className="dvx-page-title">Billing</h1>
@@ -161,6 +183,46 @@ export default async function BillingPage() {
                     : "Not started"}
                 </span>
               </div>
+              {subscription.currentPeriodEnd ? (
+                <div
+                  style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}
+                >
+                  <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+                    Next renewal
+                  </span>
+                  <span style={{ fontSize: "0.85rem" }}>
+                    {formatDateTime(subscription.currentPeriodEnd, companyTimezone)}
+                    {daysUntilRenewal !== null
+                      ? ` (${daysUntilRenewal >= 0 ? `${daysUntilRenewal} day${daysUntilRenewal === 1 ? "" : "s"} left` : "past due"})`
+                      : ""}
+                  </span>
+                </div>
+              ) : null}
+              {subscription.state === "grace_period" && subscription.gracePeriodEnd ? (
+                <div
+                  style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}
+                >
+                  <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+                    Grace period ends
+                  </span>
+                  <span style={{ fontSize: "0.85rem", color: "#D97706" }}>
+                    {formatDateTime(subscription.gracePeriodEnd, companyTimezone)}
+                  </span>
+                </div>
+              ) : null}
+              {lastPaidInvoice ? (
+                <div
+                  style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0" }}
+                >
+                  <span className="dvx-muted" style={{ fontSize: "0.8rem" }}>
+                    Last payment
+                  </span>
+                  <span style={{ fontSize: "0.85rem" }}>
+                    {money(lastPaidInvoice.total, lastPaidInvoice.currency)} on{" "}
+                    {formatDateTime(lastPaidInvoice.paidDate, companyTimezone)}
+                  </span>
+                </div>
+              ) : null}
             </>
           ) : (
             <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
@@ -195,30 +257,39 @@ export default async function BillingPage() {
           </p>
         ) : (
           <div className="dvx-team-member-list">
-            {invoices.map((invoice) => (
-              <div key={invoice.id} className="dvx-team-member-row">
-                <span className="dvx-team-member-name">
-                  {invoice.invoiceNumber}
-                  <span className="dvx-muted" style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}>
-                    {formatDateTime(invoice.createdAt, companyTimezone)}
+            {invoices.map((invoice) => {
+              const displayStatus = invoiceDisplayStatus(invoice, localToday);
+              return (
+                <div key={invoice.id} className="dvx-team-member-row">
+                  <span className="dvx-team-member-name">
+                    {invoice.invoiceNumber}
+                    <span
+                      className="dvx-muted"
+                      style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}
+                    >
+                      {formatDateTime(invoice.createdAt, companyTimezone)}
+                      {invoice.dueDate
+                        ? ` · due ${formatDateTime(invoice.dueDate, companyTimezone)}`
+                        : ""}
+                    </span>
                   </span>
-                </span>
-                <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <span className="dvx-muted" style={{ fontSize: "0.85rem" }}>
-                    {money(invoice.total, invoice.currency)}
+                  <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                    <span className="dvx-muted" style={{ fontSize: "0.85rem" }}>
+                      {money(invoice.total, invoice.currency)}
+                    </span>
+                    <span
+                      className={`dvx-badge ${INVOICE_STATUS_BADGE[displayStatus] ?? "dvx-badge--neutral"}`}
+                      style={{ fontSize: "0.7rem" }}
+                    >
+                      {displayStatus.replace(/_/g, " ")}
+                    </span>
+                    {capabilities.canPayBilling && PAYABLE_INVOICE_STATUSES.has(invoice.status) ? (
+                      <MakePaymentButton invoiceId={invoice.id} />
+                    ) : null}
                   </span>
-                  <span
-                    className={`dvx-badge ${INVOICE_STATUS_BADGE[invoice.status] ?? "dvx-badge--neutral"}`}
-                    style={{ fontSize: "0.7rem" }}
-                  >
-                    {invoice.status.replace(/_/g, " ")}
-                  </span>
-                  {capabilities.canPayBilling && PAYABLE_INVOICE_STATUSES.has(invoice.status) ? (
-                    <MakePaymentButton invoiceId={invoice.id} />
-                  ) : null}
-                </span>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

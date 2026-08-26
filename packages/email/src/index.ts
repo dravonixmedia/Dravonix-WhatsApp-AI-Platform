@@ -11,3 +11,8 @@ export {
   type SupportRequestTypeLabelInput,
 } from "./supportRequestEmail.js";
 export { renderSupportReplyEmail, type SupportReplyEmailInput } from "./supportReplyEmail.js";
+export {
+  renderBillingReminderEmail,
+  type BillingReminderEmailInput,
+  type BillingReminderStage,
+} from "./billingReminderEmail.js";
