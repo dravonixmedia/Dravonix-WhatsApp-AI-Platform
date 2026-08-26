@@ -10,6 +10,8 @@ export interface BillingSubscriptionInfo {
   state: string;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
+  /** Phase 6C: set only while state = 'grace_period' (advance_overdue_subscriptions, migration 30); null otherwise. */
+  gracePeriodEnd: string | null;
   plan: BillingPlanInfo | null;
 }
 
@@ -39,6 +41,7 @@ interface SubscriptionRow {
   state: string;
   current_period_start: string | null;
   current_period_end: string | null;
+  grace_period_end: string | null;
   plan_versions:
     | {
         monthly_price: number;
@@ -76,7 +79,7 @@ export async function getBillingSubscription(
   const { data, error } = await client
     .from("subscriptions")
     .select(
-      "state, current_period_start, current_period_end, plan_versions (monthly_price, currency, plans (name))",
+      "state, current_period_start, current_period_end, grace_period_end, plan_versions (monthly_price, currency, plans (name))",
     )
     .eq("company_id", companyId)
     .maybeSingle();
@@ -91,6 +94,7 @@ export async function getBillingSubscription(
     state: row.state,
     currentPeriodStart: row.current_period_start,
     currentPeriodEnd: row.current_period_end,
+    gracePeriodEnd: row.grace_period_end,
     plan:
       planVersion && plan
         ? {

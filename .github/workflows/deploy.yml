@@ -173,7 +173,8 @@ jobs:
           for toml in apps/api/wrangler.toml \
                       apps/workers/message-consumer/wrangler.toml \
                       apps/workers/voice-consumer/wrangler.toml \
-                      apps/workers/outbound-reconciler/wrangler.toml; do
+                      apps/workers/outbound-reconciler/wrangler.toml \
+                      apps/workers/billing-scheduler/wrangler.toml; do
             bash scripts/verify-wrangler-env-bindings.sh "$toml" "${{ inputs.target_environment }}"
           done
           bash scripts/verify-web-staging-config.sh "${{ inputs.target_environment }}"
@@ -193,6 +194,10 @@ jobs:
       - name: Deploy outbound-reconciler
         working-directory: apps/workers/outbound-reconciler
         run: bash ../../../scripts/deploy-with-diagnostics.sh "${{ inputs.target_environment }}" apps/workers/outbound-reconciler
+
+      - name: Deploy billing-scheduler
+        working-directory: apps/workers/billing-scheduler
+        run: bash ../../../scripts/deploy-with-diagnostics.sh "${{ inputs.target_environment }}" apps/workers/billing-scheduler
 
       - name: Build apps/web (OpenNext Cloudflare adapter)
         # NEXT_PUBLIC_* variables must be present here, at *build* time --

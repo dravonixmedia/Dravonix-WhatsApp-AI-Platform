@@ -1,0 +1,60 @@
+name = "dravonix-billing-scheduler"
+main = "src/worker.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Secrets (set via the Cloudflare dashboard or `wrangler secret put <NAME>`,
+# never committed): SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, SUPABASE_URL.
+#
+# This top-level (unnamed environment) config is used only by local
+# `wrangler dev` -- every real deploy goes through .github/workflows/deploy.yml,
+# which always passes an explicit --env staging or --env production (see
+# those blocks below). Nothing here is ever deployed directly.
+#
+# DRAIVA Phase 6C: the daily billing lifecycle sweep (TASKS.md's
+# previously-unbuilt "apps/workers/billing-consumer" scope, renamed
+# billing-scheduler here since it is a cron-triggered periodic sweep, not a
+# queue consumer -- the Razorpay webhook path itself is served directly by
+# apps/api, per migration 28). Calls, in order, four migration-30 RPCs:
+# generate_due_subscription_invoices, advance_overdue_subscriptions,
+# suspend_expired_grace_subscriptions, send_due_billing_reminders. Never
+# sends a real email (see migration 30's header comment) and never touches
+# Meta/WhatsApp -- structurally impossible, this Worker holds no such
+# dependency at all.
+#
+# Once daily at a stable UTC time (Phase 6C recommendation), not high
+# frequency like outbound-reconciler's */5 sweep -- billing lifecycle
+# transitions are day-granular (due dates, grace-period days), so a daily
+# cadence is exactly as timely as the underlying data can ever change.
+
+[vars]
+APP_ENV = "development"
+
+[triggers]
+crons = ["0 3 * * *"]
+
+# ---------------------------------------------------------------------------
+# Staging -- isolated Worker. No queue/R2 resources needed (this Worker only
+# calls RPCs on a schedule), so unlike message-consumer/voice-consumer
+# there's no queue name to duplicate here -- just a distinct Worker name.
+# ---------------------------------------------------------------------------
+[env.staging]
+name = "dravonix-billing-scheduler-staging"
+
+[env.staging.vars]
+APP_ENV = "staging"
+
+[env.staging.triggers]
+crons = ["0 3 * * *"]
+
+# ---------------------------------------------------------------------------
+# Production
+# ---------------------------------------------------------------------------
+[env.production]
+name = "dravonix-billing-scheduler"
+
+[env.production.vars]
+APP_ENV = "production"
+
+[env.production.triggers]
+crons = ["0 3 * * *"]

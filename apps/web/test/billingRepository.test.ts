@@ -67,6 +67,7 @@ describe("getBillingSubscription", () => {
         state: "active",
         current_period_start: "2026-08-01T00:00:00Z",
         current_period_end: "2026-08-31T00:00:00Z",
+        grace_period_end: null,
         plan_versions: { monthly_price: "1999.00", currency: "INR", plans: { name: "Business" } },
       },
       error: null,
@@ -76,8 +77,24 @@ describe("getBillingSubscription", () => {
       state: "active",
       currentPeriodStart: "2026-08-01T00:00:00Z",
       currentPeriodEnd: "2026-08-31T00:00:00Z",
+      gracePeriodEnd: null,
       plan: { name: "Business", monthlyPrice: 1999, currency: "INR" },
     });
+  });
+
+  it("Phase 6C: surfaces grace_period_end when the subscription is in grace_period", async () => {
+    const chain = fakeChain({
+      data: {
+        state: "grace_period",
+        current_period_start: "2026-08-01T00:00:00Z",
+        current_period_end: "2026-08-31T00:00:00Z",
+        grace_period_end: "2026-09-04T00:00:00Z",
+        plan_versions: { monthly_price: "1999.00", currency: "INR", plans: { name: "Business" } },
+      },
+      error: null,
+    });
+    const result = await getBillingSubscription(fakeSupabaseClient(chain), COMPANY_ID);
+    expect(result?.gracePeriodEnd).toBe("2026-09-04T00:00:00Z");
   });
 
   it("handles a Postgrest array-shaped join (plan_versions/plans as arrays) the same way", async () => {
