@@ -4,10 +4,18 @@ import { getSupabaseConnectionConfig } from "./lib/supabase/env.js";
 
 /**
  * Refreshes the Supabase session on every request (Human Handover Inbox
- * final plan section 15) and redirects unauthenticated /dashboard/*
- * requests to /login. This is the only place session *refresh* happens --
- * Server Components/Actions only read the (already-refreshed) cookie via
- * createServerSupabaseClient.
+ * final plan section 15) and redirects unauthenticated /dashboard/* or
+ * /admin/* requests to /login. This is the only place session *refresh*
+ * happens -- Server Components/Actions only read the (already-refreshed)
+ * cookie via createServerSupabaseClient.
+ *
+ * /admin/* is included here (Phase 7A) purely so Super Admin sessions get
+ * the same rolling cookie refresh /dashboard/* already gets -- this is
+ * session-refresh infrastructure only. Role authorization (super_admin vs.
+ * everyone else) is never decided here; that remains entirely
+ * app/admin/layout.tsx's job via getPlatformSession(), which independently
+ * re-verifies the caller against Supabase Auth and platform_members on
+ * every request regardless of what this middleware does.
  */
 export async function middleware(request: NextRequest) {
   const response = NextResponse.next({ request });
@@ -36,8 +44,10 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isDashboardRoute = request.nextUrl.pathname.startsWith("/dashboard");
-  if (isDashboardRoute && !user) {
+  const isSessionProtectedRoute =
+    request.nextUrl.pathname.startsWith("/dashboard") ||
+    request.nextUrl.pathname.startsWith("/admin");
+  if (isSessionProtectedRoute && !user) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("redirectedFrom", request.nextUrl.pathname);
     return NextResponse.redirect(loginUrl);
@@ -47,5 +57,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*"],
+  matcher: ["/dashboard/:path*", "/admin/:path*"],
 };

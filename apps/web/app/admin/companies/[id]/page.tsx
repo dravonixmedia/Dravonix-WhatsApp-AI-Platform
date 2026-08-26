@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ACTIVE_COMPANY_ROLES, companyRoleLabel } from "../../../../lib/companyRoles.js";
 import { InviteMemberForm } from "../../../dashboard/team/InviteMemberForm.js";
@@ -111,6 +112,8 @@ export default async function AdminCompanyDetailPage({
     aiSettingsResult,
     voiceSettingsResult,
     knowledgeSourcesListResult,
+    recentInvoicesResult,
+    recentPaymentsResult,
   ] = await Promise.all([
     supabase
       .from("company_members")
@@ -127,7 +130,7 @@ export default async function AdminCompanyDetailPage({
     supabase
       .from("subscriptions")
       .select(
-        "id, state, provider, current_period_start, current_period_end, plan_versions (version, monthly_price, currency, plans (key, name))",
+        "id, state, provider, current_period_start, current_period_end, grace_period_end, plan_versions (version, monthly_price, currency, plans (key, name))",
       )
       .eq("company_id", id)
       .maybeSingle(),
@@ -181,6 +184,21 @@ export default async function AdminCompanyDetailPage({
       .select("id, source_type, title, is_enabled, ingestion_status, ingestion_error, created_at")
       .eq("company_id", id)
       .order("created_at", { ascending: false }),
+    // Phase 7A: read-only, top-3-only billing snapshot for this company --
+    // deliberately not a repeat of /admin/invoices or /admin/payments'
+    // full querying/filtering; deeper investigation links there instead.
+    supabase
+      .from("invoices")
+      .select("id, invoice_number, kind, status, currency, total, due_date")
+      .eq("company_id", id)
+      .order("created_at", { ascending: false })
+      .limit(3),
+    supabase
+      .from("payments")
+      .select("id, method, status, amount, currency, created_at")
+      .eq("company_id", id)
+      .order("created_at", { ascending: false })
+      .limit(3),
   ]);
 
   const { data: memberIdentityRows } = await supabase.rpc("list_company_member_identities", {
@@ -207,6 +225,7 @@ export default async function AdminCompanyDetailPage({
     provider: string;
     current_period_start: string | null;
     current_period_end: string | null;
+    grace_period_end: string | null;
     plan_versions: {
       version: number;
       monthly_price: number;
@@ -227,6 +246,23 @@ export default async function AdminCompanyDetailPage({
   const aiSettings = aiSettingsResult.data;
   const voiceSettings = voiceSettingsResult.data;
   const knowledgeSourcesList = knowledgeSourcesListResult.data ?? [];
+  const recentInvoices = (recentInvoicesResult.data ?? []) as {
+    id: string;
+    invoice_number: string;
+    kind: string;
+    status: string;
+    currency: string;
+    total: number;
+    due_date: string | null;
+  }[];
+  const recentPayments = (recentPaymentsResult.data ?? []) as {
+    id: string;
+    method: string;
+    status: string;
+    amount: number;
+    currency: string;
+    created_at: string;
+  }[];
   const activeOwnerOrAdminCount = members.filter(
     (m) => m.is_active && (m.role === "company_owner" || m.role === "company_admin"),
   ).length;
@@ -283,7 +319,7 @@ export default async function AdminCompanyDetailPage({
               gap: "0.4rem 1rem",
             }}
           >
-            <dt className="dvx-muted">Status</dt>
+            <dt className="dvx-muted">Company status</dt>
             <dd style={{ margin: 0 }}>{company.status.replace(/_/g, " ")}</dd>
             <dt className="dvx-muted">Demo</dt>
             <dd style={{ margin: 0 }}>{company.is_demo ? "Yes" : "No"}</dd>
@@ -298,6 +334,11 @@ export default async function AdminCompanyDetailPage({
             <dt className="dvx-muted">Created</dt>
             <dd style={{ margin: 0 }}>{new Date(company.created_at).toLocaleDateString()}</dd>
           </dl>
+          <p className="dvx-muted" style={{ fontSize: "0.72rem", margin: "0.6rem 0 0" }}>
+            Company status is a separate lifecycle (onboarding/active/suspended/manually
+            suspended/closed) from the subscription state shown in Plan &amp; subscription -- they
+            are never the same thing and are changed by different actions.
+          </p>
 
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem", flexWrap: "wrap" }}>
             {company.status !== "manually_suspended" &&
@@ -355,7 +396,7 @@ export default async function AdminCompanyDetailPage({
             >
               <dt className="dvx-muted">Plan</dt>
               <dd style={{ margin: 0 }}>{planInfo?.name ?? "Not set"}</dd>
-              <dt className="dvx-muted">State</dt>
+              <dt className="dvx-muted">Subscription state</dt>
               <dd style={{ margin: 0 }}>{subscription.state.replace(/_/g, " ")}</dd>
               <dt className="dvx-muted">Period</dt>
               <dd style={{ margin: 0 }}>
@@ -367,6 +408,14 @@ export default async function AdminCompanyDetailPage({
                     }`
                   : "Not set"}
               </dd>
+              {subscription.grace_period_end ? (
+                <>
+                  <dt className="dvx-muted">Grace period ends</dt>
+                  <dd style={{ margin: 0 }}>
+                    {new Date(subscription.grace_period_end).toLocaleDateString()}
+                  </dd>
+                </>
+              ) : null}
             </dl>
           ) : (
             <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
@@ -415,6 +464,60 @@ export default async function AdminCompanyDetailPage({
               </button>
             </form>
           ) : null}
+        </div>
+
+        {/* Billing -- Phase 7A. A compact, read-only snapshot only; the
+            full querying/filtering lives on /admin/invoices, /admin/payments
+            and /admin/billing so this page never becomes a second billing
+            dashboard (no repository/business logic is duplicated here). */}
+        <div className="dvx-card">
+          <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+            Billing
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <div className="dvx-muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
+              Recent invoices
+            </div>
+            {recentInvoices.length === 0 ? (
+              <p className="dvx-muted" style={{ fontSize: "0.82rem", margin: 0 }}>
+                No invoices yet.
+              </p>
+            ) : (
+              recentInvoices.map((invoice) => (
+                <div key={invoice.id} style={{ fontSize: "0.82rem", marginBottom: "0.25rem" }}>
+                  {invoice.invoice_number} · {invoice.currency} {invoice.total.toFixed(2)} ·{" "}
+                  <span className="dvx-muted">{invoice.status.replace(/_/g, " ")}</span>
+                </div>
+              ))
+            )}
+          </div>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <div className="dvx-muted" style={{ fontSize: "0.72rem", marginBottom: "0.3rem" }}>
+              Recent payments
+            </div>
+            {recentPayments.length === 0 ? (
+              <p className="dvx-muted" style={{ fontSize: "0.82rem", margin: 0 }}>
+                No payments yet.
+              </p>
+            ) : (
+              recentPayments.map((payment) => (
+                <div key={payment.id} style={{ fontSize: "0.82rem", marginBottom: "0.25rem" }}>
+                  {payment.currency} {payment.amount.toFixed(2)} (
+                  {payment.method.replace(/_/g, " ")}) ·{" "}
+                  <span className="dvx-muted">{payment.status}</span>
+                </div>
+              ))
+            )}
+          </div>
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", fontSize: "0.8rem" }}>
+            <Link href={`/admin/invoices?company=${encodeURIComponent(company.name)}`}>
+              All invoices →
+            </Link>
+            <Link href={`/admin/payments?company=${encodeURIComponent(company.name)}`}>
+              All payments →
+            </Link>
+            <Link href="/admin/billing">Billing operations →</Link>
+          </div>
         </div>
       </div>
 
