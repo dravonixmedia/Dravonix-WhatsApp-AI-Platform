@@ -114,6 +114,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_razorpay_paym
 echo "Running Phase 6C staging billing automation (migration 30) RLS/RPC hardening assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_billing_automation.sql"
 
+echo "Running Phase 6C migration 31 billing automation correction assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_billing_automation_corrections.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
