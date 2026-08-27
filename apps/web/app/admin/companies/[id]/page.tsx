@@ -290,8 +290,20 @@ export default async function AdminCompanyDetailPage({
   const canReverseCancellation = subscription?.state === "cancel_at_period_end";
   const canCancelImmediately = allowedTargets.has("cancelled");
   const canManuallySuspend = allowedTargets.has("manually_suspended");
+  // Post-final-independent-review architecture correction: `suspended` is a
+  // billing-enforcement state (reached only via an unresolved billing
+  // obligation) -- reactivation must never be admin-offered for it; recovery
+  // stays exclusively owned by the real payment-reconciliation path.
+  // `manually_suspended` is a purely administrative state and MAY be
+  // reactivated, but only while its billing period is still valid -- the RPC
+  // independently re-validates current_period_end under the row lock
+  // regardless of what this button shows, so this is a convenience-only
+  // pre-check using data already fetched for this page (no extra query).
   const canReactivate =
-    subscription?.state === "suspended" || subscription?.state === "manually_suspended";
+    subscription?.state === "manually_suspended" &&
+    subscription.current_period_end !== null &&
+    new Date(subscription.current_period_end) > new Date();
+  const suspendedNeedsBillingResolution = subscription?.state === "suspended";
   const startSupportAccessWithId = startSupportAccessAction.bind(null, id);
   const endSupportAccessWithId = endSupportAccessAction.bind(null, id);
   const adminUpdateCompanyProfileWithId = adminUpdateCompanyProfileAction.bind(null, id);
@@ -509,6 +521,12 @@ export default async function AdminCompanyDetailPage({
                 Reactivate
               </button>
             </form>
+          ) : null}
+
+          {suspendedNeedsBillingResolution ? (
+            <p className="dvx-muted" style={{ fontSize: "0.78rem", marginTop: "0.5rem" }}>
+              Billing recovery required before reactivation.
+            </p>
           ) : null}
 
           {subscription && canManuallySuspend ? (

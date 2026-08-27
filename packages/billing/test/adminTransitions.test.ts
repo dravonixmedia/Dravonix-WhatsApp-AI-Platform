@@ -63,8 +63,7 @@ describe("ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS: a strict narrowing of the cano
     expect(ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS.cancel_at_period_end).toContain("active"); // reverse
     expect(ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS.active).toContain("cancelled"); // immediate cancel
     expect(ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS.active).toContain("manually_suspended"); // manual suspend
-    expect(ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS.manually_suspended).toContain("active"); // reactivate
-    expect(ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS.suspended).toContain("active"); // reactivate
+    expect(ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS.manually_suspended).toContain("active"); // reactivate (administrative suspension is administratively reversible)
   });
 
   it("excludes every edge the Phase 7B independent-review correction pass found unsafe for manual admin control, even though each remains a real edge in the canonical graph", () => {
@@ -92,6 +91,16 @@ describe("ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS: a strict narrowing of the cano
     ] as const) {
       expect(Object.values(subscriptionTransitions[from])).toContain(to);
     }
+  });
+
+  it("excludes suspended -> active (post-final-independent-review architecture correction): `suspended` is a billing-enforcement state reached exclusively via grace_period_expired, so an admin must never bypass the unresolved billing obligation by flipping the state -- recovery stays exclusively owned by reconcile_razorpay_payment", () => {
+    expect(ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS.suspended).not.toContain("active");
+    // still a legitimate canonical edge -- payment-driven recovery relies on it.
+    expect(Object.values(subscriptionTransitions.suspended)).toContain("active");
+  });
+
+  it("keeps manually_suspended -> active admin-allowed: an administrative state can be administratively reversed, unlike suspended (a billing-enforcement state)", () => {
+    expect(ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS.manually_suspended).toContain("active");
   });
 
   it("every admin-allowed edge is reachable via applySubscriptionEvent without throwing", () => {

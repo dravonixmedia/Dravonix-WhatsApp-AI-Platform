@@ -30,6 +30,18 @@
 --      does not by itself make a transition safe as a manual admin
 --      operation.
 --
+--      Post-final-independent-review architecture correction: suspended ->
+--      active is ALSO no longer admin-invocable. `suspended` is a
+--      billing-enforcement state -- its only canonical source is
+--      grace_period's own grace_period_expired, so current_period_end has
+--      always already lapsed by the time a subscription reaches it.
+--      Financial suspension can only be lifted by an actual payment;
+--      manually_suspended -> active remains admin-allowed (it is a purely
+--      administrative state), but this function now additionally validates,
+--      under the row lock and BEFORE any mutation, that the subscription's
+--      billing period has not lapsed -- administrative suspension can be
+--      administratively reversed, financial suspension cannot.
+--
 --   2. Add admin_reset_company_entitlement: the previously-missing "restore
 --      to plan default" capability for company_entitlements (migration 7).
 --      Per the Phase 7B review of packages/billing's entitlement merge
@@ -80,13 +92,14 @@
 --      grace_period        -> manually_suspended   (manual_suspend)
 --      grace_period        -> cancelled            (cancelled_immediately)
 --      grace_period        -> closed               (close)
---      suspended           -> active               (manual_reactivate)
 --      suspended           -> cancelled            (cancelled_immediately)
 --      suspended           -> closed               (close)
 --      cancel_at_period_end -> active              (cancel_at_period_end_reversed)
 --      cancel_at_period_end -> closed              (close)
 --      cancelled           -> closed               (close)
---      manually_suspended  -> active               (manual_reactivate)
+--      manually_suspended  -> active               (manual_reactivate -- ONLY if
+--        current_period_end is non-null and in the future; otherwise rejected
+--        with reactivation_requires_billing_resolution, see below)
 --      manually_suspended  -> cancelled            (cancelled_immediately)
 --      manually_suspended  -> closed               (close)
 --      closed              -> (anything)           FORBIDDEN, no exceptions
@@ -117,6 +130,12 @@
 --        guarantee current_period_start/current_period_end were ever
 --        established, making the subscription unbillable forever)
 --      trial        -> active   (activate -- same reason)
+--      suspended    -> active   (manual_reactivate -- `suspended` is reached
+--        exclusively via grace_period_expired, so current_period_end has
+--        always already lapsed; an admin must never bypass an unresolved
+--        billing obligation by flipping the state. Recovery from `suspended`
+--        stays exclusively owned by reconcile_razorpay_payment, which both
+--        verifies a real payment and refreshes the billing period)
 --
 --    Ancillary-field behavior, keyed on the derived event (never on target
 --    state alone, so e.g. plain 'activate' from onboarding/trial does not
@@ -135,6 +154,20 @@
 --    current_period_start/current_period_end are NEVER written by this
 --    function under any transition -- no admin override here represents a
 --    real payment event, so no billing period is ever fabricated or altered.
+--
+--    Billing-period validation for manual_reactivate (post-final-independent-
+--    review architecture correction): since suspended -> active was removed
+--    above, manual_reactivate can now only be derived for
+--    manually_suspended -> active. Before any mutation, this function checks
+--    the just-locked row's current_period_end; if it is null or already <=
+--    now(), the transition is rejected with reactivation_requires_billing_
+--    resolution instead of invalid_state_transition (the state transition
+--    itself is administratively legitimate -- it is the current billing
+--    condition that prevents safe execution) and no state/subscription_
+--    events/audit_logs row is written. If current_period_end is in the
+--    future, the transition proceeds exactly as before: state, suspension_
+--    reason, grace_period_end, and reactivated_at are updated; current_
+--    period_start/current_period_end/invoices/payments are never touched.
 -- ---------------------------------------------------------------------------
 
 create or replace function admin_change_subscription_state(p_company_id uuid, p_new_state subscription_state, p_reason text default null)
@@ -181,7 +214,6 @@ begin
     when v_old_state = 'grace_period' and p_new_state = 'manually_suspended' then 'manual_suspend'
     when v_old_state = 'grace_period' and p_new_state = 'cancelled' then 'cancelled_immediately'
     when v_old_state = 'grace_period' and p_new_state = 'closed' then 'close'
-    when v_old_state = 'suspended' and p_new_state = 'active' then 'manual_reactivate'
     when v_old_state = 'suspended' and p_new_state = 'cancelled' then 'cancelled_immediately'
     when v_old_state = 'suspended' and p_new_state = 'closed' then 'close'
     when v_old_state = 'cancel_at_period_end' and p_new_state = 'active' then 'cancel_at_period_end_reversed'
@@ -198,11 +230,24 @@ begin
   -- trial, suspended -> trial, active -> onboarding, grace_period -> trial),
   -- every edge removed as unsafe for manual admin control in the
   -- post-independent-review correction (payment_due/grace_period/cancelled/
-  -- onboarding/trial -> active), any same-state no-op, and closed ->
-  -- anything (closed never appears as a when-clause source above, so it
-  -- always falls through here).
+  -- onboarding/trial -> active), suspended -> active (post-final-independent-
+  -- review architecture correction -- financial suspension is never
+  -- admin-reversible), any same-state no-op, and closed -> anything (closed
+  -- never appears as a when-clause source above, so it always falls through
+  -- here).
   if v_event is null then
     raise exception 'invalid_state_transition';
+  end if;
+
+  -- manual_reactivate can now only be derived for manually_suspended ->
+  -- active (suspended -> active is no longer a v_event-producing edge at
+  -- all, see above). Administrative suspension can be administratively
+  -- reversed; financial suspension cannot -- so before touching anything,
+  -- confirm the subscription's billing period genuinely still covers
+  -- reactivation. No state/subscription_events/audit_logs row is written
+  -- when this check fails.
+  if v_event = 'manual_reactivate' and (v_sub.current_period_end is null or v_sub.current_period_end <= now()) then
+    raise exception 'reactivation_requires_billing_resolution';
   end if;
 
   update public.subscriptions
@@ -250,7 +295,7 @@ end;
 $$;
 
 comment on function admin_change_subscription_state(uuid, subscription_state, text) is
-  'Phase 7B (post-independent-review correction): hardened in place (same signature as migration 17). Validates the requested (old_state, new_state) pair against the exact admin-allowed edge set derived from packages/billing/src/stateMachine.ts, rejects every automatic-only/forbidden edge, everything out of the terminal closed state, and payment_due/grace_period/cancelled/onboarding/trial -> active (unsafe for manual admin control even though each is a real edge in the canonical graph -- see migration header), derives the correct canonical subscription_events.event server-side (never trusts a client-supplied event name), and updates only the ancillary columns (suspension_reason/cancellation_reason/grace_period_end/reactivated_at) each specific transition genuinely requires -- current_period_start/current_period_end are never touched, since no admin override here represents a real payment event.';
+  'Phase 7B (post-final-independent-review architecture correction): hardened in place (same signature as migration 17). Validates the requested (old_state, new_state) pair against the exact admin-allowed edge set derived from packages/billing/src/stateMachine.ts, rejects every automatic-only/forbidden edge, everything out of the terminal closed state, and payment_due/grace_period/cancelled/onboarding/trial/suspended -> active (unsafe for manual admin control -- financial suspension/recovery is never admin-reversible, even though each remains a real edge in the canonical graph -- see migration header), derives the correct canonical subscription_events.event server-side (never trusts a client-supplied event name), and for manually_suspended -> active (manual_reactivate) additionally rejects with reactivation_requires_billing_resolution -- before any mutation -- when current_period_end is null or already elapsed, since administrative suspension may be administratively reversed only while the billing period it interrupted is still genuinely valid. Updates only the ancillary columns (suspension_reason/cancellation_reason/grace_period_end/reactivated_at) each specific transition genuinely requires -- current_period_start/current_period_end/invoices/payments are never touched, since no admin override here represents a real payment event.';
 
 revoke all on function admin_change_subscription_state(uuid, subscription_state, text) from public, anon;
 grant execute on function admin_change_subscription_state(uuid, subscription_state, text) to authenticated;

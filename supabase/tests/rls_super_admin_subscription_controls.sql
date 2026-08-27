@@ -255,6 +255,24 @@ create or replace function m32_reset_sub(p_state subscription_state, p_grace tim
     reactivated_at = p_reactivated
   where id = '84000001-0000-0000-0000-000000000001';
 $$;
+-- Test-fixture-only helper for the manual_reactivate billing-period gate
+-- (post-final-independent-review architecture correction). Deliberately
+-- separate from m32_reset_sub -- m32_reset_sub never touches
+-- current_period_end anywhere else in this file (every existing block
+-- relies on the fixture's original now()+20 days value), so folding this
+-- into m32_reset_sub's own signature would silently null out every other
+-- block's current_period_end unless every call site were updated. Same
+-- SECURITY DEFINER row-write-bypassing-RLS shape as m32_reset_sub; exists
+-- only in this test file, inside this file's own begin;...rollback;
+-- transaction, and is never applied by any migration.
+create or replace function m32_set_period_end(p_period_end timestamptz) returns void
+  language sql
+  security definer
+  set search_path = ''
+  as $$
+  update public.subscriptions set current_period_end = p_period_end
+  where id = '84000001-0000-0000-0000-000000000001';
+$$;
 set local role authenticated;
 select test_set_current_user('80000001-0000-0000-0000-000000000001'); -- super_admin
 
@@ -386,21 +404,135 @@ select test_assert(
   exists (select 1 from audit_logs where target_id = '84000001-0000-0000-0000-000000000001' and action = 'subscription_manually_suspended')
 );
 
--- manually_suspended -> active (reactivate)
+-- ---------------------------------------------------------------------------
+-- manually_suspended -> active (reactivate) -- post-final-independent-review
+-- architecture correction. Administrative suspension can be
+-- administratively reversed ONLY while the billing period it interrupted is
+-- still genuinely valid; financial suspension (the `suspended` state,
+-- covered separately below) cannot be reversed by this RPC at all.
+-- ---------------------------------------------------------------------------
+
+-- 1-8: manually_suspended with a FUTURE current_period_end -> active succeeds.
 select m32_reset_sub('manually_suspended', null, 'nonpayment via bank');
-select test_assert(
-  'manually_suspended -> active succeeds via manual_reactivate',
-  (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null)) = 'active'
+select m32_set_period_end(now() + interval '10 days');
+do $$
+declare
+  v_period_start_before timestamptz;
+  v_period_end_before timestamptz;
+  v_invoice_count_before bigint;
+  v_payment_count_before bigint;
+begin
+  select current_period_start, current_period_end into v_period_start_before, v_period_end_before
+    from subscriptions where id = '84000001-0000-0000-0000-000000000001';
+  select count(*) into v_invoice_count_before from invoices where company_id = '81000001-0000-0000-0000-000000000001';
+  select count(*) into v_payment_count_before from payments where company_id = '81000001-0000-0000-0000-000000000001';
+
+  perform test_assert(
+    'manually_suspended -> active succeeds via manual_reactivate when current_period_end is in the future',
+    (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null)) = 'active'
+  );
+  perform test_assert(
+    'reactivation writes the canonical manual_reactivate event',
+    exists (select 1 from subscription_events where subscription_id = '84000001-0000-0000-0000-000000000001' and event = 'manual_reactivate' and to_state = 'active' and is_manual_override = true)
+  );
+  perform test_assert(
+    'reactivation clears suspension_reason',
+    (select suspension_reason from subscriptions where id = '84000001-0000-0000-0000-000000000001') is null
+  );
+  perform test_assert(
+    'reactivation sets reactivated_at',
+    (select reactivated_at from subscriptions where id = '84000001-0000-0000-0000-000000000001') is not null
+  );
+  perform test_assert(
+    'reactivation writes audit action subscription_reactivated',
+    exists (select 1 from audit_logs where target_id = '84000001-0000-0000-0000-000000000001' and action = 'subscription_reactivated')
+  );
+  perform test_assert(
+    'reactivation preserves current_period_start exactly',
+    (select current_period_start from subscriptions where id = '84000001-0000-0000-0000-000000000001') = v_period_start_before
+  );
+  perform test_assert(
+    'reactivation preserves current_period_end exactly',
+    (select current_period_end from subscriptions where id = '84000001-0000-0000-0000-000000000001') = v_period_end_before
+  );
+  perform test_assert(
+    'reactivation creates no invoice row',
+    (select count(*) from invoices where company_id = '81000001-0000-0000-0000-000000000001') = v_invoice_count_before
+  );
+  perform test_assert(
+    'reactivation creates no payment row',
+    (select count(*) from payments where company_id = '81000001-0000-0000-0000-000000000001') = v_payment_count_before
+  );
+end;
+$$;
+
+-- 9, 11-14: manually_suspended with an EXPIRED current_period_end -> rejected,
+-- transactionally side-effect free, including on a repeated attempt.
+select m32_reset_sub('manually_suspended', null, 'nonpayment via bank');
+select m32_set_period_end(now() - interval '1 day');
+do $$
+declare
+  v_event_count_before bigint;
+  v_audit_count_before bigint;
+begin
+  select count(*) into v_event_count_before from subscription_events where subscription_id = '84000001-0000-0000-0000-000000000001';
+  select count(*) into v_audit_count_before from audit_logs where target_id = '84000001-0000-0000-0000-000000000001';
+
+  perform test_assert_raises(
+    'manually_suspended -> active with an expired current_period_end is rejected with reactivation_requires_billing_resolution, not invalid_state_transition (the transition itself is administratively legitimate; the billing condition prevents safe execution)',
+    $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null) $sql$,
+    'reactivation_requires_billing_resolution'
+  );
+  perform test_assert(
+    'rejection leaves state at manually_suspended -- no partial write',
+    (select state from subscriptions where id = '84000001-0000-0000-0000-000000000001') = 'manually_suspended'
+  );
+  perform test_assert(
+    'rejection writes no new subscription_events row',
+    (select count(*) from subscription_events where subscription_id = '84000001-0000-0000-0000-000000000001') = v_event_count_before
+  );
+  perform test_assert(
+    'rejection writes no new audit_logs row',
+    (select count(*) from audit_logs where target_id = '84000001-0000-0000-0000-000000000001') = v_audit_count_before
+  );
+
+  -- Repeated attempt: still rejected, still side-effect free.
+  perform test_assert_raises(
+    'a repeated manually_suspended -> active attempt against the same expired period is rejected identically',
+    $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null) $sql$,
+    'reactivation_requires_billing_resolution'
+  );
+  perform test_assert(
+    'the repeated rejected attempt still leaves state at manually_suspended',
+    (select state from subscriptions where id = '84000001-0000-0000-0000-000000000001') = 'manually_suspended'
+  );
+  perform test_assert(
+    'the repeated rejected attempt still writes no new subscription_events row',
+    (select count(*) from subscription_events where subscription_id = '84000001-0000-0000-0000-000000000001') = v_event_count_before
+  );
+  perform test_assert(
+    'the repeated rejected attempt still writes no new audit_logs row',
+    (select count(*) from audit_logs where target_id = '84000001-0000-0000-0000-000000000001') = v_audit_count_before
+  );
+end;
+$$;
+
+-- 10: manually_suspended with a NULL current_period_end -> rejected identically.
+select m32_reset_sub('manually_suspended', null, 'nonpayment via bank');
+select m32_set_period_end(null);
+select test_assert_raises(
+  'manually_suspended -> active with a NULL current_period_end is rejected with reactivation_requires_billing_resolution',
+  $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null) $sql$,
+  'reactivation_requires_billing_resolution'
 );
 select test_assert(
-  'reactivation clears suspension_reason and sets reactivated_at',
-  (select suspension_reason from subscriptions where id = '84000001-0000-0000-0000-000000000001') is null
-  and (select reactivated_at from subscriptions where id = '84000001-0000-0000-0000-000000000001') is not null
+  'the NULL-period rejection leaves state at manually_suspended -- no partial write',
+  (select state from subscriptions where id = '84000001-0000-0000-0000-000000000001') = 'manually_suspended'
 );
-select test_assert(
-  'reactivation writes audit action subscription_reactivated',
-  exists (select 1 from audit_logs where target_id = '84000001-0000-0000-0000-000000000001' and action = 'subscription_reactivated')
-);
+
+-- Restore the fixture's original current_period_end for every subsequent
+-- block in this file that relies on it remaining in the future.
+select m32_set_period_end(now() + interval '20 days');
 
 -- manually_suspended -> cancelled
 select m32_reset_sub('manually_suspended');
@@ -475,12 +607,25 @@ select test_assert(
   (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'closed', null)) = 'closed'
 );
 
--- suspended -> active / cancelled / closed
+-- suspended -> active is REJECTED (post-final-independent-review architecture
+-- correction): `suspended` is a billing-enforcement state -- its only
+-- canonical source is grace_period_expired, so current_period_end has
+-- always already lapsed by the time a subscription reaches it. An admin
+-- must never bypass an unresolved billing obligation by flipping the state;
+-- recovery stays exclusively owned by reconcile_razorpay_payment (verified
+-- unchanged by the "real payment recovery regression" tests below).
 select m32_reset_sub('suspended');
-select test_assert(
-  'suspended -> active succeeds via manual_reactivate',
-  (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null)) = 'active'
+select test_assert_raises(
+  'suspended -> active is rejected (financial suspension can only be lifted by a real payment, never by this admin RPC)',
+  $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null) $sql$,
+  'invalid_state_transition'
 );
+select test_assert(
+  'a rejected suspended -> active attempt leaves state at suspended -- no partial write',
+  (select state from subscriptions where id = '84000001-0000-0000-0000-000000000001') = 'suspended'
+);
+
+-- suspended -> cancelled / closed
 select m32_reset_sub('suspended');
 select test_assert(
   'suspended -> cancelled succeeds',
