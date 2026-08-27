@@ -1,5 +1,6 @@
 import {
   generateValidatedResponse,
+  recordAiUsage,
   type AiProvider,
   type ValidationDiagnosticEvent,
 } from "@dravonix/ai";
@@ -166,6 +167,29 @@ export async function processVoiceJob(
     conversationId: payload.conversationId,
   });
   const context = await deps.repo.loadConversationContext(payload.conversationId);
+
+  // Usage metering (P0 usage repair): an inbound WhatsApp voice message was
+  // received, independent of what the pipeline decides to do with it below
+  // -- mirrors processMessageJob.ts's identical unconditional inbound-count
+  // write. Idempotency key is keyed on the durable inbound messageId alone,
+  // so a redelivered/retried queue job can never be double-counted.
+  // Best-effort: a usage-write failure must never block real voice
+  // processing.
+  try {
+    await deps.repo.recordUsageEvents([
+      {
+        companyId: payload.companyId,
+        conversationId: payload.conversationId,
+        metric: "whatsapp_inbound_messages",
+        quantity: 1,
+        idempotencyKey: `${payload.messageId}:whatsapp_inbound_messages`,
+      },
+    ]);
+  } catch (error) {
+    log.error("Failed to record inbound message usage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   try {
     await assertCompanyMayUseProvider(deps.entitlementRepo, payload.companyId, "speech_to_text");
@@ -455,7 +479,7 @@ export async function processVoiceJob(
     transcriptCharCount: normalizedTranscript.length,
   });
 
-  const { response, usedFallback, repaired } = await generateValidatedResponse(
+  const { response, usedFallback, repaired, usage } = await generateValidatedResponse(
     {
       provider: deps.aiProvider,
       onValidationFailure: (details) =>
@@ -485,6 +509,27 @@ export async function processVoiceJob(
       temporal: context.temporal,
     },
   );
+
+  // Usage metering (P0 usage repair): generateValidatedResponse returning at
+  // all means a real provider.generate() round trip completed and consumed
+  // real, billable tokens -- see processMessageJob.ts's identical write for
+  // the full rationale. Idempotency key is keyed on the durable inbound
+  // messageId, so a queue retry that re-runs this job can never
+  // double-count. Best-effort.
+  try {
+    await recordAiUsage(deps.repo, {
+      companyId: payload.companyId,
+      conversationId: payload.conversationId,
+      messageId: payload.messageId,
+      usage,
+      requestCount: repaired ? 2 : 1,
+      requestSucceeded: true,
+    });
+  } catch (error) {
+    log.error("Failed to record AI usage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   const handoverTriggered = response.requiresHuman;
   log.info("Stage: safety_validation", {
@@ -593,6 +638,27 @@ export async function processVoiceJob(
       log.info("Skipped text reply send: already reserved/sent for this message", {
         outboundStatus: outboundResult.outboundStatus,
       });
+    } else if (outboundResult.outboundStatus === "sent") {
+      // Usage metering (P0 usage repair): a genuinely new outbound text
+      // reply was just sent for this voice note -- see
+      // processMessageJob.ts's identical write for the full rationale.
+      // Idempotency key is keyed on the outbound message's own id (stable
+      // per (source_message_id, channel_type)). Best-effort.
+      try {
+        await deps.repo.recordUsageEvents([
+          {
+            companyId: payload.companyId,
+            conversationId: payload.conversationId,
+            metric: "whatsapp_outbound_messages",
+            quantity: 1,
+            idempotencyKey: `${outboundResult.messageId}:whatsapp_outbound_messages`,
+          },
+        ]);
+      } catch (error) {
+        log.error("Failed to record outbound text message usage", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     textReplySent = true;
   }
@@ -644,6 +710,33 @@ export async function processVoiceJob(
         speakingRate: context.voiceSettings.speakingRate,
       });
 
+      // Usage metering (P0 usage repair): text_to_speech_characters is the
+      // one voice usage dimension precisely and honestly knowable here --
+      // the exact character count just sent to the TTS provider, no
+      // provider-returned or decoded metadata required. speech_to_text_seconds
+      // and generated_voice_seconds are deliberately NOT recorded: neither
+      // ElevenLabs' STT/TTS REST responses nor WhatsApp's media metadata
+      // return audio duration, and no audio-container decoder exists in
+      // this codebase -- fabricating one from file byte size was explicitly
+      // out of scope for this repair (see PHASE 6 of the P0 usage-repair
+      // task). Idempotency key is keyed on the durable inbound messageId.
+      // Best-effort.
+      try {
+        await deps.repo.recordUsageEvents([
+          {
+            companyId: payload.companyId,
+            conversationId: payload.conversationId,
+            metric: "text_to_speech_characters",
+            quantity: speechText.length,
+            idempotencyKey: `${payload.messageId}:text_to_speech_characters`,
+          },
+        ]);
+      } catch (error) {
+        log.error("Failed to record text-to-speech usage", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
       const { mediaId: outboundMediaId } = await deps.whatsappProvider.uploadMedia(
         context.phoneNumberId,
         synthesized.audio,
@@ -670,6 +763,28 @@ export async function processVoiceJob(
         sendResult.providerMessageId,
         response.answer,
       );
+
+      // Usage metering (P0 usage repair): a genuinely new outbound audio
+      // reply was just sent -- mirrors the text-reply write above, keyed on
+      // this audio message's own stable id (audioReservation.id, distinct
+      // per (source_message_id, "audio")) so it can never collide with the
+      // text reply's own key for the same voice note. Best-effort.
+      try {
+        await deps.repo.recordUsageEvents([
+          {
+            companyId: payload.companyId,
+            conversationId: payload.conversationId,
+            metric: "whatsapp_outbound_messages",
+            quantity: 1,
+            idempotencyKey: `${audioReservation.id}:whatsapp_outbound_messages`,
+          },
+        ]);
+      } catch (error) {
+        log.error("Failed to record outbound audio message usage", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
       await deps.repo.recordGeneratedAudioMetadata({
         companyId: payload.companyId,
         messageId: audioReservation.id,
@@ -680,6 +795,11 @@ export async function processVoiceJob(
         voiceId: voiceId ?? null,
         language: ttsLanguageCode,
         sourceText: speechText,
+        // Real provider identity, never hardcoded -- see
+        // TextToSpeechProvider.providerName's doc comment (this fixes a
+        // pre-existing bug: generated_audio.provider was previously
+        // hardcoded to "google" regardless of which provider actually ran).
+        provider: deps.ttsProvider.providerName,
         retentionExpiresAt: computeRetentionExpiry(new Date(), context.voiceSettings.retentionDays),
       });
     } catch (error) {

@@ -1,6 +1,7 @@
-import { MockAiProvider } from "@dravonix/ai";
+import { MockAiProvider, type AiUsageRecorderInput } from "@dravonix/ai";
 import type { EntitlementRepository, EntitlementSnapshot } from "@dravonix/billing";
 import { resolveConversationTemporalContext, type ConversationState } from "@dravonix/core";
+import type { UsageEventInsert } from "@dravonix/database";
 import type {
   HandoverWorkerRepository,
   MessageChannelType,
@@ -211,6 +212,51 @@ class FakeVoiceConsumerRepository implements VoiceConsumerRepository {
     errorSummary: string;
   }): Promise<void> {
     this.recordedJobFailures.push(input);
+  }
+
+  /** Deduped by idempotency_key, mirroring usage_events' real unique constraint + ON CONFLICT DO NOTHING behavior -- so a test can call the job twice and assert no double-counting the same way the real database would enforce it. */
+  recordedUsageEvents: UsageEventInsert[] = [];
+  private seenIdempotencyKeys = new Set<string>();
+
+  async recordAiUsage(input: AiUsageRecorderInput): Promise<void> {
+    await this.recordUsageEvents([
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_requests",
+        quantity: input.requestCount,
+        idempotencyKey: `${input.messageId}:claude_requests`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_input_tokens",
+        quantity: input.usage.inputTokens,
+        idempotencyKey: `${input.messageId}:claude_input_tokens`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_output_tokens",
+        quantity: input.usage.outputTokens,
+        idempotencyKey: `${input.messageId}:claude_output_tokens`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_cached_input_tokens",
+        quantity: input.usage.cachedInputTokens,
+        idempotencyKey: `${input.messageId}:claude_cached_input_tokens`,
+      },
+    ]);
+  }
+
+  async recordUsageEvents(events: UsageEventInsert[]): Promise<void> {
+    for (const event of events) {
+      if (this.seenIdempotencyKeys.has(event.idempotencyKey)) continue;
+      this.seenIdempotencyKeys.add(event.idempotencyKey);
+      this.recordedUsageEvents.push(event);
+    }
   }
 }
 
@@ -649,6 +695,7 @@ describe("processVoiceJob", () => {
   it("finalizes the voice reply as delivery_unknown (never throws) when TTS/upload/send fails ambiguously", async () => {
     const deps = makeDeps(activeEntitlementSnapshot());
     deps.ttsProvider = {
+      providerName: "mock",
       synthesize: async () => {
         throw new Error("network timeout");
       },
@@ -1346,6 +1393,132 @@ describe("processVoiceJob", () => {
       const summary = JSON.parse(summaryLine!);
       expect(summary.audioReplySkipped).toBe(false);
       expect(summary.skipReason).toBeUndefined();
+    });
+  });
+
+  describe("usage metering (P0 usage repair)", () => {
+    it("records inbound message, AI, TTS-character, and both outbound message usages exactly once for a normal turn", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric).sort();
+      expect(metrics).toEqual(
+        [
+          "claude_cached_input_tokens",
+          "claude_input_tokens",
+          "claude_output_tokens",
+          "claude_requests",
+          "text_to_speech_characters",
+          "whatsapp_inbound_messages",
+          "whatsapp_outbound_messages",
+          "whatsapp_outbound_messages", // text reply + audio reply are two distinct sends
+        ].sort(),
+      );
+      // speech_to_text_seconds / generated_voice_seconds are deliberately
+      // never recorded -- no trustworthy duration source exists (PHASE 6).
+      expect(metrics).not.toContain("speech_to_text_seconds");
+      expect(metrics).not.toContain("generated_voice_seconds");
+
+      const ttsEvent = repo.recordedUsageEvents.find(
+        (e) => e.metric === "text_to_speech_characters",
+      );
+      expect(ttsEvent?.quantity).toBeGreaterThan(0);
+
+      const outboundEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "whatsapp_outbound_messages",
+      );
+      expect(outboundEvents).toHaveLength(2);
+      // Text and audio replies get distinct idempotency keys even though
+      // both derive from the same inbound messageId.
+      expect(new Set(outboundEvents.map((e) => e.idempotencyKey)).size).toBe(2);
+    });
+
+    it("does not double-count usage across a simulated redelivery of the same voice job (idempotency)", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+      await processVoiceJob(deps, makePayload()); // redelivery of the same queue job
+
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric).sort();
+      expect(metrics).toEqual(
+        [
+          "claude_cached_input_tokens",
+          "claude_input_tokens",
+          "claude_output_tokens",
+          "claude_requests",
+          "text_to_speech_characters",
+          "whatsapp_inbound_messages",
+          "whatsapp_outbound_messages",
+          "whatsapp_outbound_messages",
+        ].sort(),
+      );
+    });
+
+    it("records the real TTS provider identity on generated_audio, never hardcoded", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(repo.recordedGeneratedAudio[0]).toMatchObject({ provider: ttsProvider.providerName });
+    });
+
+    it("records inbound message usage but no Claude/TTS usage when speech-to-text fails non-retryably before a transcript exists", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      sttProvider.transcribe = async () => {
+        throw new ElevenLabsProviderError("speech-to-text", 400, "invalid_request", false);
+      };
+
+      await processVoiceJob(deps, makePayload());
+
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric);
+      expect(metrics).toEqual(["whatsapp_inbound_messages"]);
+    });
+
+    it("records inbound message usage but no Claude/TTS usage when the AI provider fails before returning", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      aiProvider.respond = () => {
+        throw new Error("simulated Anthropic authentication failure");
+      };
+
+      await expect(processVoiceJob(deps, makePayload())).rejects.toThrow();
+
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric);
+      expect(metrics).toEqual(["whatsapp_inbound_messages"]);
+    });
+
+    it("does not record a TTS-character or audio outbound-message usage when TTS/upload/send fails ambiguously", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      deps.ttsProvider = {
+        providerName: "mock",
+        synthesize: async () => {
+          throw new Error("network timeout");
+        },
+      };
+
+      await processVoiceJob(deps, makePayload());
+
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric);
+      expect(metrics).not.toContain("text_to_speech_characters");
+      // Only one outbound message (the text reply) was actually sent.
+      expect(metrics.filter((m) => m === "whatsapp_outbound_messages")).toHaveLength(1);
+      // Claude usage is still metered -- the failure is downstream of generation.
+      expect(metrics).toContain("claude_requests");
+    });
+
+    it("a usage-recording failure never blocks the customer-facing voice reply", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      repo.recordUsageEvents = async () => {
+        throw new Error("simulated usage_events write failure");
+      };
+      repo.recordAiUsage = async () => {
+        throw new Error("simulated usage_events write failure");
+      };
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+      expect(whatsappProvider.sentAudio).toHaveLength(1);
     });
   });
 });

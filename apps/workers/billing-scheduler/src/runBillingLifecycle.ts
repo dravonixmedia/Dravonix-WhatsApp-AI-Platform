@@ -12,6 +12,7 @@ export interface BillingLifecycleResult {
   subscriptionsSuspended: number;
   cancellationsFinalized: number;
   remindersSent: number;
+  usageSummariesUpserted: number;
 }
 
 /**
@@ -35,11 +36,20 @@ export interface BillingLifecycleResult {
  *   5. send_due_billing_reminders -- dashboard-visible reminder state for
  *      every still-pending subscription invoice (including a subscription
  *      that just entered grace_period in step 2/3 above).
- * Each RPC is independently idempotent (see migrations 30/32), so if this
- * whole pass is retried, overlaps with another run, or crashes partway
- * through, every step it does reach is still safe to repeat. No email
- * provider is ever invoked here -- see migration 30's header comment for
- * why.
+ *   6. aggregateUsage (P0 usage repair) -- recomputes usage_summaries from
+ *      raw usage_events for every company's current subscription billing
+ *      period. Runs last since it only reads/summarizes data the steps
+ *      above never write (subscriptions/usage_events), so ordering relative
+ *      to them doesn't matter for correctness -- placed last simply so a
+ *      failure here can never block the higher-priority billing-state
+ *      transitions above it.
+ * Each RPC-backed step is independently idempotent (see migrations 30/32);
+ * aggregateUsage is idempotent by construction (full recompute + upsert
+ * against usage_summaries' own unique constraint -- see
+ * usageAggregation.ts). So if this whole pass is retried, overlaps with
+ * another run, or crashes partway through, every step it does reach is
+ * still safe to repeat. No email provider is ever invoked here -- see
+ * migration 30's header comment for why.
  */
 export async function runBillingLifecycle(
   deps: RunBillingLifecycleDeps,
@@ -84,11 +94,20 @@ export async function runBillingLifecycle(
     });
   }
 
+  const usageAggregation = await deps.billingRepo.aggregateUsage();
+  if (usageAggregation.summariesUpserted > 0) {
+    deps.logger.info("Aggregated usage_events into usage_summaries", {
+      companiesProcessed: usageAggregation.companiesProcessed,
+      summariesUpserted: usageAggregation.summariesUpserted,
+    });
+  }
+
   return {
     invoicesGenerated: generated.length,
     subscriptionsAdvanced: advanced.length,
     subscriptionsSuspended: suspended.length,
     cancellationsFinalized: cancellationsFinalized.length,
     remindersSent: reminders.length,
+    usageSummariesUpserted: usageAggregation.summariesUpserted,
   };
 }

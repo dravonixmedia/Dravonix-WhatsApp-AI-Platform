@@ -19,6 +19,7 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
  * transcoding step.
  */
 export class GoogleTextToSpeechProvider implements TextToSpeechProvider {
+  readonly providerName = "google";
   private readonly baseUrl: string;
 
   constructor(private readonly config: GoogleTtsConfig) {

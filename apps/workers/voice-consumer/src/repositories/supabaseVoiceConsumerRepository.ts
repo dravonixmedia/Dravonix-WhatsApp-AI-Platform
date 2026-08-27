@@ -1,10 +1,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
+import type {
+  AiUsageRecorderInput,
+  CompanyAiContext,
+  ConversationMemoryContext,
+  LeadUpdates,
+} from "@dravonix/ai";
 import {
   resolveConversationTemporalContext,
   type AiMode,
   type ConversationState,
 } from "@dravonix/core";
+import { recordUsageEvents as insertUsageEvents, type UsageEventInsert } from "@dravonix/database";
 import type { VoiceConsumerRepository, VoiceConversationContext } from "../repository.js";
 
 const RECENT_MESSAGE_LIMIT = 10;
@@ -388,6 +394,7 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
     voiceId: string | null;
     language: string;
     sourceText: string;
+    provider: string;
     retentionExpiresAt: Date;
   }): Promise<void> {
     const { data: mediaFile, error: mediaError } = await this.client
@@ -410,7 +417,7 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
       company_id: input.companyId,
       message_id: input.messageId,
       media_file_id: mediaFile.id,
-      provider: "google",
+      provider: input.provider,
       voice_id: input.voiceId,
       language: input.language,
       source_text: input.sourceText,
@@ -456,6 +463,43 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
       ...patch,
     });
     if (error) throw error;
+  }
+
+  async recordAiUsage(input: AiUsageRecorderInput): Promise<void> {
+    await insertUsageEvents(this.client, [
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_requests",
+        quantity: input.requestCount,
+        idempotencyKey: `${input.messageId}:claude_requests`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_input_tokens",
+        quantity: input.usage.inputTokens,
+        idempotencyKey: `${input.messageId}:claude_input_tokens`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_output_tokens",
+        quantity: input.usage.outputTokens,
+        idempotencyKey: `${input.messageId}:claude_output_tokens`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_cached_input_tokens",
+        quantity: input.usage.cachedInputTokens,
+        idempotencyKey: `${input.messageId}:claude_cached_input_tokens`,
+      },
+    ]);
+  }
+
+  async recordUsageEvents(events: UsageEventInsert[]): Promise<void> {
+    await insertUsageEvents(this.client, events);
   }
 }
 

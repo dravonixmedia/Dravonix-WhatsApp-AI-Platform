@@ -16,12 +16,13 @@ function makeRepo(overrides: Partial<BillingSchedulerRepository> = {}): BillingS
     suspendExpiredGraceSubscriptions: vi.fn(async () => []),
     finalizeScheduledCancellations: vi.fn(async () => []),
     sendDueReminders: vi.fn(async () => []),
+    aggregateUsage: vi.fn(async () => ({ companiesProcessed: 0, summariesUpserted: 0 })),
     ...overrides,
   };
 }
 
 describe("runBillingLifecycle", () => {
-  it("calls all five RPCs exactly once, in dependency order (generate, advance, suspend, finalize-cancellations, remind)", async () => {
+  it("calls all six steps exactly once, in dependency order (generate, advance, suspend, finalize-cancellations, remind, aggregate-usage)", async () => {
     const callOrder: string[] = [];
     const repo = makeRepo({
       generateDueInvoices: vi.fn(async () => {
@@ -44,6 +45,10 @@ describe("runBillingLifecycle", () => {
         callOrder.push("remind");
         return [];
       }),
+      aggregateUsage: vi.fn(async () => {
+        callOrder.push("aggregate-usage");
+        return { companiesProcessed: 0, summariesUpserted: 0 };
+      }),
     });
     const { logger } = makeLogger();
 
@@ -54,12 +59,14 @@ describe("runBillingLifecycle", () => {
     expect(repo.suspendExpiredGraceSubscriptions).toHaveBeenCalledTimes(1);
     expect(repo.finalizeScheduledCancellations).toHaveBeenCalledTimes(1);
     expect(repo.sendDueReminders).toHaveBeenCalledTimes(1);
+    expect(repo.aggregateUsage).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual([
       "generate",
       "advance",
       "suspend",
       "finalize-cancellations",
       "remind",
+      "aggregate-usage",
     ]);
   });
 
@@ -75,8 +82,24 @@ describe("runBillingLifecycle", () => {
       subscriptionsSuspended: 0,
       cancellationsFinalized: 0,
       remindersSent: 0,
+      usageSummariesUpserted: 0,
     });
     expect(lines.some((l) => l.severity === "warn" || l.severity === "error")).toBe(false);
+  });
+
+  it("reports the usage-summaries-upserted count and logs it at info", async () => {
+    const repo = makeRepo({
+      aggregateUsage: vi.fn(async () => ({ companiesProcessed: 3, summariesUpserted: 5 })),
+    });
+    const { logger, lines } = makeLogger();
+
+    const result = await runBillingLifecycle({ billingRepo: repo, logger });
+
+    expect(result.usageSummariesUpserted).toBe(5);
+    const infoLines = lines.filter((l) => l.severity === "info");
+    expect(
+      infoLines.some((l) => l.message === "Aggregated usage_events into usage_summaries"),
+    ).toBe(true);
   });
 
   it("finalizes scheduled cancellations before sending reminders, so a subscription cancelled this pass never gets a reminder in the same pass", async () => {
@@ -149,7 +172,7 @@ describe("runBillingLifecycle", () => {
   });
 
   it("never calls anything Razorpay- or email-related -- structurally impossible, no such dependency exists on BillingSchedulerRepository", async () => {
-    // This Worker's deps type has exactly five methods, none of which touch
+    // This Worker's deps type has exactly six methods, none of which touch
     // Razorpay or an email provider -- reconciliation of a real payment
     // still only ever happens via reconcile_razorpay_payment (apps/api's
     // webhook route), never from this scheduler.
@@ -161,6 +184,7 @@ describe("runBillingLifecycle", () => {
       subscriptionsSuspended: 0,
       cancellationsFinalized: 0,
       remindersSent: 0,
+      usageSummariesUpserted: 0,
     });
   });
 });

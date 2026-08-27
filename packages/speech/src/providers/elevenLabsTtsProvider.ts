@@ -46,6 +46,7 @@ function isMalayalamLanguageCode(languageCode: string): boolean {
  * against a real API key/response in this environment.
  */
 export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
+  readonly providerName = "elevenlabs";
   private readonly baseUrl: string;
 
   constructor(private readonly config: ElevenLabsTtsConfig) {

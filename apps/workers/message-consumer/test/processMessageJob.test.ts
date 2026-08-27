@@ -1,6 +1,7 @@
-import { MockAiProvider } from "@dravonix/ai";
+import { MockAiProvider, type AiUsageRecorderInput } from "@dravonix/ai";
 import type { EntitlementRepository, EntitlementSnapshot } from "@dravonix/billing";
 import { resolveConversationTemporalContext, type ConversationState } from "@dravonix/core";
+import type { UsageEventInsert } from "@dravonix/database";
 import type {
   HandoverWorkerRepository,
   MessageChannelType,
@@ -86,6 +87,9 @@ class FakeMessageConsumerRepository implements MessageConsumerRepository {
   appliedLeadUpdates: unknown[] = [];
   recordedResearchDiagnostics: Array<{ messageId: string; diagnostics: Record<string, unknown> }> =
     [];
+  /** Deduped by idempotency_key, mirroring usage_events' real unique constraint + ON CONFLICT DO NOTHING behavior -- so a test can call the job twice and assert no double-counting the same way the real database would enforce it. */
+  recordedUsageEvents: UsageEventInsert[] = [];
+  private seenIdempotencyKeys = new Set<string>();
 
   async loadConversationContext(_conversationId: string): Promise<ConversationContext> {
     return this.context;
@@ -100,6 +104,47 @@ class FakeMessageConsumerRepository implements MessageConsumerRepository {
     diagnostics: Record<string, unknown>,
   ): Promise<void> {
     this.recordedResearchDiagnostics.push({ messageId, diagnostics });
+  }
+
+  async recordAiUsage(input: AiUsageRecorderInput): Promise<void> {
+    await this.recordUsageEvents([
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_requests",
+        quantity: input.requestCount,
+        idempotencyKey: `${input.messageId}:claude_requests`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_input_tokens",
+        quantity: input.usage.inputTokens,
+        idempotencyKey: `${input.messageId}:claude_input_tokens`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_output_tokens",
+        quantity: input.usage.outputTokens,
+        idempotencyKey: `${input.messageId}:claude_output_tokens`,
+      },
+      {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        metric: "claude_cached_input_tokens",
+        quantity: input.usage.cachedInputTokens,
+        idempotencyKey: `${input.messageId}:claude_cached_input_tokens`,
+      },
+    ]);
+  }
+
+  async recordUsageEvents(events: UsageEventInsert[]): Promise<void> {
+    for (const event of events) {
+      if (this.seenIdempotencyKeys.has(event.idempotencyKey)) continue;
+      this.seenIdempotencyKeys.add(event.idempotencyKey);
+      this.recordedUsageEvents.push(event);
+    }
   }
 }
 
@@ -829,6 +874,119 @@ describe("processMessageJob", () => {
         researchStagingEnabled: true,
         appEnv: "staging",
       });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+  });
+
+  describe("usage metering (P0 usage repair)", () => {
+    it("records inbound message, AI, and outbound message usage exactly once for a normal turn", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload());
+
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric).sort();
+      expect(metrics).toEqual(
+        [
+          "claude_cached_input_tokens",
+          "claude_input_tokens",
+          "claude_output_tokens",
+          "claude_requests",
+          "whatsapp_inbound_messages",
+          "whatsapp_outbound_messages",
+        ].sort(),
+      );
+      const claudeRequests = repo.recordedUsageEvents.find((e) => e.metric === "claude_requests");
+      expect(claudeRequests?.quantity).toBe(1); // no repair attempt needed
+      expect(claudeRequests?.companyId).toBe(COMPANY_ID);
+    });
+
+    it("does not double-count usage across a simulated redelivery of the same message (idempotency)", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload());
+      await processMessageJob(deps, makePayload()); // redelivery -- same messageId
+
+      // aiProvider reran (proven by the existing redelivery test above), but
+      // every usage_events idempotency_key is derived solely from the
+      // durable messageId, so the fake's ON-CONFLICT-DO-NOTHING dedup (the
+      // same mechanism the real unique(idempotency_key) constraint enforces)
+      // collapses both runs to exactly one row per metric.
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric).sort();
+      expect(metrics).toEqual(
+        [
+          "claude_cached_input_tokens",
+          "claude_input_tokens",
+          "claude_output_tokens",
+          "claude_requests",
+          "whatsapp_inbound_messages",
+          "whatsapp_outbound_messages",
+        ].sort(),
+      );
+    });
+
+    it("records distinct usage for a different message on the same conversation", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+
+      await processMessageJob(deps, makePayload({ messageId: "msg-1" }));
+      await processMessageJob(deps, makePayload({ messageId: "msg-2" }));
+
+      const inboundEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "whatsapp_inbound_messages",
+      );
+      expect(inboundEvents).toHaveLength(2);
+      expect(new Set(inboundEvents.map((e) => e.idempotencyKey)).size).toBe(2);
+    });
+
+    it("isolates usage by company -- two companies' events never share an idempotency key or get merged", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      const otherCompanyId = "bbbbbbbb-0000-0000-0000-000000000002";
+      repo.context = baseConversationContext({ companyId: otherCompanyId });
+
+      await processMessageJob(deps, makePayload({ companyId: COMPANY_ID, messageId: "msg-a" }));
+      await processMessageJob(deps, makePayload({ companyId: otherCompanyId, messageId: "msg-b" }));
+
+      const companyIds = new Set(repo.recordedUsageEvents.map((e) => e.companyId));
+      expect(companyIds).toEqual(new Set([COMPANY_ID, otherCompanyId]));
+    });
+
+    it("records inbound message usage but no Claude usage when the AI provider fails before returning", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      aiProvider.respond = () => {
+        throw new Error("simulated Anthropic authentication failure");
+      };
+
+      await expect(processMessageJob(deps, makePayload())).rejects.toThrow();
+
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric);
+      expect(metrics).toEqual(["whatsapp_inbound_messages"]);
+    });
+
+    it("does not record outbound message usage when the WhatsApp send fails ambiguously", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      whatsappProvider.sendText = async () => {
+        throw new Error("simulated network failure");
+      };
+
+      await processMessageJob(deps, makePayload());
+
+      const metrics = repo.recordedUsageEvents.map((e) => e.metric);
+      expect(metrics).not.toContain("whatsapp_outbound_messages");
+      // The AI call itself still succeeded and is still metered -- only the
+      // send-confirmation-gated outbound count is affected.
+      expect(metrics).toContain("claude_requests");
+    });
+
+    it("a usage-recording failure never blocks the customer-facing AI reply", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      repo.recordUsageEvents = async () => {
+        throw new Error("simulated usage_events write failure");
+      };
+      repo.recordAiUsage = async () => {
+        throw new Error("simulated usage_events write failure");
+      };
 
       await processMessageJob(deps, makePayload());
 
