@@ -10,12 +10,13 @@ export interface BillingLifecycleResult {
   invoicesGenerated: number;
   subscriptionsAdvanced: number;
   subscriptionsSuspended: number;
+  cancellationsFinalized: number;
   remindersSent: number;
 }
 
 /**
- * One daily billing lifecycle pass (Phase 6C). Runs the four migration-30
- * RPCs in dependency order:
+ * One daily billing lifecycle pass (Phase 6C, extended by Phase 7B). Runs
+ * five RPCs in dependency order:
  *   1. generate_due_subscription_invoices -- so a subscription that just
  *      lapsed today (or was never invoiced before this migration existed)
  *      has its invoice on record before the next step looks for one.
@@ -23,13 +24,22 @@ export interface BillingLifecycleResult {
  *      grace_period for anything whose period has lapsed unpaid.
  *   3. suspend_expired_grace_subscriptions -- grace_period -> suspended for
  *      anything whose grace period has actually elapsed.
- *   4. send_due_billing_reminders -- dashboard-visible reminder state for
+ *   4. finalize_scheduled_subscription_cancellations (migration 32) --
+ *      cancel_at_period_end -> cancelled for anything whose scheduled
+ *      cancellation period has actually ended. Runs BEFORE step 5 on
+ *      purpose: a subscription finalized to cancelled in this same pass
+ *      must never receive a reminder in that same pass -- send_due_billing_
+ *      reminders already excludes cancelled subscriptions, so ordering this
+ *      step first makes that exclusion take effect within a single run
+ *      rather than waiting for tomorrow's pass.
+ *   5. send_due_billing_reminders -- dashboard-visible reminder state for
  *      every still-pending subscription invoice (including a subscription
  *      that just entered grace_period in step 2/3 above).
- * Each RPC is independently idempotent (see migration 30), so if this whole
- * pass is retried, overlaps with another run, or crashes partway through,
- * every step it does reach is still safe to repeat. No email provider is
- * ever invoked here -- see migration 30's header comment for why.
+ * Each RPC is independently idempotent (see migrations 30/32), so if this
+ * whole pass is retried, overlaps with another run, or crashes partway
+ * through, every step it does reach is still safe to repeat. No email
+ * provider is ever invoked here -- see migration 30's header comment for
+ * why.
  */
 export async function runBillingLifecycle(
   deps: RunBillingLifecycleDeps,
@@ -58,6 +68,14 @@ export async function runBillingLifecycle(
     });
   }
 
+  const cancellationsFinalized = await deps.billingRepo.finalizeScheduledCancellations();
+  if (cancellationsFinalized.length > 0) {
+    deps.logger.info("Finalized scheduled subscription cancellations", {
+      count: cancellationsFinalized.length,
+      companyIds: cancellationsFinalized.map((c) => c.companyId),
+    });
+  }
+
   const reminders = await deps.billingRepo.sendDueReminders();
   if (reminders.length > 0) {
     deps.logger.info("Sent billing reminders", {
@@ -70,6 +88,7 @@ export async function runBillingLifecycle(
     invoicesGenerated: generated.length,
     subscriptionsAdvanced: advanced.length,
     subscriptionsSuspended: suspended.length,
+    cancellationsFinalized: cancellationsFinalized.length,
     remindersSent: reminders.length,
   };
 }

@@ -15,9 +15,12 @@ compatibility_flags = ["nodejs_compat"]
 # previously-unbuilt "apps/workers/billing-consumer" scope, renamed
 # billing-scheduler here since it is a cron-triggered periodic sweep, not a
 # queue consumer -- the Razorpay webhook path itself is served directly by
-# apps/api, per migration 28). Calls, in order, four migration-30 RPCs:
+# apps/api, per migration 28). Calls, in order, five RPCs:
 # generate_due_subscription_invoices, advance_overdue_subscriptions,
-# suspend_expired_grace_subscriptions, send_due_billing_reminders. Never
+# suspend_expired_grace_subscriptions (all migration 30),
+# finalize_scheduled_subscription_cancellations (migration 32, Phase 7B --
+# completes a cancel_at_period_end subscription once its period has
+# actually ended), send_due_billing_reminders (migration 30/31). Never
 # sends a real email (see migration 30's header comment) and never touches
 # Meta/WhatsApp -- structurally impossible, this Worker holds no such
 # dependency at all.

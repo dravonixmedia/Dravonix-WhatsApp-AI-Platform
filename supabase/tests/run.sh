@@ -117,6 +117,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_billing_autom
 echo "Running Phase 6C migration 31 billing automation correction assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_billing_automation_corrections.sql"
 
+echo "Running Phase 7B Super Admin subscription control plane (migration 32) assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_super_admin_subscription_controls.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------

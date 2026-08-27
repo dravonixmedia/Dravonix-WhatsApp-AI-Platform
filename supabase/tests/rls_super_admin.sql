@@ -332,15 +332,15 @@ select test_assert_raises(
 
 select test_assert(
   'admin_change_subscription_state transitions the subscription and is reflected immediately',
-  (select state from admin_change_subscription_state('60000001-0000-0000-0000-000000000001', 'active', 'manual activation for testing')) = 'active'
+  (select state from admin_change_subscription_state('60000001-0000-0000-0000-000000000001', 'trial', 'manual trial start for testing')) = 'trial'
 );
 
 select test_assert(
-  'a subscription_events row records the manual state change with is_manual_override=true',
+  'a subscription_events row records the transition with the canonical start_trial event and is_manual_override=true (Phase 7B: admin_change_subscription_state now derives the real event server-side instead of writing manual_state_change; corrected by the Phase 7B independent-review correction pass to use onboarding -> trial, since onboarding -> active is no longer admin-allowed)',
   exists (
     select 1 from subscription_events
-    where company_id = '60000001-0000-0000-0000-000000000001' and event = 'manual_state_change'
-      and to_state = 'active' and is_manual_override = true
+    where company_id = '60000001-0000-0000-0000-000000000001' and event = 'start_trial'
+      and from_state = 'onboarding' and to_state = 'trial' and is_manual_override = true
   )
 );
 

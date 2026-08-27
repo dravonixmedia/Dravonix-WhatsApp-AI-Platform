@@ -189,6 +189,24 @@ export async function setCompanyEntitlementAction(
   revalidatePath("/admin/entitlements");
 }
 
+export async function resetCompanyEntitlementAction(
+  companyId: string,
+  formData: FormData,
+): Promise<void> {
+  const supabase = await requireSuperAdminClient();
+  const featureKey = str(formData, "feature_key");
+  if (!featureKey) throw new Error("Feature key is required");
+
+  const { error } = await supabase.rpc("admin_reset_company_entitlement", {
+    p_company_id: companyId,
+    p_feature_key: featureKey,
+    p_reason: str(formData, "reason"),
+  });
+  if (error) throw error;
+  revalidateAdminCompanyPaths(companyId);
+  revalidatePath("/admin/entitlements");
+}
+
 export async function startSupportAccessAction(
   companyId: string,
   formData: FormData,
