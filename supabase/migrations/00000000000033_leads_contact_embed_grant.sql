@@ -1,0 +1,64 @@
+-- Dravonix WhatsApp AI Platform
+-- P0 deadline-recovery fix: restore the leads -> contacts embed grant that
+-- Migration 26 omitted.
+--
+-- ROOT CAUSE (independently reconfirmed against hosted staging before
+-- writing this migration):
+--
+-- Migration 26 (00000000000026_close_phone_bypass.sql) revoked table-level
+-- SELECT on public.leads from authenticated and re-granted an explicit
+-- column allowlist built from every remaining authenticated leads query at
+-- the time. That allowlist omitted contact_id.
+--
+-- apps/web/lib/repositories/leadsRepository.ts's LEAD_SELECT_COLUMNS (used
+-- by both listLeads and getLead, i.e. every render of /dashboard/leads and
+-- /dashboard/leads/[leadId]) and apps/web/lib/repositories/
+-- globalSearchRepository.ts's searchLeads both select a PostgREST embedded
+-- relation: `contacts (display_name, profile_name)`. PostgREST compiles
+-- this into a SQL join on `contacts.id = leads.contact_id`, which requires
+-- SELECT privilege on leads.contact_id even though contact_id itself never
+-- appears in the embed's own output field list -- Postgres enforces
+-- column-level privileges on every column a query *references* (including
+-- implicit join columns), not only the ones it returns. With contact_id
+-- absent from the migration 26 allowlist, every one of these queries as the
+-- authenticated role raises `42501 permission denied for table leads`,
+-- which the repository re-throws and which surfaces to the client as the
+-- Next.js dashboard's generic "Something went wrong" error boundary.
+-- Reproduced directly against hosted staging (project lshfkxirfbjwlklqwqnf)
+-- prior to this migration.
+--
+-- THIS IS A GRANT-ONLY FIX. Confirmed before writing this migration:
+--   - RLS is not the defect and is not touched here: leads_select_member
+--     and leads_update_member (migration 5) reference only company_id via
+--     has_company_permission(); contacts_select_member (migration 26)
+--     references only company_id via has_company_permission() /
+--     is_platform_staff() also. Neither policy's USING/WITH CHECK
+--     expression references contact_id, so this grant cannot change which
+--     rows any role can see -- RLS remains fully authoritative for row
+--     scope, exactly as before.
+--   - This does not restore table-level SELECT, and does not grant
+--     phone_number (still excluded on leads) or any contacts column beyond
+--     what migration 26 already grants (id, company_id, display_name,
+--     profile_name, last_detected_language, timezone, created_at --
+--     whatsapp_wa_id remains excluded there too). contact_id is a bare
+--     foreign-key pointer into a contacts row whose only newly-joinable
+--     columns (display_name, profile_name) were already authenticated-
+--     readable directly on contacts since migration 26 -- this grant makes
+--     the existing, intended embed queryable, it does not expose any
+--     column that was not already reachable by other means.
+--   - Live-confirmed allowlist on public.leads for authenticated
+--     immediately before this migration (19 columns, exactly migration 26's
+--     list): id, company_id, customer_name, company_name, service_interest,
+--     product_interest, budget, preferred_timeline, email, location,
+--     branch, notes, source, score, stage, assigned_member_id,
+--     conversation_id, created_at, updated_at. This migration adds exactly
+--     one column to that list: contact_id.
+--
+-- No RLS policy changes, no table alteration, no new columns, no unique
+-- constraints, no application code changes, and no changes to any other
+-- migration -- this is the single additive GRANT statement described above,
+-- nothing else.
+
+grant select (contact_id)
+  on public.leads
+  to authenticated;
