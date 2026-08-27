@@ -13,6 +13,30 @@ export interface BillingLifecycleResult {
   cancellationsFinalized: number;
   remindersSent: number;
   usageSummariesUpserted: number;
+  /**
+   * True when step 6 (aggregateUsage) threw and was caught at the lifecycle
+   * level (P0 usage-repair independent review, Correction 3) -- the
+   * higher-priority billing-state steps above it (1-5) still ran and
+   * succeeded even when this is true. usageSummariesUpserted is 0 in that
+   * case, which reflects "this pass upserted nothing," not "usage is
+   * verified to be zero" -- callers doing observability/alerting on usage
+   * freshness must check this flag, not just usageSummariesUpserted === 0.
+   */
+  usageAggregationFailed: boolean;
+}
+
+/**
+ * Never includes usage_events row content or company-identifying detail
+ * beyond what the caller already has via logger context. Deliberately keyed
+ * as `errorMessage`, not `message` -- createLogLine spreads this object
+ * after its own `message` field, so a `message` key here would silently
+ * overwrite the log line's actual message text.
+ */
+function safeErrorDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return { errorType: error.name, errorMessage: error.message };
+  }
+  return { errorType: "unknown" };
 }
 
 /**
@@ -94,12 +118,32 @@ export async function runBillingLifecycle(
     });
   }
 
-  const usageAggregation = await deps.billingRepo.aggregateUsage();
-  if (usageAggregation.summariesUpserted > 0) {
-    deps.logger.info("Aggregated usage_events into usage_summaries", {
-      companiesProcessed: usageAggregation.companiesProcessed,
-      summariesUpserted: usageAggregation.summariesUpserted,
-    });
+  // Isolated in its own try/catch (P0 usage-repair independent review,
+  // Correction 3): a failure here is a usage-accounting problem, never a
+  // billing-lifecycle failure -- steps 1-5 above have already durably
+  // succeeded by this point, and this whole function must not reject solely
+  // because usage aggregation (a read-only summarization step) had a bad
+  // pass. The caller (worker.ts's scheduled() handler) already swallows any
+  // rejection from this function without retrying, so letting aggregateUsage
+  // propagate would have silently discarded evidence that steps 1-5 worked;
+  // catching it here instead lets the result accurately report both facts.
+  let usageSummariesUpserted = 0;
+  let usageAggregationFailed = false;
+  try {
+    const usageAggregation = await deps.billingRepo.aggregateUsage();
+    usageSummariesUpserted = usageAggregation.summariesUpserted;
+    if (usageAggregation.summariesUpserted > 0) {
+      deps.logger.info("Aggregated usage_events into usage_summaries", {
+        companiesProcessed: usageAggregation.companiesProcessed,
+        summariesUpserted: usageAggregation.summariesUpserted,
+      });
+    }
+  } catch (error) {
+    usageAggregationFailed = true;
+    deps.logger.error(
+      "Usage aggregation failed -- billing-state steps in this pass were unaffected",
+      safeErrorDetails(error),
+    );
   }
 
   return {
@@ -108,6 +152,7 @@ export async function runBillingLifecycle(
     subscriptionsSuspended: suspended.length,
     cancellationsFinalized: cancellationsFinalized.length,
     remindersSent: reminders.length,
-    usageSummariesUpserted: usageAggregation.summariesUpserted,
+    usageSummariesUpserted,
+    usageAggregationFailed,
   };
 }

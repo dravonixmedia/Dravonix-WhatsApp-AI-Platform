@@ -154,9 +154,10 @@ export async function processMessageJob(
     ReturnType<typeof generateValidatedResponse>
   >["researchDiagnostics"];
   let usage: Awaited<ReturnType<typeof generateValidatedResponse>>["usage"];
+  let callId: string;
   let repaired: boolean;
   try {
-    ({ response, usedFallback, research, researchDiagnostics, usage, repaired } =
+    ({ response, usedFallback, research, researchDiagnostics, usage, callId, repaired } =
       await generateValidatedResponse(
         {
           provider: deps.aiProvider,
@@ -194,22 +195,28 @@ export async function processMessageJob(
     throw error;
   }
 
-  // Usage metering (P0 usage repair): generateValidatedResponse returning at
-  // all (rather than throwing, handled above) means at least one real
-  // provider.generate() round trip completed and consumed real, billable
-  // tokens -- true regardless of whether the structured output was valid or
-  // a repair/fallback was needed (see AiUsageRecorder's doc comment).
-  // `repaired` distinguishes one real call from two. Idempotency key is
-  // keyed on the durable inbound messageId, so a retry that re-runs this
-  // whole job recomputes and re-submits identical keys, which the
-  // database's unique(idempotency_key) constraint silently no-ops rather
-  // than double-counts. Best-effort, matching the inbound-message usage
-  // write above -- a metering failure must never block the customer's reply.
+  // Usage metering (P0 usage repair, corrected per independent review /
+  // ADR-0004): generateValidatedResponse returning at all (rather than
+  // throwing, handled above) means at least one real provider.generate()
+  // round trip completed and consumed real, billable tokens -- true
+  // regardless of whether the structured output was valid or a
+  // repair/fallback was needed (see AiUsageRecorder's doc comment).
+  // `repaired` distinguishes one real call from two. Idempotency is keyed
+  // on `callId`, NOT payload.messageId -- callId is generated fresh inside
+  // generateValidatedResponse for every real invocation, so a queue retry
+  // that genuinely re-invokes Claude for this same inbound message gets a
+  // distinct callId and is correctly recorded as separate, additional
+  // provider consumption, never silently dropped as a duplicate of the
+  // first attempt (this is the exact defect the independent review found:
+  // keying on messageId alone undercounts real Claude cost on retry).
+  // Best-effort, matching the inbound-message usage write above -- a
+  // metering failure must never block the customer's reply.
   try {
     await recordAiUsage(deps.repo, {
       companyId: payload.companyId,
       conversationId: payload.conversationId,
       messageId: payload.messageId,
+      callId,
       usage,
       requestCount: repaired ? 2 : 1,
       requestSucceeded: true,

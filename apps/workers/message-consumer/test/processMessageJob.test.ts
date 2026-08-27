@@ -107,34 +107,37 @@ class FakeMessageConsumerRepository implements MessageConsumerRepository {
   }
 
   async recordAiUsage(input: AiUsageRecorderInput): Promise<void> {
+    // Mirrors SupabaseMessageConsumerRepository.recordAiUsage's keying --
+    // see AiUsageRecorderInput.callId's doc comment.
+    const keyPrefix = `${input.messageId}:${input.callId}`;
     await this.recordUsageEvents([
       {
         companyId: input.companyId,
         conversationId: input.conversationId,
         metric: "claude_requests",
         quantity: input.requestCount,
-        idempotencyKey: `${input.messageId}:claude_requests`,
+        idempotencyKey: `${keyPrefix}:claude_requests`,
       },
       {
         companyId: input.companyId,
         conversationId: input.conversationId,
         metric: "claude_input_tokens",
         quantity: input.usage.inputTokens,
-        idempotencyKey: `${input.messageId}:claude_input_tokens`,
+        idempotencyKey: `${keyPrefix}:claude_input_tokens`,
       },
       {
         companyId: input.companyId,
         conversationId: input.conversationId,
         metric: "claude_output_tokens",
         quantity: input.usage.outputTokens,
-        idempotencyKey: `${input.messageId}:claude_output_tokens`,
+        idempotencyKey: `${keyPrefix}:claude_output_tokens`,
       },
       {
         companyId: input.companyId,
         conversationId: input.conversationId,
         metric: "claude_cached_input_tokens",
         quantity: input.usage.cachedInputTokens,
-        idempotencyKey: `${input.messageId}:claude_cached_input_tokens`,
+        idempotencyKey: `${keyPrefix}:claude_cached_input_tokens`,
       },
     ]);
   }
@@ -903,28 +906,89 @@ describe("processMessageJob", () => {
       expect(claudeRequests?.companyId).toBe(COMPANY_ID);
     });
 
-    it("does not double-count usage across a simulated redelivery of the same message (idempotency)", async () => {
+    it("CASE B: a repair attempt (2 real provider calls in one invocation) records claude_requests=2 with summed tokens", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      aiProvider.respond = (_input, repairInstruction) =>
+        repairInstruction
+          ? JSON.stringify({
+              answer: "Repaired answer.",
+              language: "en",
+              intent: "general_enquiry",
+              confidence: 0.8,
+              replyMode: "auto",
+              leadUpdates: null,
+              requiresHuman: false,
+              handoverReason: null,
+              knowledgeSourceIds: [],
+              internalNotes: null,
+            })
+          : "not valid json, forces a repair attempt";
+
+      await processMessageJob(deps, makePayload());
+
+      expect(aiProvider.calls).toHaveLength(2); // first attempt + repair, same invocation
+      const claudeRequests = repo.recordedUsageEvents.find((e) => e.metric === "claude_requests");
+      expect(claudeRequests?.quantity).toBe(2);
+      const inputTokens = repo.recordedUsageEvents.find((e) => e.metric === "claude_input_tokens");
+      expect(inputTokens?.quantity).toBe(200); // MockAiProvider: 100 per call x 2 calls
+      const outputTokens = repo.recordedUsageEvents.find(
+        (e) => e.metric === "claude_output_tokens",
+      );
+      expect(outputTokens?.quantity).toBe(100); // MockAiProvider: 50 per call x 2 calls
+    });
+
+    it("CASE C: a simulated redelivery that genuinely re-invokes Claude retains TWO distinct sets of Claude provider-consumption usage (never collapsed as a duplicate)", async () => {
       const deps = makeDeps(activeEntitlementSnapshot());
 
       await processMessageJob(deps, makePayload());
-      await processMessageJob(deps, makePayload()); // redelivery -- same messageId
+      await processMessageJob(deps, makePayload()); // redelivery of the same queue message -- Claude genuinely called again
 
-      // aiProvider reran (proven by the existing redelivery test above), but
-      // every usage_events idempotency_key is derived solely from the
-      // durable messageId, so the fake's ON-CONFLICT-DO-NOTHING dedup (the
-      // same mechanism the real unique(idempotency_key) constraint enforces)
-      // collapses both runs to exactly one row per metric.
-      const metrics = repo.recordedUsageEvents.map((e) => e.metric).sort();
-      expect(metrics).toEqual(
-        [
-          "claude_cached_input_tokens",
-          "claude_input_tokens",
-          "claude_output_tokens",
-          "claude_requests",
-          "whatsapp_inbound_messages",
-          "whatsapp_outbound_messages",
-        ].sort(),
+      expect(aiProvider.calls).toHaveLength(2);
+
+      // Claude usage is keyed on callId (fresh per real provider invocation),
+      // NOT on messageId alone -- so two genuine provider calls are both
+      // retained as separate provider-consumption records, per ADR-0004 and
+      // the P0 usage-repair independent review correction.
+      const claudeRequestEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "claude_requests",
       );
+      expect(claudeRequestEvents).toHaveLength(2);
+      expect(new Set(claudeRequestEvents.map((e) => e.idempotencyKey)).size).toBe(2);
+      expect(claudeRequestEvents.reduce((sum, e) => sum + e.quantity, 0)).toBe(2);
+
+      // WhatsApp inbound/outbound message metrics are unaffected by this
+      // correction -- they remain protected by the reserve/claim guard and
+      // stay keyed on messageId alone, so the redelivery still collapses to
+      // exactly one of each.
+      const inboundEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "whatsapp_inbound_messages",
+      );
+      const outboundEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "whatsapp_outbound_messages",
+      );
+      expect(inboundEvents).toHaveLength(1);
+      expect(outboundEvents).toHaveLength(1);
+    });
+
+    it("CASE D: re-persisting usage for the SAME provider call (same messageId + callId) remains idempotent", async () => {
+      const usageInput: AiUsageRecorderInput = {
+        companyId: COMPANY_ID,
+        conversationId: CONVERSATION_ID,
+        messageId: "msg-1",
+        callId: "11111111-1111-1111-1111-111111111111",
+        usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 0 },
+        requestCount: 1,
+        requestSucceeded: true,
+      };
+
+      await repo.recordAiUsage(usageInput);
+      await repo.recordAiUsage(usageInput); // retry of persisting the SAME call's usage
+
+      const claudeRequestEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "claude_requests",
+      );
+      expect(claudeRequestEvents).toHaveLength(1);
+      expect(claudeRequestEvents[0]?.quantity).toBe(1);
     });
 
     it("records distinct usage for a different message on the same conversation", async () => {

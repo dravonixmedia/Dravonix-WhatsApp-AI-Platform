@@ -479,7 +479,7 @@ export async function processVoiceJob(
     transcriptCharCount: normalizedTranscript.length,
   });
 
-  const { response, usedFallback, repaired, usage } = await generateValidatedResponse(
+  const { response, usedFallback, repaired, usage, callId } = await generateValidatedResponse(
     {
       provider: deps.aiProvider,
       onValidationFailure: (details) =>
@@ -510,17 +510,22 @@ export async function processVoiceJob(
     },
   );
 
-  // Usage metering (P0 usage repair): generateValidatedResponse returning at
-  // all means a real provider.generate() round trip completed and consumed
-  // real, billable tokens -- see processMessageJob.ts's identical write for
-  // the full rationale. Idempotency key is keyed on the durable inbound
-  // messageId, so a queue retry that re-runs this job can never
-  // double-count. Best-effort.
+  // Usage metering (P0 usage repair, corrected per independent review /
+  // ADR-0004): generateValidatedResponse returning at all means a real
+  // provider.generate() round trip completed and consumed real, billable
+  // tokens -- see processMessageJob.ts's identical write for the full
+  // rationale. Idempotency is keyed on `callId`, NOT payload.messageId --
+  // callId is generated fresh inside generateValidatedResponse for every
+  // real invocation, so a queue retry that genuinely re-invokes Claude for
+  // this same inbound voice note gets a distinct callId and is correctly
+  // recorded as separate, additional provider consumption, never silently
+  // dropped as a duplicate of the first attempt. Best-effort.
   try {
     await recordAiUsage(deps.repo, {
       companyId: payload.companyId,
       conversationId: payload.conversationId,
       messageId: payload.messageId,
+      callId,
       usage,
       requestCount: repaired ? 2 : 1,
       requestSucceeded: true,

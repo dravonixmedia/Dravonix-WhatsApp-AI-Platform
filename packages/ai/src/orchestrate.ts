@@ -13,6 +13,22 @@ import type { AiGenerationInput, AiProvider, AiUsage } from "./provider.js";
 export interface OrchestrationResult {
   response: AiStructuredResponse;
   usage: AiUsage;
+  /**
+   * Stable identifier for this specific generateValidatedResponse invocation
+   * -- i.e. this specific unit of real provider consumption (one
+   * provider.generate() call, or two when repaired is true, since usage
+   * already sums both into one accounting unit). Generated fresh, once, at
+   * the top of this function -- a distinct call to generateValidatedResponse
+   * (e.g. a queue redelivery that genuinely re-invokes Claude) always gets a
+   * new, different callId, so usage accounting keyed on it (see
+   * @dravonix/ai's AiUsageRecorder) records each real invocation separately
+   * instead of collapsing retries into one another (ADR-0004: token
+   * accounting must reflect actual provider consumption per call). Callers
+   * must never derive this from anything else (like the inbound message
+   * id) -- doing so would silently reintroduce the exact bug this field
+   * exists to prevent.
+   */
+  callId: string;
   /** true if the first attempt was invalid and a repair attempt was needed (or also failed). */
   repaired: boolean;
   /** true if both the original and repair attempts failed and a safe fallback was used. */
@@ -274,6 +290,12 @@ export async function generateValidatedResponse(
     input.memory.lastDetectedLanguage ??
     input.company.fallbackLanguage;
 
+  // Usage accounting (ADR-0004, P0 usage-repair correction): generated once,
+  // here, before any real provider.generate() call below -- see
+  // OrchestrationResult.callId's doc comment for why this must be fresh per
+  // invocation rather than derived from the caller's own message identity.
+  const callId = crypto.randomUUID();
+
   // Phase 1 research seam: observation only, see OrchestrationDependencies.research above.
   const eligibility = deps.research?.enabled
     ? evaluateResearchEligibility({ knowledge: input.knowledge, researchEnabled: true })
@@ -331,6 +353,7 @@ export async function generateValidatedResponse(
     return {
       response: safetyChecked,
       usage,
+      callId,
       repaired,
       usedFallback: false,
       research,
@@ -445,6 +468,7 @@ export async function generateValidatedResponse(
   return {
     response: safeFallbackResponse(input),
     usage: combinedUsage,
+    callId,
     repaired: true,
     usedFallback: true,
     research: first.research,

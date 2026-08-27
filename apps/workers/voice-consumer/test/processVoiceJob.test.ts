@@ -219,34 +219,37 @@ class FakeVoiceConsumerRepository implements VoiceConsumerRepository {
   private seenIdempotencyKeys = new Set<string>();
 
   async recordAiUsage(input: AiUsageRecorderInput): Promise<void> {
+    // Mirrors SupabaseVoiceConsumerRepository.recordAiUsage's keying -- see
+    // AiUsageRecorderInput.callId's doc comment.
+    const keyPrefix = `${input.messageId}:${input.callId}`;
     await this.recordUsageEvents([
       {
         companyId: input.companyId,
         conversationId: input.conversationId,
         metric: "claude_requests",
         quantity: input.requestCount,
-        idempotencyKey: `${input.messageId}:claude_requests`,
+        idempotencyKey: `${keyPrefix}:claude_requests`,
       },
       {
         companyId: input.companyId,
         conversationId: input.conversationId,
         metric: "claude_input_tokens",
         quantity: input.usage.inputTokens,
-        idempotencyKey: `${input.messageId}:claude_input_tokens`,
+        idempotencyKey: `${keyPrefix}:claude_input_tokens`,
       },
       {
         companyId: input.companyId,
         conversationId: input.conversationId,
         metric: "claude_output_tokens",
         quantity: input.usage.outputTokens,
-        idempotencyKey: `${input.messageId}:claude_output_tokens`,
+        idempotencyKey: `${keyPrefix}:claude_output_tokens`,
       },
       {
         companyId: input.companyId,
         conversationId: input.conversationId,
         metric: "claude_cached_input_tokens",
         quantity: input.usage.cachedInputTokens,
-        idempotencyKey: `${input.messageId}:claude_cached_input_tokens`,
+        idempotencyKey: `${keyPrefix}:claude_cached_input_tokens`,
       },
     ]);
   }
@@ -1434,25 +1437,89 @@ describe("processVoiceJob", () => {
       expect(new Set(outboundEvents.map((e) => e.idempotencyKey)).size).toBe(2);
     });
 
-    it("does not double-count usage across a simulated redelivery of the same voice job (idempotency)", async () => {
+    it("CASE B: a repair attempt (2 real provider calls in one invocation) records claude_requests=2 with summed tokens", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot());
+      aiProvider.respond = (_input, repairInstruction) =>
+        repairInstruction
+          ? JSON.stringify({
+              answer: "Repaired answer.",
+              language: "en",
+              intent: "general_enquiry",
+              confidence: 0.8,
+              replyMode: "auto",
+              leadUpdates: null,
+              requiresHuman: false,
+              handoverReason: null,
+              knowledgeSourceIds: [],
+              internalNotes: null,
+            })
+          : "not valid json, forces a repair attempt";
+
+      await processVoiceJob(deps, makePayload());
+
+      expect(aiProvider.calls).toHaveLength(2); // first attempt + repair, same invocation
+      const claudeRequests = repo.recordedUsageEvents.find((e) => e.metric === "claude_requests");
+      expect(claudeRequests?.quantity).toBe(2);
+      const inputTokens = repo.recordedUsageEvents.find((e) => e.metric === "claude_input_tokens");
+      expect(inputTokens?.quantity).toBe(200); // MockAiProvider: 100 per call x 2 calls
+      const outputTokens = repo.recordedUsageEvents.find(
+        (e) => e.metric === "claude_output_tokens",
+      );
+      expect(outputTokens?.quantity).toBe(100); // MockAiProvider: 50 per call x 2 calls
+    });
+
+    it("CASE C: a simulated redelivery that genuinely re-invokes Claude retains TWO distinct sets of Claude provider-consumption usage (never collapsed as a duplicate), while WhatsApp/TTS metrics stay claim-guarded to one set", async () => {
       const deps = makeDeps(activeEntitlementSnapshot());
 
       await processVoiceJob(deps, makePayload());
-      await processVoiceJob(deps, makePayload()); // redelivery of the same queue job
+      await processVoiceJob(deps, makePayload()); // redelivery of the same queue job -- Claude genuinely called again
 
-      const metrics = repo.recordedUsageEvents.map((e) => e.metric).sort();
-      expect(metrics).toEqual(
-        [
-          "claude_cached_input_tokens",
-          "claude_input_tokens",
-          "claude_output_tokens",
-          "claude_requests",
-          "text_to_speech_characters",
-          "whatsapp_inbound_messages",
-          "whatsapp_outbound_messages",
-          "whatsapp_outbound_messages",
-        ].sort(),
+      expect(aiProvider.calls).toHaveLength(2);
+
+      const claudeRequestEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "claude_requests",
       );
+      expect(claudeRequestEvents).toHaveLength(2);
+      expect(new Set(claudeRequestEvents.map((e) => e.idempotencyKey)).size).toBe(2);
+      expect(claudeRequestEvents.reduce((sum, e) => sum + e.quantity, 0)).toBe(2);
+
+      // TTS is structurally never genuinely re-invoked on redelivery -- the
+      // reserve/claim guard in reserveAiOutboundMessage returns early before
+      // synthesize() is called -- so its usage stays deduped to one set,
+      // unlike Claude's.
+      const ttsEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "text_to_speech_characters",
+      );
+      const inboundEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "whatsapp_inbound_messages",
+      );
+      const outboundEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "whatsapp_outbound_messages",
+      );
+      expect(ttsEvents).toHaveLength(1);
+      expect(inboundEvents).toHaveLength(1);
+      expect(outboundEvents).toHaveLength(2); // text reply + audio reply, both claim-guarded
+    });
+
+    it("CASE D: re-persisting usage for the SAME provider call (same messageId + callId) remains idempotent", async () => {
+      const usageInput: AiUsageRecorderInput = {
+        companyId: COMPANY_ID,
+        conversationId: CONVERSATION_ID,
+        messageId: "msg-1",
+        callId: "11111111-1111-1111-1111-111111111111",
+        usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 0 },
+        requestCount: 1,
+        requestSucceeded: true,
+      };
+
+      await repo.recordAiUsage(usageInput);
+      await repo.recordAiUsage(usageInput); // retry of persisting the SAME call's usage
+
+      const claudeRequestEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "claude_requests",
+      );
+      expect(claudeRequestEvents).toHaveLength(1);
+      expect(claudeRequestEvents[0]?.quantity).toBe(1);
     });
 
     it("records the real TTS provider identity on generated_audio, never hardcoded", async () => {

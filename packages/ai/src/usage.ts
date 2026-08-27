@@ -7,12 +7,32 @@ export interface AiUsageRecorderInput {
    * The durable inbound message id (MessageJobPayload.messageId /
    * VoiceJobPayload.messageId) this generation call was made on behalf of --
    * stable across every queue redelivery/retry of the same logical job.
-   * Concrete recorders derive deterministic usage_events.idempotency_key
-   * values from this (e.g. `${messageId}:claude_requests`), never a random
-   * UUID, so a retried job's re-recorded usage collides harmlessly with the
-   * already-written row instead of double-counting.
+   * Included for correlation/traceability in the raw usage_events table
+   * only -- NOT sufficient on its own for idempotency (see callId below).
+   * A queue redelivery that genuinely re-invokes Claude keeps the same
+   * messageId across both invocations, by design, since it's the same
+   * inbound message; deriving the idempotency key from messageId alone
+   * would silently collapse two real, separately-billed provider calls into
+   * one recorded set, undercounting actual provider consumption (ADR-0004
+   * correction, P0 usage-repair independent review).
    */
   messageId: string;
+  /**
+   * Stable identifier for the SPECIFIC generateValidatedResponse invocation
+   * this usage came from (OrchestrationResult.callId) -- generated fresh,
+   * once, at the top of that function, before any real provider.generate()
+   * call. This -- not messageId -- is what concrete recorders must key
+   * usage_events.idempotency_key on (e.g. `${messageId}:${callId}:
+   * claude_requests`), so that:
+   *   - a queue redelivery that genuinely re-invokes Claude gets a NEW
+   *     callId and is recorded as separate, additional provider consumption
+   *     (never silently dropped as a "duplicate" of the first attempt); and
+   *   - persisting the SAME invocation's usage more than once (e.g. a bug,
+   *     or an explicit retry of only the write) still collides harmlessly
+   *     on the same key instead of double-counting, since callId does not
+   *     change across repeated persistence attempts for one invocation.
+   */
+  callId: string;
   usage: AiUsage;
   /**
    * How many real provider.generate() calls this usage reflects -- 1 for a
