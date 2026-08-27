@@ -23,11 +23,17 @@ export interface SentReminder {
   stage: string;
 }
 
-/** Everything the daily billing scheduler needs -- one method per migration-30 RPC. All transactional/idempotency/tenant-scoping logic lives in those RPCs, not here. */
+export interface FinalizedCancellation {
+  companyId: string;
+  subscriptionId: string;
+}
+
+/** Everything the daily billing scheduler needs -- one method per migration-30/32 RPC. All transactional/idempotency/tenant-scoping logic lives in those RPCs, not here. */
 export interface BillingSchedulerRepository {
   generateDueInvoices(): Promise<GeneratedInvoice[]>;
   advanceOverdueSubscriptions(): Promise<AdvancedSubscription[]>;
   suspendExpiredGraceSubscriptions(): Promise<SuspendedSubscription[]>;
+  finalizeScheduledCancellations(): Promise<FinalizedCancellation[]>;
   sendDueReminders(): Promise<SentReminder[]>;
 }
 
@@ -67,6 +73,15 @@ export class SupabaseBillingSchedulerRepository implements BillingSchedulerRepos
 
   async suspendExpiredGraceSubscriptions(): Promise<SuspendedSubscription[]> {
     const { data, error } = await this.client.rpc("suspend_expired_grace_subscriptions");
+    if (error) throw error;
+    return ((data ?? []) as Array<{ company_id: string; subscription_id: string }>).map((row) => ({
+      companyId: row.company_id,
+      subscriptionId: row.subscription_id,
+    }));
+  }
+
+  async finalizeScheduledCancellations(): Promise<FinalizedCancellation[]> {
+    const { data, error } = await this.client.rpc("finalize_scheduled_subscription_cancellations");
     if (error) throw error;
     return ((data ?? []) as Array<{ company_id: string; subscription_id: string }>).map((row) => ({
       companyId: row.company_id,

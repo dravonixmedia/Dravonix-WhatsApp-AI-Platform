@@ -1,3 +1,4 @@
+import { adminAllowedTransitionTargets, type SubscriptionState } from "@dravonix/billing";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ACTIVE_COMPANY_ROLES, companyRoleLabel } from "../../../../lib/companyRoles.js";
@@ -10,6 +11,7 @@ import {
   deactivateCompanyMemberAction,
   endSupportAccessAction,
   reactivateCompanyAction,
+  resetCompanyEntitlementAction,
   setCompanyEntitlementAction,
   startSupportAccessAction,
   suspendCompanyAction,
@@ -30,19 +32,6 @@ import { computeOnboardingChecklist } from "../../../../lib/onboarding.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 
 export const dynamic = "force-dynamic";
-
-const SUBSCRIPTION_STATES = [
-  "onboarding",
-  "trial",
-  "active",
-  "payment_due",
-  "grace_period",
-  "suspended",
-  "cancel_at_period_end",
-  "cancelled",
-  "manually_suspended",
-  "closed",
-];
 
 const KNOWLEDGE_SOURCE_TYPES = [
   "company_profile",
@@ -287,6 +276,22 @@ export default async function AdminCompanyDetailPage({
   const assignPlanWithId = assignPlanAction.bind(null, id);
   const changeSubscriptionStateWithId = changeSubscriptionStateAction.bind(null, id);
   const setCompanyEntitlementWithId = setCompanyEntitlementAction.bind(null, id);
+  const resetCompanyEntitlementWithId = resetCompanyEntitlementAction.bind(null, id);
+  // Phase 7B: which specific admin-labeled action buttons this subscription's
+  // CURRENT state actually permits -- computed from the same admin-allowed
+  // edge set migration 32's admin_change_subscription_state independently
+  // re-validates server-side (packages/billing's adminAllowedTransitionTargets).
+  // This is convenience-only: the RPC remains authoritative regardless of
+  // what renders here.
+  const allowedTargets = subscription
+    ? new Set(adminAllowedTransitionTargets(subscription.state as SubscriptionState))
+    : new Set<string>();
+  const canScheduleCancellation = allowedTargets.has("cancel_at_period_end");
+  const canReverseCancellation = subscription?.state === "cancel_at_period_end";
+  const canCancelImmediately = allowedTargets.has("cancelled");
+  const canManuallySuspend = allowedTargets.has("manually_suspended");
+  const canReactivate =
+    subscription?.state === "suspended" || subscription?.state === "manually_suspended";
   const startSupportAccessWithId = startSupportAccessAction.bind(null, id);
   const endSupportAccessWithId = endSupportAccessAction.bind(null, id);
   const adminUpdateCompanyProfileWithId = adminUpdateCompanyProfileAction.bind(null, id);
@@ -440,27 +445,106 @@ export default async function AdminCompanyDetailPage({
             </button>
           </form>
 
-          {subscription ? (
+          {/* Phase 7B: one purpose-specific form per admin-allowed action,
+              each rendered only when the subscription's CURRENT state
+              actually permits it (adminAllowedTransitionTargets) -- never a
+              blanket dropdown of all 10 states. Each form's action is fixed
+              (a hidden new_state input), so there is exactly one thing each
+              button can do; admin_change_subscription_state (migration 32)
+              independently re-validates the transition regardless, but the
+              UI itself never offers an invalid one. Every action requires
+              navigating to its own labeled form and clicking its own
+              distinct submit button -- that explicit, separated gesture is
+              this codebase's existing confirmation convention (matching
+              Suspend/Close above), not a JS confirm() dialog or a modal. */}
+          {subscription && canScheduleCancellation ? (
             <form
               action={changeSubscriptionStateWithId}
               style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}
             >
-              <select className="dvx-input" name="new_state" required>
-                <option value="">Change state…</option>
-                {SUBSCRIPTION_STATES.map((s) => (
-                  <option key={s} value={s}>
-                    {s.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
+              <input type="hidden" name="new_state" value="cancel_at_period_end" />
               <input
                 className="dvx-input"
                 name="reason"
-                placeholder="Reason"
-                style={{ width: 140 }}
+                placeholder="Reason (optional)"
+                style={{ width: 160 }}
               />
               <button className="dvx-button dvx-button--secondary" type="submit">
-                Apply
+                Schedule cancellation
+              </button>
+            </form>
+          ) : null}
+
+          {subscription && canReverseCancellation ? (
+            <form
+              action={changeSubscriptionStateWithId}
+              style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}
+            >
+              <input type="hidden" name="new_state" value="active" />
+              <input
+                className="dvx-input"
+                name="reason"
+                placeholder="Reason (optional)"
+                style={{ width: 160 }}
+              />
+              <button className="dvx-button dvx-button--secondary" type="submit">
+                Reverse scheduled cancellation
+              </button>
+            </form>
+          ) : null}
+
+          {subscription && canReactivate ? (
+            <form
+              action={changeSubscriptionStateWithId}
+              style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}
+            >
+              <input type="hidden" name="new_state" value="active" />
+              <input
+                className="dvx-input"
+                name="reason"
+                placeholder="Reason (optional)"
+                style={{ width: 160 }}
+              />
+              <button className="dvx-button dvx-button--secondary" type="submit">
+                Reactivate
+              </button>
+            </form>
+          ) : null}
+
+          {subscription && canManuallySuspend ? (
+            <form
+              action={changeSubscriptionStateWithId}
+              style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}
+            >
+              <input type="hidden" name="new_state" value="manually_suspended" />
+              <input
+                className="dvx-input"
+                name="reason"
+                placeholder="Reason (required)"
+                required
+                style={{ width: 160 }}
+              />
+              <button className="dvx-button dvx-button--secondary" type="submit">
+                Manually suspend
+              </button>
+            </form>
+          ) : null}
+
+          {subscription && canCancelImmediately ? (
+            <form
+              action={changeSubscriptionStateWithId}
+              style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}
+            >
+              <input type="hidden" name="new_state" value="cancelled" />
+              <input
+                className="dvx-input"
+                name="reason"
+                placeholder="Reason (required)"
+                required
+                style={{ width: 160 }}
+              />
+              <button className="dvx-button dvx-button--secondary" type="submit">
+                Cancel immediately
               </button>
             </form>
           ) : null}
@@ -1099,11 +1183,27 @@ export default async function AdminCompanyDetailPage({
                     </span>
                   ) : null}
                 </span>
-                <span
-                  className={`dvx-badge ${entitlement.is_enabled ? "dvx-badge--success" : "dvx-badge--neutral"}`}
-                  style={{ fontSize: "0.7rem" }}
-                >
-                  {entitlement.is_enabled ? "Enabled" : "Disabled"}
+                <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <span
+                    className={`dvx-badge ${entitlement.is_enabled ? "dvx-badge--success" : "dvx-badge--neutral"}`}
+                    style={{ fontSize: "0.7rem" }}
+                  >
+                    {entitlement.is_enabled ? "Enabled" : "Disabled"}
+                  </span>
+                  {/* Phase 7B: restores plan-default behavior by deleting
+                      this exact override row (admin_reset_company_entitlement,
+                      migration 32) -- never edits plan_entitlements, never
+                      copies a plan default into company_entitlements. */}
+                  <form action={resetCompanyEntitlementWithId}>
+                    <input type="hidden" name="feature_key" value={entitlement.feature_key} />
+                    <button
+                      className="dvx-button dvx-button--secondary"
+                      type="submit"
+                      style={{ fontSize: "0.7rem", padding: "0.2rem 0.5rem" }}
+                    >
+                      Reset to plan default
+                    </button>
+                  </form>
                 </span>
               </div>
             ))}

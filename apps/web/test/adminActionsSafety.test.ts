@@ -9,10 +9,12 @@ import { describe, expect, it } from "vitest";
  * getPlatformSession().platformRole === "super_admin" before ever touching
  * Supabase) rather than reading cookies/session state directly, and none of
  * them may call a generic/unrestricted RPC name -- each wraps exactly one
- * named migration-17 RPC. The RPCs themselves are the real security
- * boundary (re-verified independently in supabase/tests/rls_super_admin.sql,
- * a live-Postgres test, not a static one); this file only guards against a
- * regression where a new action forgets the client-side early check.
+ * named super_admin-gated RPC (migration 17, or migration 32 for the two
+ * Phase 7B additions). The RPCs themselves are the real security boundary
+ * (re-verified independently in supabase/tests/rls_super_admin.sql and
+ * rls_super_admin_subscription_controls.sql, live-Postgres tests, not
+ * static ones); this file only guards against a regression where a new
+ * action forgets the client-side early check.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +43,7 @@ describe("Super Admin Server Actions: every mutation is gated and single-purpose
     "assignPlanAction",
     "changeSubscriptionStateAction",
     "setCompanyEntitlementAction",
+    "resetCompanyEntitlementAction",
     "startSupportAccessAction",
     "endSupportAccessAction",
   ];

@@ -336,11 +336,11 @@ select test_assert(
 );
 
 select test_assert(
-  'a subscription_events row records the manual state change with is_manual_override=true',
+  'a subscription_events row records the transition with the canonical activate event and is_manual_override=true (Phase 7B: admin_change_subscription_state now derives the real event server-side instead of writing manual_state_change)',
   exists (
     select 1 from subscription_events
-    where company_id = '60000001-0000-0000-0000-000000000001' and event = 'manual_state_change'
-      and to_state = 'active' and is_manual_override = true
+    where company_id = '60000001-0000-0000-0000-000000000001' and event = 'activate'
+      and from_state = 'onboarding' and to_state = 'active' and is_manual_override = true
   )
 );
 

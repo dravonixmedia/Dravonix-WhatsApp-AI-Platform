@@ -14,13 +14,14 @@ function makeRepo(overrides: Partial<BillingSchedulerRepository> = {}): BillingS
     generateDueInvoices: vi.fn(async () => []),
     advanceOverdueSubscriptions: vi.fn(async () => []),
     suspendExpiredGraceSubscriptions: vi.fn(async () => []),
+    finalizeScheduledCancellations: vi.fn(async () => []),
     sendDueReminders: vi.fn(async () => []),
     ...overrides,
   };
 }
 
 describe("runBillingLifecycle", () => {
-  it("calls all four RPCs exactly once, in dependency order (generate, advance, suspend, remind)", async () => {
+  it("calls all five RPCs exactly once, in dependency order (generate, advance, suspend, finalize-cancellations, remind)", async () => {
     const callOrder: string[] = [];
     const repo = makeRepo({
       generateDueInvoices: vi.fn(async () => {
@@ -35,6 +36,10 @@ describe("runBillingLifecycle", () => {
         callOrder.push("suspend");
         return [];
       }),
+      finalizeScheduledCancellations: vi.fn(async () => {
+        callOrder.push("finalize-cancellations");
+        return [];
+      }),
       sendDueReminders: vi.fn(async () => {
         callOrder.push("remind");
         return [];
@@ -47,8 +52,15 @@ describe("runBillingLifecycle", () => {
     expect(repo.generateDueInvoices).toHaveBeenCalledTimes(1);
     expect(repo.advanceOverdueSubscriptions).toHaveBeenCalledTimes(1);
     expect(repo.suspendExpiredGraceSubscriptions).toHaveBeenCalledTimes(1);
+    expect(repo.finalizeScheduledCancellations).toHaveBeenCalledTimes(1);
     expect(repo.sendDueReminders).toHaveBeenCalledTimes(1);
-    expect(callOrder).toEqual(["generate", "advance", "suspend", "remind"]);
+    expect(callOrder).toEqual([
+      "generate",
+      "advance",
+      "suspend",
+      "finalize-cancellations",
+      "remind",
+    ]);
   });
 
   it("reports zero counts and logs nothing above debug when nothing happened", async () => {
@@ -61,9 +73,27 @@ describe("runBillingLifecycle", () => {
       invoicesGenerated: 0,
       subscriptionsAdvanced: 0,
       subscriptionsSuspended: 0,
+      cancellationsFinalized: 0,
       remindersSent: 0,
     });
     expect(lines.some((l) => l.severity === "warn" || l.severity === "error")).toBe(false);
+  });
+
+  it("finalizes scheduled cancellations before sending reminders, so a subscription cancelled this pass never gets a reminder in the same pass", async () => {
+    const repo = makeRepo({
+      finalizeScheduledCancellations: vi.fn(async () => [
+        { companyId: "company-3", subscriptionId: "sub-3" },
+      ]),
+    });
+    const { logger, lines } = makeLogger();
+
+    const result = await runBillingLifecycle({ billingRepo: repo, logger });
+
+    expect(result.cancellationsFinalized).toBe(1);
+    const infoLines = lines.filter((l) => l.severity === "info");
+    expect(
+      infoLines.some((l) => l.message === "Finalized scheduled subscription cancellations"),
+    ).toBe(true);
   });
 
   it("logs a warning (not just info) when subscriptions are advanced into grace period or suspended -- these are money-relevant state changes", async () => {
@@ -119,7 +149,7 @@ describe("runBillingLifecycle", () => {
   });
 
   it("never calls anything Razorpay- or email-related -- structurally impossible, no such dependency exists on BillingSchedulerRepository", async () => {
-    // This Worker's deps type has exactly four methods, none of which touch
+    // This Worker's deps type has exactly five methods, none of which touch
     // Razorpay or an email provider -- reconciliation of a real payment
     // still only ever happens via reconcile_razorpay_payment (apps/api's
     // webhook route), never from this scheduler.
@@ -129,6 +159,7 @@ describe("runBillingLifecycle", () => {
       invoicesGenerated: 0,
       subscriptionsAdvanced: 0,
       subscriptionsSuspended: 0,
+      cancellationsFinalized: 0,
       remindersSent: 0,
     });
   });
