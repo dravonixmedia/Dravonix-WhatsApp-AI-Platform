@@ -16,12 +16,13 @@ function makeRepo(overrides: Partial<BillingSchedulerRepository> = {}): BillingS
     suspendExpiredGraceSubscriptions: vi.fn(async () => []),
     finalizeScheduledCancellations: vi.fn(async () => []),
     sendDueReminders: vi.fn(async () => []),
+    aggregateUsage: vi.fn(async () => ({ companiesProcessed: 0, summariesUpserted: 0 })),
     ...overrides,
   };
 }
 
 describe("runBillingLifecycle", () => {
-  it("calls all five RPCs exactly once, in dependency order (generate, advance, suspend, finalize-cancellations, remind)", async () => {
+  it("calls all six steps exactly once, in dependency order (generate, advance, suspend, finalize-cancellations, remind, aggregate-usage)", async () => {
     const callOrder: string[] = [];
     const repo = makeRepo({
       generateDueInvoices: vi.fn(async () => {
@@ -44,6 +45,10 @@ describe("runBillingLifecycle", () => {
         callOrder.push("remind");
         return [];
       }),
+      aggregateUsage: vi.fn(async () => {
+        callOrder.push("aggregate-usage");
+        return { companiesProcessed: 0, summariesUpserted: 0 };
+      }),
     });
     const { logger } = makeLogger();
 
@@ -54,12 +59,14 @@ describe("runBillingLifecycle", () => {
     expect(repo.suspendExpiredGraceSubscriptions).toHaveBeenCalledTimes(1);
     expect(repo.finalizeScheduledCancellations).toHaveBeenCalledTimes(1);
     expect(repo.sendDueReminders).toHaveBeenCalledTimes(1);
+    expect(repo.aggregateUsage).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual([
       "generate",
       "advance",
       "suspend",
       "finalize-cancellations",
       "remind",
+      "aggregate-usage",
     ]);
   });
 
@@ -75,8 +82,25 @@ describe("runBillingLifecycle", () => {
       subscriptionsSuspended: 0,
       cancellationsFinalized: 0,
       remindersSent: 0,
+      usageSummariesUpserted: 0,
+      usageAggregationFailed: false,
     });
     expect(lines.some((l) => l.severity === "warn" || l.severity === "error")).toBe(false);
+  });
+
+  it("reports the usage-summaries-upserted count and logs it at info", async () => {
+    const repo = makeRepo({
+      aggregateUsage: vi.fn(async () => ({ companiesProcessed: 3, summariesUpserted: 5 })),
+    });
+    const { logger, lines } = makeLogger();
+
+    const result = await runBillingLifecycle({ billingRepo: repo, logger });
+
+    expect(result.usageSummariesUpserted).toBe(5);
+    const infoLines = lines.filter((l) => l.severity === "info");
+    expect(
+      infoLines.some((l) => l.message === "Aggregated usage_events into usage_summaries"),
+    ).toBe(true);
   });
 
   it("finalizes scheduled cancellations before sending reminders, so a subscription cancelled this pass never gets a reminder in the same pass", async () => {
@@ -149,7 +173,7 @@ describe("runBillingLifecycle", () => {
   });
 
   it("never calls anything Razorpay- or email-related -- structurally impossible, no such dependency exists on BillingSchedulerRepository", async () => {
-    // This Worker's deps type has exactly five methods, none of which touch
+    // This Worker's deps type has exactly six methods, none of which touch
     // Razorpay or an email provider -- reconciliation of a real payment
     // still only ever happens via reconcile_razorpay_payment (apps/api's
     // webhook route), never from this scheduler.
@@ -161,6 +185,103 @@ describe("runBillingLifecycle", () => {
       subscriptionsSuspended: 0,
       cancellationsFinalized: 0,
       remindersSent: 0,
+      usageSummariesUpserted: 0,
+      usageAggregationFailed: false,
+    });
+  });
+
+  describe("usage aggregation failure isolation (P0 usage-repair independent review, Correction 3)", () => {
+    it("does not reject the lifecycle when aggregateUsage throws -- the failure is isolated to usage accounting", async () => {
+      const repo = makeRepo({
+        aggregateUsage: vi.fn(async () => {
+          throw new Error("usage_summaries upsert failed");
+        }),
+      });
+      const { logger } = makeLogger();
+
+      await expect(runBillingLifecycle({ billingRepo: repo, logger })).resolves.toBeDefined();
+    });
+
+    it("still runs and reports steps 1-5 normally when aggregateUsage throws", async () => {
+      const repo = makeRepo({
+        generateDueInvoices: vi.fn(async () => [
+          { companyId: "company-1", invoiceId: "inv-1", invoiceNumber: "DRV-2026-000001" },
+        ]),
+        sendDueReminders: vi.fn(async () => [
+          { companyId: "company-1", invoiceId: "inv-1", stage: "due_in_7" },
+        ]),
+        aggregateUsage: vi.fn(async () => {
+          throw new Error("usage_summaries upsert failed");
+        }),
+      });
+      const { logger } = makeLogger();
+
+      const result = await runBillingLifecycle({ billingRepo: repo, logger });
+
+      expect(repo.generateDueInvoices).toHaveBeenCalledTimes(1);
+      expect(repo.advanceOverdueSubscriptions).toHaveBeenCalledTimes(1);
+      expect(repo.suspendExpiredGraceSubscriptions).toHaveBeenCalledTimes(1);
+      expect(repo.finalizeScheduledCancellations).toHaveBeenCalledTimes(1);
+      expect(repo.sendDueReminders).toHaveBeenCalledTimes(1);
+      expect(result.invoicesGenerated).toBe(1);
+      expect(result.remindersSent).toBe(1);
+    });
+
+    it("reports usageAggregationFailed: true and usageSummariesUpserted: 0 -- never claims billing itself failed", async () => {
+      const repo = makeRepo({
+        aggregateUsage: vi.fn(async () => {
+          throw new Error("usage_summaries upsert failed");
+        }),
+      });
+      const { logger } = makeLogger();
+
+      const result = await runBillingLifecycle({ billingRepo: repo, logger });
+
+      expect(result.usageAggregationFailed).toBe(true);
+      expect(result.usageSummariesUpserted).toBe(0);
+      expect(result).toMatchObject({
+        invoicesGenerated: 0,
+        subscriptionsAdvanced: 0,
+        subscriptionsSuspended: 0,
+        cancellationsFinalized: 0,
+        remindersSent: 0,
+      });
+    });
+
+    it("logs the aggregation failure explicitly at error severity, without swallowing it silently", async () => {
+      const repo = makeRepo({
+        aggregateUsage: vi.fn(async () => {
+          throw new Error("usage_summaries upsert failed");
+        }),
+      });
+      const { logger, lines } = makeLogger();
+
+      await runBillingLifecycle({ billingRepo: repo, logger });
+
+      const errorLines = lines.filter((l) => l.severity === "error");
+      expect(errorLines).toHaveLength(1);
+      expect(errorLines[0]).toMatchObject({
+        message: "Usage aggregation failed -- billing-state steps in this pass were unaffected",
+        errorType: "Error",
+        errorMessage: "usage_summaries upsert failed",
+      });
+    });
+
+    it("never mutates or re-invokes invoice/payment/subscription steps because of an aggregation failure", async () => {
+      const repo = makeRepo({
+        aggregateUsage: vi.fn(async () => {
+          throw new Error("usage_summaries upsert failed");
+        }),
+      });
+      const { logger } = makeLogger();
+
+      await runBillingLifecycle({ billingRepo: repo, logger });
+
+      expect(repo.generateDueInvoices).toHaveBeenCalledTimes(1);
+      expect(repo.advanceOverdueSubscriptions).toHaveBeenCalledTimes(1);
+      expect(repo.suspendExpiredGraceSubscriptions).toHaveBeenCalledTimes(1);
+      expect(repo.finalizeScheduledCancellations).toHaveBeenCalledTimes(1);
+      expect(repo.sendDueReminders).toHaveBeenCalledTimes(1);
     });
   });
 });

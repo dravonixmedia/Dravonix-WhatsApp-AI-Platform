@@ -1,5 +1,11 @@
 import type { AiMode, ConversationState, ConversationTemporalContext } from "@dravonix/core";
-import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
+import type {
+  AiUsageRecorder,
+  CompanyAiContext,
+  ConversationMemoryContext,
+  LeadUpdates,
+} from "@dravonix/ai";
+import type { UsageEventInsert } from "@dravonix/database";
 
 export interface ConversationContext {
   companyId: string;
@@ -21,7 +27,7 @@ export interface ConversationContext {
  * remains specific to text-message processing: loading conversation context
  * and applying AI-derived lead updates.
  */
-export interface MessageConsumerRepository {
+export interface MessageConsumerRepository extends AiUsageRecorder {
   loadConversationContext(conversationId: string): Promise<ConversationContext>;
   applyLeadUpdates(input: {
     companyId: string;
@@ -39,4 +45,10 @@ export interface MessageConsumerRepository {
    * itself performs no environment check, since it has no access to it.
    */
   recordResearchDiagnostics(messageId: string, diagnostics: Record<string, unknown>): Promise<void>;
+  /**
+   * Raw usage_events writes not covered by AiUsageRecorder above (WhatsApp
+   * message counts). Idempotent -- see @dravonix/database's
+   * recordUsageEvents doc comment. A retry-safe no-op for an empty array.
+   */
+  recordUsageEvents(events: UsageEventInsert[]): Promise<void>;
 }

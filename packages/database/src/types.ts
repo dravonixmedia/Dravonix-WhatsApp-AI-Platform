@@ -173,3 +173,41 @@ export interface ContactRow {
   created_at: string;
   updated_at: string;
 }
+
+/** Mirrors the `usage_metric` enum (supabase/migrations/00000000000008_usage_notifications_audit.sql). Only the metrics this codebase actually records (see packages/database/src/usageEvents.ts) are exercised in production; the remaining enum members exist in the schema for future metering. */
+export type UsageMetric =
+  | "whatsapp_inbound_messages"
+  | "whatsapp_outbound_messages"
+  | "whatsapp_template_messages"
+  | "active_contacts"
+  | "claude_input_tokens"
+  | "claude_cached_input_tokens"
+  | "claude_output_tokens"
+  | "claude_requests"
+  | "speech_to_text_seconds"
+  | "text_to_speech_characters"
+  | "generated_voice_seconds"
+  | "stored_audio_bytes"
+  | "knowledge_storage_bytes"
+  | "document_processing_jobs"
+  | "staff_seats"
+  | "whatsapp_numbers"
+  | "failed_provider_calls";
+
+/**
+ * One raw usage_events row to insert. `idempotencyKey` must be a stable,
+ * deterministic value derived from a durable identifier already available at
+ * the call site (e.g. `${messageId}:${metric}`) -- never a random UUID --
+ * so a queue retry that re-runs the same logical unit of work naturally
+ * collides on the table's `unique(idempotency_key)` constraint instead of
+ * double-counting.
+ */
+export interface UsageEventInsert {
+  companyId: string;
+  metric: UsageMetric;
+  quantity: number;
+  idempotencyKey: string;
+  conversationId?: string | null;
+  isBillable?: boolean;
+  providerRequestId?: string | null;
+}

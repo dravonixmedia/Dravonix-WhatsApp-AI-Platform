@@ -1,24 +1,12 @@
 import { createServerSupabaseClient } from "../../../lib/supabase/server.js";
+import {
+  accumulateCompanyUsage,
+  formatTtsCharacters,
+  formatVoiceDuration,
+  type CompanyUsage,
+} from "../../../lib/usageDisplay.js";
 
 export const dynamic = "force-dynamic";
-
-const MESSAGE_METRICS = new Set([
-  "whatsapp_inbound_messages",
-  "whatsapp_outbound_messages",
-  "whatsapp_template_messages",
-]);
-const VOICE_METRICS = new Set([
-  "speech_to_text_seconds",
-  "generated_voice_seconds",
-  "text_to_speech_characters",
-]);
-
-interface CompanyUsage {
-  companyId: string;
-  companyName: string;
-  messages: number;
-  voice: number;
-}
 
 export default async function AdminUsagePage() {
   const supabase = await createServerSupabaseClient();
@@ -30,24 +18,22 @@ export default async function AdminUsagePage() {
     .limit(500);
   if (usageResult.error) throw usageResult.error;
 
-  const byCompany = new Map<string, CompanyUsage>();
+  let byCompany = new Map<string, CompanyUsage>();
   for (const row of usageResult.data ?? []) {
     const company = Array.isArray(row.companies) ? row.companies[0] : row.companies;
-    const key = row.company_id as string;
-    const existing = byCompany.get(key) ?? {
-      companyId: key,
-      companyName: company?.name ?? "Unknown company",
-      messages: 0,
-      voice: 0,
-    };
-    if (MESSAGE_METRICS.has(row.metric)) existing.messages += Number(row.total_quantity ?? 0);
-    if (VOICE_METRICS.has(row.metric)) existing.voice += Number(row.total_quantity ?? 0);
-    byCompany.set(key, existing);
+    byCompany = accumulateCompanyUsage(byCompany, {
+      companyId: row.company_id as string,
+      companyName: company?.name ?? null,
+      metric: row.metric,
+      totalQuantity: row.total_quantity,
+    });
   }
   const companies = Array.from(byCompany.values()).sort((a, b) => b.messages - a.messages);
 
   const totalMessages = companies.reduce((sum, c) => sum + c.messages, 0);
-  const totalVoice = companies.reduce((sum, c) => sum + c.voice, 0);
+  const totalTtsCharacters = companies.reduce((sum, c) => sum + c.ttsCharacters, 0);
+  const anyVoiceDurationMetered = companies.some((c) => c.voiceDurationMetered);
+  const totalVoiceDurationSeconds = companies.reduce((sum, c) => sum + c.voiceDurationSeconds, 0);
 
   return (
     <div>
@@ -62,8 +48,18 @@ export default async function AdminUsagePage() {
           <span className="dvx-kpi-label">WhatsApp messages (recent periods)</span>
         </div>
         <div className="dvx-card dvx-kpi-card">
-          <span className="dvx-kpi-value">{totalVoice}</span>
-          <span className="dvx-kpi-label">Voice seconds (recent periods)</span>
+          <span className="dvx-kpi-value">{totalTtsCharacters}</span>
+          <span className="dvx-kpi-label">Text-to-speech characters (recent periods)</span>
+        </div>
+        <div className="dvx-card dvx-kpi-card">
+          <span className="dvx-kpi-value">
+            {anyVoiceDurationMetered ? totalVoiceDurationSeconds : "--"}
+          </span>
+          <span className="dvx-kpi-label">
+            {anyVoiceDurationMetered
+              ? "Voice duration, seconds (recent periods)"
+              : "Voice duration (not metered)"}
+          </span>
         </div>
         <div className="dvx-card dvx-kpi-card">
           <span className="dvx-kpi-value">--</span>
@@ -85,7 +81,7 @@ export default async function AdminUsagePage() {
               <div key={c.companyId} className="dvx-team-member-row">
                 <span className="dvx-team-member-name">{c.companyName}</span>
                 <span className="dvx-muted" style={{ fontSize: "0.82rem" }}>
-                  {c.messages} messages · {c.voice}s voice
+                  {c.messages} messages · {formatTtsCharacters(c)} · {formatVoiceDuration(c)}
                 </span>
               </div>
             ))}
@@ -101,6 +97,17 @@ export default async function AdminUsagePage() {
           requires instrumenting the research pipeline separately.
         </p>
       </div>
+
+      {!anyVoiceDurationMetered && (
+        <div className="dvx-card" style={{ marginTop: "1.5rem", maxWidth: 640 }}>
+          <p className="dvx-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
+            Voice duration (speech-to-text seconds, generated-voice seconds) is not currently
+            metered -- no usage_events rows exist for these metrics yet, so this is not a verified
+            zero. Text-to-speech usage above is tracked by character count, which is a genuinely
+            instrumented, separate unit and must not be combined with duration.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

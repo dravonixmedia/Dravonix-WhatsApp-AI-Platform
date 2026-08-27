@@ -1,5 +1,11 @@
-import type { CompanyAiContext, ConversationMemoryContext, LeadUpdates } from "@dravonix/ai";
+import type {
+  AiUsageRecorder,
+  CompanyAiContext,
+  ConversationMemoryContext,
+  LeadUpdates,
+} from "@dravonix/ai";
 import type { AiMode, ConversationState, ConversationTemporalContext } from "@dravonix/core";
+import type { UsageEventInsert } from "@dravonix/database";
 import type { ReplyModeSetting } from "@dravonix/speech";
 
 export interface VoiceSettings {
@@ -45,7 +51,7 @@ export interface VoiceConversationContext {
  * already-persisted state for that identity before doing any new work, so a
  * retried job reuses prior progress instead of duplicating it.
  */
-export interface VoiceConsumerRepository {
+export interface VoiceConsumerRepository extends AiUsageRecorder {
   loadConversationContext(conversationId: string): Promise<VoiceConversationContext>;
 
   /**
@@ -115,6 +121,8 @@ export interface VoiceConsumerRepository {
     voiceId: string | null;
     language: string;
     sourceText: string;
+    /** The real TTS provider that generated this audio (TextToSpeechProvider.providerName, e.g. "elevenlabs") -- never hardcoded, so this stays correct if the configured provider ever changes. */
+    provider: string;
     retentionExpiresAt: Date;
   }): Promise<void>;
 
@@ -143,4 +151,12 @@ export interface VoiceConsumerRepository {
     retryable: boolean;
     errorSummary: string;
   }): Promise<void>;
+
+  /**
+   * Raw usage_events writes not covered by AiUsageRecorder above (WhatsApp
+   * message counts, TTS character count). Idempotent -- see
+   * @dravonix/database's recordUsageEvents doc comment. A retry-safe no-op
+   * for an empty array.
+   */
+  recordUsageEvents(events: UsageEventInsert[]): Promise<void>;
 }

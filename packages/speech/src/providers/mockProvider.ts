@@ -31,6 +31,7 @@ export class MockSpeechToTextProvider implements SpeechToTextProvider {
 
 /** Deterministic mock TTS provider for local development and tests. */
 export class MockTextToSpeechProvider implements TextToSpeechProvider {
+  readonly providerName = "mock";
   /** Every synthesize() call, in order -- lets tests assert exactly what text/languageCode/voiceId was actually sent. */
   public calls: TextToSpeechInput[] = [];
 

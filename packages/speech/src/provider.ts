@@ -48,5 +48,7 @@ export interface TextToSpeechResult {
 }
 
 export interface TextToSpeechProvider {
+  /** Stable identifier for whichever vendor this implementation calls (e.g. "elevenlabs", "google", "mock"), recorded alongside each generated_audio row so it can never drift out of sync with which provider actually produced it -- mirrors SpeechToTextProvider.providerName above. */
+  readonly providerName: string;
   synthesize(input: TextToSpeechInput): Promise<TextToSpeechResult>;
 }

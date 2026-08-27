@@ -1,4 +1,9 @@
-import { generateValidatedResponse, sanitizeResearchQuery, type AiProvider } from "@dravonix/ai";
+import {
+  generateValidatedResponse,
+  recordAiUsage,
+  sanitizeResearchQuery,
+  type AiProvider,
+} from "@dravonix/ai";
 import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravonix/billing";
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
 import {
@@ -86,6 +91,29 @@ export async function processMessageJob(
   const context = await deps.repo.loadConversationContext(payload.conversationId);
   log.debug("Loaded conversation context", { state: context.conversationState });
 
+  // Usage metering (P0 usage repair): an inbound WhatsApp message was
+  // received, independent of whatever the AI pipeline decides to do about it
+  // below (suppressed by ai_mode, denied by entitlement, etc.) -- that fact
+  // is recorded unconditionally, before any gate. Idempotency key is keyed
+  // on the durable inbound messageId alone, so a redelivered/retried queue
+  // message can never be double-counted. Best-effort: a usage-write failure
+  // must never block real message processing, so it's caught and logged
+  // rather than thrown (mirrors recordResearchDiagnostics's established
+  // best-effort pattern below).
+  try {
+    await deps.repo.recordUsageEvents([
+      {
+        companyId: payload.companyId,
+        conversationId: payload.conversationId,
+        metric: "whatsapp_inbound_messages",
+        quantity: 1,
+        idempotencyKey: `${payload.messageId}:whatsapp_inbound_messages`,
+      },
+    ]);
+  } catch (error) {
+    log.error("Failed to record inbound message usage", safeErrorDetails(error));
+  }
+
   if (!isAiReplyAllowed(context.conversationState, context.aiMode)) {
     // Collaborative handover model (Human Handover Inbox final plan section 5):
     // a human being assigned/active does NOT by itself stop the AI -- this only
@@ -125,42 +153,76 @@ export async function processMessageJob(
   let researchDiagnostics: Awaited<
     ReturnType<typeof generateValidatedResponse>
   >["researchDiagnostics"];
+  let usage: Awaited<ReturnType<typeof generateValidatedResponse>>["usage"];
+  let callId: string;
+  let repaired: boolean;
   try {
-    ({ response, usedFallback, research, researchDiagnostics } = await generateValidatedResponse(
-      {
-        provider: deps.aiProvider,
-        onValidationFailure: (details) =>
-          log.error("AI structured response failed validation twice", details),
-        research: {
-          enabled: researchEnabled,
-          onDecision: (decision) =>
-            log.debug("Research eligibility evaluated", {
-              decision: decision.decision,
-              bestKnowledgeRelevance: decision.bestKnowledgeRelevance,
-            }),
-          onExecuted: (diagnostics) =>
-            log.info("Research execution diagnostics", {
-              researchStarted: diagnostics.researchStarted,
-              researchCompleted: diagnostics.researchCompleted,
-              researchReason: diagnostics.researchReason,
-              sourceCount: diagnostics.sourceCount,
-              researchLatencyMs: diagnostics.researchLatencyMs,
-              failureCategory: diagnostics.failureCategory,
-            }),
+    ({ response, usedFallback, research, researchDiagnostics, usage, callId, repaired } =
+      await generateValidatedResponse(
+        {
+          provider: deps.aiProvider,
+          onValidationFailure: (details) =>
+            log.error("AI structured response failed validation twice", details),
+          research: {
+            enabled: researchEnabled,
+            onDecision: (decision) =>
+              log.debug("Research eligibility evaluated", {
+                decision: decision.decision,
+                bestKnowledgeRelevance: decision.bestKnowledgeRelevance,
+              }),
+            onExecuted: (diagnostics) =>
+              log.info("Research execution diagnostics", {
+                researchStarted: diagnostics.researchStarted,
+                researchCompleted: diagnostics.researchCompleted,
+                researchReason: diagnostics.researchReason,
+                sourceCount: diagnostics.sourceCount,
+                researchLatencyMs: diagnostics.researchLatencyMs,
+                failureCategory: diagnostics.failureCategory,
+              }),
+          },
         },
-      },
-      {
-        company: context.aiContext,
-        memory: context.memory,
-        knowledge,
-        customerMessage: payload.body,
-        temporal: context.temporal,
-        researchEnabled,
-      },
-    ));
+        {
+          company: context.aiContext,
+          memory: context.memory,
+          knowledge,
+          customerMessage: payload.body,
+          temporal: context.temporal,
+          researchEnabled,
+        },
+      ));
   } catch (error) {
     log.error("Claude request failed", safeErrorDetails(error));
     throw error;
+  }
+
+  // Usage metering (P0 usage repair, corrected per independent review /
+  // ADR-0004): generateValidatedResponse returning at all (rather than
+  // throwing, handled above) means at least one real provider.generate()
+  // round trip completed and consumed real, billable tokens -- true
+  // regardless of whether the structured output was valid or a
+  // repair/fallback was needed (see AiUsageRecorder's doc comment).
+  // `repaired` distinguishes one real call from two. Idempotency is keyed
+  // on `callId`, NOT payload.messageId -- callId is generated fresh inside
+  // generateValidatedResponse for every real invocation, so a queue retry
+  // that genuinely re-invokes Claude for this same inbound message gets a
+  // distinct callId and is correctly recorded as separate, additional
+  // provider consumption, never silently dropped as a duplicate of the
+  // first attempt (this is the exact defect the independent review found:
+  // keying on messageId alone undercounts real Claude cost on retry).
+  // Best-effort, matching the inbound-message usage write above -- a
+  // metering failure must never block the customer's reply.
+  try {
+    await recordAiUsage(deps.repo, {
+      companyId: payload.companyId,
+      conversationId: payload.conversationId,
+      messageId: payload.messageId,
+      callId,
+      usage,
+      requestCount: repaired ? 2 : 1,
+      requestSucceeded: true,
+    });
+  } catch (error) {
+    log.error("Failed to record AI usage", safeErrorDetails(error));
   }
 
   // Post-hoc query-privacy check (Phase 2 design report section 10): the
@@ -242,6 +304,29 @@ export async function processMessageJob(
 
   if (outboundResult.outboundStatus === "sent") {
     log.info("Outbound WhatsApp message sent", { messageId: outboundResult.messageId });
+    // Usage metering (P0 usage repair): a genuinely new outbound AI reply was
+    // just sent (outboundResult.alreadyHandled already returned above for a
+    // retry/redelivery, so this only runs once per real send). Mirrors the
+    // exact same real-world event SupabaseEntitlementRepository's
+    // monthly_messages count already treats as "one message" (an
+    // AI-authored outbound send), so this new usage_events-based number
+    // means the same thing as the existing, already-trusted entitlement
+    // counter. Idempotency key is keyed on the outbound message's own id
+    // (stable per (source_message_id, channel_type), see
+    // sendAiOutboundMessage), so a retry can never double-count. Best-effort.
+    try {
+      await deps.repo.recordUsageEvents([
+        {
+          companyId: payload.companyId,
+          conversationId: payload.conversationId,
+          metric: "whatsapp_outbound_messages",
+          quantity: 1,
+          idempotencyKey: `${outboundResult.messageId}:whatsapp_outbound_messages`,
+        },
+      ]);
+    } catch (error) {
+      log.error("Failed to record outbound message usage", safeErrorDetails(error));
+    }
   } else {
     log.error("Outbound WhatsApp send failed or is unconfirmed", {
       outboundStatus: outboundResult.outboundStatus,
