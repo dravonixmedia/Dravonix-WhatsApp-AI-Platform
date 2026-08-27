@@ -14,6 +14,31 @@ import type { SubscriptionState } from "./stateMachine.js";
  * closed, matching the canonical graph's own empty transition set for that
  * state exactly.
  *
+ * Post-independent-review correction (Phase 7B correction pass): a
+ * transition being a real edge in the canonical generic state machine does
+ * NOT by itself make it safe as a manual admin operation. Five edges were
+ * removed from this admin-allowed subset for that reason, even though they
+ * remain legitimate in stateMachine.ts's own graph:
+ *   - payment_due  -> active (canonical event payment_recovered)
+ *   - grace_period -> active (canonical event payment_recovered)
+ *     Both would let an admin fabricate a payment_recovered audit trail
+ *     with zero verification against invoices/payments. Real payment
+ *     recovery remains exclusively owned by reconcile_razorpay_payment
+ *     (migrations 28/29) -- never by this admin RPC.
+ *   - cancelled -> active (win-back)
+ *     Flipping the state alone leaves current_period_start/end stale, which
+ *     the billing scheduler would likely reinterpret as an immediately
+ *     lapsed period. Win-back needs its own future architecture (new
+ *     billing period, invoice/payment requirements, entitlement timing) --
+ *     out of scope here.
+ *   - onboarding -> active
+ *   - trial -> active
+ *     Both would let an admin force a subscription to `active` without ever
+ *     establishing valid current_period_start/current_period_end (nothing
+ *     sets those columns outside real payment reconciliation), producing an
+ *     `active` subscription generate_due_subscription_invoices can never
+ *     bill because its eligibility requires current_period_end IS NOT NULL.
+ *
  * This is presentation-layer data only (which targets a UI may offer as
  * buttons/options) -- migration 32's own admin_change_subscription_state
  * independently re-validates every request server-side using the same
@@ -24,14 +49,14 @@ import type { SubscriptionState } from "./stateMachine.js";
 export const ADMIN_ALLOWED_SUBSCRIPTION_TRANSITIONS: Readonly<
   Record<SubscriptionState, readonly SubscriptionState[]>
 > = {
-  onboarding: ["trial", "active", "closed"],
-  trial: ["active", "cancelled", "closed"],
+  onboarding: ["trial", "closed"],
+  trial: ["cancelled", "closed"],
   active: ["cancel_at_period_end", "cancelled", "manually_suspended", "closed"],
-  payment_due: ["active", "manually_suspended", "cancelled", "closed"],
-  grace_period: ["active", "manually_suspended", "cancelled", "closed"],
+  payment_due: ["manually_suspended", "cancelled", "closed"],
+  grace_period: ["manually_suspended", "cancelled", "closed"],
   suspended: ["active", "cancelled", "closed"],
   cancel_at_period_end: ["active", "closed"],
-  cancelled: ["active", "closed"],
+  cancelled: ["closed"],
   manually_suspended: ["active", "cancelled", "closed"],
   closed: [],
 };

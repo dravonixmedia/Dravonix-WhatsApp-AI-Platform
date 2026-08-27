@@ -23,6 +23,13 @@
 --      represents a real payment event (that remains reconcile_razorpay_
 --      payment's job alone, migrations 28/29, untouched).
 --
+--      Post-independent-review correction: payment_due -> active,
+--      grace_period -> active, cancelled -> active, onboarding -> active,
+--      and trial -> active are no longer admin-invocable (see the matrix
+--      below) -- being a real edge in the canonical generic state machine
+--      does not by itself make a transition safe as a manual admin
+--      operation.
+--
 --   2. Add admin_reset_company_entitlement: the previously-missing "restore
 --      to plan default" capability for company_entitlements (migration 7).
 --      Per the Phase 7B review of packages/billing's entitlement merge
@@ -60,20 +67,16 @@
 --    invented):
 --
 --      onboarding          -> trial               (start_trial)
---      onboarding          -> active               (activate)
 --      onboarding          -> closed               (close)
---      trial               -> active               (activate)
 --      trial               -> cancelled            (cancelled_immediately)
 --      trial               -> closed               (close)
 --      active              -> cancel_at_period_end (cancel_at_period_end_requested)
 --      active              -> cancelled            (cancelled_immediately)
 --      active              -> manually_suspended   (manual_suspend)
 --      active              -> closed               (close)
---      payment_due         -> active               (payment_recovered)
 --      payment_due         -> manually_suspended   (manual_suspend)
 --      payment_due         -> cancelled            (cancelled_immediately)
 --      payment_due         -> closed               (close)
---      grace_period        -> active               (payment_recovered)
 --      grace_period        -> manually_suspended   (manual_suspend)
 --      grace_period        -> cancelled            (cancelled_immediately)
 --      grace_period        -> closed               (close)
@@ -82,7 +85,6 @@
 --      suspended           -> closed               (close)
 --      cancel_at_period_end -> active              (cancel_at_period_end_reversed)
 --      cancel_at_period_end -> closed              (close)
---      cancelled           -> active               (activate)
 --      cancelled           -> closed               (close)
 --      manually_suspended  -> active               (manual_reactivate)
 --      manually_suspended  -> cancelled            (cancelled_immediately)
@@ -100,6 +102,22 @@
 --        this is exactly what finalize_scheduled_subscription_cancellations
 --        below now owns instead)
 --
+--    Deliberately rejected as unsafe for manual admin control, even though
+--    each is a real edge in the canonical graph (post-independent-review
+--    correction -- see the migration header above):
+--      payment_due  -> active   (payment_recovered -- would let an admin
+--        fabricate a payment recovery with zero invoice/payment
+--        verification; stays exclusively owned by
+--        reconcile_razorpay_payment, migrations 28/29)
+--      grace_period -> active   (payment_recovered -- same reason)
+--      cancelled    -> active   (activate -- "win-back" leaves
+--        current_period_start/end stale with no defined refresh semantic;
+--        needs its own future architecture, out of scope here)
+--      onboarding   -> active   (activate -- would force `active` with no
+--        guarantee current_period_start/current_period_end were ever
+--        established, making the subscription unbillable forever)
+--      trial        -> active   (activate -- same reason)
+--
 --    Ancillary-field behavior, keyed on the derived event (never on target
 --    state alone, so e.g. plain 'activate' from onboarding/trial does not
 --    fabricate a "reactivation" that never happened):
@@ -107,18 +125,13 @@
 --      manual_reactivate               -> suspension_reason = null,
 --                                          grace_period_end = null,
 --                                          reactivated_at = now()
---      payment_recovered (admin-initiated) -> grace_period_end = null
---                                          (matches reconcile_razorpay_
---                                          payment's own behavior exactly)
 --      cancelled_immediately           -> cancellation_reason = p_reason
 --      cancel_at_period_end_requested  -> cancellation_reason = p_reason
 --      cancel_at_period_end_reversed   -> cancellation_reason = null
---      activate                        -> cancellation_reason = null
---                                          (covers the cancelled -> active
---                                          win-back path cleanly; a harmless
---                                          no-op from onboarding/trial where
---                                          it is already null)
 --      start_trial, close             -> no ancillary column touched
+--    payment_recovered and activate no longer appear as possible values of
+--    v_event at all (their only source transitions were removed above), so
+--    no ancillary-field CASE branch references them any more either.
 --    current_period_start/current_period_end are NEVER written by this
 --    function under any transition -- no admin override here represents a
 --    real payment event, so no billing period is ever fabricated or altered.
@@ -155,20 +168,16 @@ begin
 
   v_event := case
     when v_old_state = 'onboarding' and p_new_state = 'trial' then 'start_trial'
-    when v_old_state = 'onboarding' and p_new_state = 'active' then 'activate'
     when v_old_state = 'onboarding' and p_new_state = 'closed' then 'close'
-    when v_old_state = 'trial' and p_new_state = 'active' then 'activate'
     when v_old_state = 'trial' and p_new_state = 'cancelled' then 'cancelled_immediately'
     when v_old_state = 'trial' and p_new_state = 'closed' then 'close'
     when v_old_state = 'active' and p_new_state = 'cancel_at_period_end' then 'cancel_at_period_end_requested'
     when v_old_state = 'active' and p_new_state = 'cancelled' then 'cancelled_immediately'
     when v_old_state = 'active' and p_new_state = 'manually_suspended' then 'manual_suspend'
     when v_old_state = 'active' and p_new_state = 'closed' then 'close'
-    when v_old_state = 'payment_due' and p_new_state = 'active' then 'payment_recovered'
     when v_old_state = 'payment_due' and p_new_state = 'manually_suspended' then 'manual_suspend'
     when v_old_state = 'payment_due' and p_new_state = 'cancelled' then 'cancelled_immediately'
     when v_old_state = 'payment_due' and p_new_state = 'closed' then 'close'
-    when v_old_state = 'grace_period' and p_new_state = 'active' then 'payment_recovered'
     when v_old_state = 'grace_period' and p_new_state = 'manually_suspended' then 'manual_suspend'
     when v_old_state = 'grace_period' and p_new_state = 'cancelled' then 'cancelled_immediately'
     when v_old_state = 'grace_period' and p_new_state = 'closed' then 'close'
@@ -177,7 +186,6 @@ begin
     when v_old_state = 'suspended' and p_new_state = 'closed' then 'close'
     when v_old_state = 'cancel_at_period_end' and p_new_state = 'active' then 'cancel_at_period_end_reversed'
     when v_old_state = 'cancel_at_period_end' and p_new_state = 'closed' then 'close'
-    when v_old_state = 'cancelled' and p_new_state = 'active' then 'activate'
     when v_old_state = 'cancelled' and p_new_state = 'closed' then 'close'
     when v_old_state = 'manually_suspended' and p_new_state = 'active' then 'manual_reactivate'
     when v_old_state = 'manually_suspended' and p_new_state = 'cancelled' then 'cancelled_immediately'
@@ -188,8 +196,11 @@ begin
   -- Covers every automatic-only edge, every genuinely forbidden edge
   -- (including the four the Phase 7B review explicitly enumerated: closed ->
   -- trial, suspended -> trial, active -> onboarding, grace_period -> trial),
-  -- any same-state no-op, and closed -> anything (closed never appears as a
-  -- when-clause source above, so it always falls through here).
+  -- every edge removed as unsafe for manual admin control in the
+  -- post-independent-review correction (payment_due/grace_period/cancelled/
+  -- onboarding/trial -> active), any same-state no-op, and closed ->
+  -- anything (closed never appears as a when-clause source above, so it
+  -- always falls through here).
   if v_event is null then
     raise exception 'invalid_state_transition';
   end if;
@@ -205,12 +216,10 @@ begin
           when 'cancelled_immediately' then p_reason
           when 'cancel_at_period_end_requested' then p_reason
           when 'cancel_at_period_end_reversed' then null
-          when 'activate' then null
           else cancellation_reason
         end,
         grace_period_end = case v_event
           when 'manual_reactivate' then null
-          when 'payment_recovered' then null
           else grace_period_end
         end,
         reactivated_at = case v_event
@@ -241,7 +250,7 @@ end;
 $$;
 
 comment on function admin_change_subscription_state(uuid, subscription_state, text) is
-  'Phase 7B: hardened in place (same signature as migration 17). Validates the requested (old_state, new_state) pair against the exact admin-allowed edge set derived from packages/billing/src/stateMachine.ts, rejects every automatic-only/forbidden edge and everything out of the terminal closed state, derives the correct canonical subscription_events.event server-side (never trusts a client-supplied event name), and updates only the ancillary columns (suspension_reason/cancellation_reason/grace_period_end/reactivated_at) each specific transition genuinely requires -- current_period_start/current_period_end are never touched, since no admin override here represents a real payment event.';
+  'Phase 7B (post-independent-review correction): hardened in place (same signature as migration 17). Validates the requested (old_state, new_state) pair against the exact admin-allowed edge set derived from packages/billing/src/stateMachine.ts, rejects every automatic-only/forbidden edge, everything out of the terminal closed state, and payment_due/grace_period/cancelled/onboarding/trial -> active (unsafe for manual admin control even though each is a real edge in the canonical graph -- see migration header), derives the correct canonical subscription_events.event server-side (never trusts a client-supplied event name), and updates only the ancillary columns (suspension_reason/cancellation_reason/grace_period_end/reactivated_at) each specific transition genuinely requires -- current_period_start/current_period_end are never touched, since no admin override here represents a real payment event.';
 
 revoke all on function admin_change_subscription_state(uuid, subscription_state, text) from public, anon;
 grant execute on function admin_change_subscription_state(uuid, subscription_state, text) to authenticated;

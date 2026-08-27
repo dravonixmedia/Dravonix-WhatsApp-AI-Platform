@@ -269,11 +269,16 @@ select test_assert(
   exists (select 1 from subscription_events where subscription_id = '84000001-0000-0000-0000-000000000001' and event = 'start_trial' and from_state = 'onboarding' and to_state = 'trial' and is_manual_override = true)
 );
 
--- onboarding -> active (activate)
+-- onboarding -> active is REJECTED (post-independent-review correction):
+-- admin_assign_plan never establishes current_period_start/current_period_end,
+-- so force-activating from onboarding would produce an `active` subscription
+-- generate_due_subscription_invoices can never bill (its eligibility requires
+-- current_period_end is not null).
 select m32_reset_sub('onboarding');
-select test_assert(
-  'onboarding -> active succeeds via activate',
-  (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null)) = 'active'
+select test_assert_raises(
+  'onboarding -> active is rejected (would create an unbillable active subscription with no billing-period dates)',
+  $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null) $sql$,
+  'invalid_state_transition'
 );
 
 -- onboarding -> closed (close)
@@ -283,11 +288,15 @@ select test_assert(
   (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'closed', null)) = 'closed'
 );
 
--- trial -> active (activate)
+-- trial -> active is REJECTED (post-independent-review correction): same
+-- unbillable-active-subscription reasoning as onboarding -> active above --
+-- a trial subscription may never have had a real payment establish
+-- current_period_start/current_period_end either.
 select m32_reset_sub('trial');
-select test_assert(
-  'trial -> active succeeds via activate',
-  (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null)) = 'active'
+select test_assert_raises(
+  'trial -> active is rejected (would create an unbillable active subscription with no billing-period dates)',
+  $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null) $sql$,
+  'invalid_state_transition'
 );
 
 -- trial -> cancelled (cancelled_immediately), reason required at the app
@@ -350,14 +359,16 @@ select test_assert(
   (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'cancelled', 'fraud')) = 'cancelled'
 );
 
--- cancelled -> active (win-back)
-select test_assert(
-  'cancelled -> active succeeds via activate (win-back)',
-  (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null)) = 'active'
-);
-select test_assert(
-  'win-back activation clears cancellation_reason',
-  (select cancellation_reason from subscriptions where id = '84000001-0000-0000-0000-000000000001') is null
+-- cancelled -> active (win-back) is REJECTED (post-independent-review
+-- correction): flipping the state alone leaves current_period_start/end
+-- stale, which the billing scheduler would likely reinterpret as an
+-- immediately lapsed period. Win-back needs its own future architecture
+-- (new billing period, invoice/payment requirements, entitlement timing);
+-- Phase 7B does not define one, so the admin RPC must not attempt it.
+select test_assert_raises(
+  'cancelled -> active is rejected (win-back semantics are undefined -- no billing-period refresh)',
+  $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null) $sql$,
+  'invalid_state_transition'
 );
 
 -- active -> manually_suspended (manual suspend)
@@ -398,15 +409,24 @@ select test_assert(
   (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'cancelled', 'closing account')) = 'cancelled'
 );
 
--- payment_due -> active (admin-initiated recovery) clears grace_period_end
+-- payment_due -> active is REJECTED (post-independent-review correction):
+-- the admin RPC must never be able to fabricate the canonical
+-- payment_recovered event. Real payment recovery remains exclusively owned
+-- by reconcile_razorpay_payment (migrations 28/29, verified unchanged by
+-- the "real payment recovery regression" tests below).
 select m32_reset_sub('payment_due', now() + interval '5 days');
-select test_assert(
-  'payment_due -> active succeeds via payment_recovered',
-  (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', 'manual bank transfer confirmed')) = 'active'
+select test_assert_raises(
+  'payment_due -> active is rejected (admin RPC must never fabricate payment_recovered)',
+  $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', 'manual bank transfer confirmed') $sql$,
+  'invalid_state_transition'
 );
 select test_assert(
-  'admin-initiated payment recovery clears grace_period_end (matches reconcile_razorpay_payment behavior)',
-  (select grace_period_end from subscriptions where id = '84000001-0000-0000-0000-000000000001') is null
+  'a rejected payment_due -> active attempt leaves grace_period_end untouched -- no partial write',
+  (select grace_period_end from subscriptions where id = '84000001-0000-0000-0000-000000000001') is not null
+);
+select test_assert(
+  'a rejected payment_due -> active attempt leaves state at payment_due -- no partial write',
+  (select state from subscriptions where id = '84000001-0000-0000-0000-000000000001') = 'payment_due'
 );
 
 -- payment_due -> manually_suspended / cancelled / closed
@@ -426,15 +446,18 @@ select test_assert(
   (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'closed', null)) = 'closed'
 );
 
--- grace_period -> active / manually_suspended / cancelled / closed
+-- grace_period -> active is REJECTED (post-independent-review correction),
+-- same reasoning as payment_due -> active above -- manually_suspended /
+-- cancelled / closed remain admin-allowed.
 select m32_reset_sub('grace_period', now() + interval '3 days');
-select test_assert(
-  'grace_period -> active succeeds via payment_recovered',
-  (select state from admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null)) = 'active'
+select test_assert_raises(
+  'grace_period -> active is rejected (admin RPC must never fabricate payment_recovered)',
+  $sql$ select admin_change_subscription_state('81000001-0000-0000-0000-000000000001', 'active', null) $sql$,
+  'invalid_state_transition'
 );
 select test_assert(
-  'grace_period -> active clears grace_period_end (matches reconcile_razorpay_payment behavior)',
-  (select grace_period_end from subscriptions where id = '84000001-0000-0000-0000-000000000001') is null
+  'a rejected grace_period -> active attempt leaves grace_period_end untouched -- no partial write',
+  (select grace_period_end from subscriptions where id = '84000001-0000-0000-0000-000000000001') is not null
 );
 select m32_reset_sub('grace_period');
 select test_assert(
