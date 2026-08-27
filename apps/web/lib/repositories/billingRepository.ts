@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { logServerError } from "../serverLogging.js";
 
 export interface BillingPlanInfo {
   name: string;
@@ -83,7 +84,17 @@ export async function getBillingSubscription(
     )
     .eq("company_id", companyId)
     .maybeSingle();
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Failed to load billing subscription",
+      error,
+      { companyId },
+      {
+        operation: "getBillingSubscription",
+      },
+    );
+    throw error;
+  }
   if (!data) return null;
 
   const row = data as unknown as SubscriptionRow;
@@ -117,7 +128,17 @@ export async function listBillingInvoices(
     .eq("company_id", companyId)
     .order("created_at", { ascending: false })
     .limit(limit);
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Failed to list billing invoices",
+      error,
+      { companyId },
+      {
+        operation: "listBillingInvoices",
+      },
+    );
+    throw error;
+  }
   return (data ?? []).map((row) => ({
     id: row.id as string,
     invoiceNumber: row.invoice_number as string,
@@ -143,7 +164,17 @@ export async function listBillingPayments(
     .eq("company_id", companyId)
     .order("created_at", { ascending: false })
     .limit(limit);
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Failed to list billing payments",
+      error,
+      { companyId },
+      {
+        operation: "listBillingPayments",
+      },
+    );
+    throw error;
+  }
   return (data ?? []).map((row) => ({
     id: row.id as string,
     method: row.method as string,

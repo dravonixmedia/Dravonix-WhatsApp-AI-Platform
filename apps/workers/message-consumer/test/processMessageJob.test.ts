@@ -956,6 +956,28 @@ describe("processMessageJob", () => {
       expect(new Set(claudeRequestEvents.map((e) => e.idempotencyKey)).size).toBe(2);
       expect(claudeRequestEvents.reduce((sum, e) => sum + e.quantity, 0)).toBe(2);
 
+      // P1 stabilization: the token metrics must ALSO be retained as two
+      // distinct sets, not just claude_requests -- keyPrefix applies
+      // identically to all four metrics, so a regression that only fixed
+      // claude_requests (or accidentally scoped the keyPrefix fix to it
+      // alone) would otherwise go undetected.
+      for (const metric of [
+        "claude_input_tokens",
+        "claude_output_tokens",
+        "claude_cached_input_tokens",
+      ] as const) {
+        const events = repo.recordedUsageEvents.filter((e) => e.metric === metric);
+        expect(events, `expected two distinct ${metric} events`).toHaveLength(2);
+        expect(
+          new Set(events.map((e) => e.idempotencyKey)).size,
+          `expected two distinct ${metric} idempotency keys`,
+        ).toBe(2);
+      }
+      const inputTokenEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "claude_input_tokens",
+      );
+      expect(inputTokenEvents.reduce((sum, e) => sum + e.quantity, 0)).toBe(200); // 100 per real call x 2 calls
+
       // WhatsApp inbound/outbound message metrics are unaffected by this
       // correction -- they remain protected by the reserve/claim guard and
       // stay keyed on messageId alone, so the redelivery still collapses to

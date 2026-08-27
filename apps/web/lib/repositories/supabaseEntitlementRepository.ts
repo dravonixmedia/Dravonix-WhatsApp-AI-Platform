@@ -4,6 +4,7 @@ import type {
   EntitlementSnapshot,
   FeatureEntitlement,
 } from "@dravonix/billing";
+import { logServerError } from "../serverLogging.js";
 
 /**
  * Mirrors apps/workers/message-consumer's SupabaseEntitlementRepository
@@ -23,8 +24,28 @@ export class SupabaseEntitlementRepository implements EntitlementRepository {
         .eq("company_id", companyId)
         .maybeSingle(),
     ]);
-    if (companyResult.error) throw companyResult.error;
-    if (subscriptionResult.error) throw subscriptionResult.error;
+    if (companyResult.error) {
+      logServerError(
+        "Failed to load entitlement snapshot",
+        companyResult.error,
+        { companyId },
+        {
+          operation: "getSnapshot.companies",
+        },
+      );
+      throw companyResult.error;
+    }
+    if (subscriptionResult.error) {
+      logServerError(
+        "Failed to load entitlement snapshot",
+        subscriptionResult.error,
+        { companyId },
+        {
+          operation: "getSnapshot.subscriptions",
+        },
+      );
+      throw subscriptionResult.error;
+    }
 
     const subscription = subscriptionResult.data;
     if (!subscription) {
@@ -55,9 +76,35 @@ export class SupabaseEntitlementRepository implements EntitlementRepository {
             .gte("created_at", subscription.current_period_start)
         : Promise.resolve({ count: 0, error: null }),
     ]);
-    if (planEntitlementsResult.error) throw planEntitlementsResult.error;
-    if (companyEntitlementsResult.error) throw companyEntitlementsResult.error;
-    if (usageResult.error) throw usageResult.error;
+    if (planEntitlementsResult.error) {
+      logServerError(
+        "Failed to load entitlement snapshot",
+        planEntitlementsResult.error,
+        { companyId },
+        { operation: "getSnapshot.plan_entitlements" },
+      );
+      throw planEntitlementsResult.error;
+    }
+    if (companyEntitlementsResult.error) {
+      logServerError(
+        "Failed to load entitlement snapshot",
+        companyEntitlementsResult.error,
+        { companyId },
+        { operation: "getSnapshot.company_entitlements" },
+      );
+      throw companyEntitlementsResult.error;
+    }
+    if (usageResult.error) {
+      logServerError(
+        "Failed to load entitlement snapshot",
+        usageResult.error,
+        { companyId },
+        {
+          operation: "getSnapshot.usage",
+        },
+      );
+      throw usageResult.error;
+    }
 
     const features: Record<string, FeatureEntitlement> = {};
     for (const row of planEntitlementsResult.data ?? []) {

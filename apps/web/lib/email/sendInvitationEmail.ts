@@ -7,6 +7,7 @@ import {
   ZeptoMailEmailProvider,
   type EmailProvider,
 } from "@dravonix/email";
+import { logServerError } from "../serverLogging.js";
 
 export interface SendInvitationEmailInput {
   email: string;
@@ -84,13 +85,35 @@ export async function sendInvitationEmail(
     if (result.success) {
       return { attempted: true, success: true, providerMessageId: result.providerMessageId };
     }
+    // Never the recipient address or email body/subject -- maskEmail and the
+    // provider's own already-sanitized errorCode/errorMessage only (see
+    // SendInvitationEmailResult.errorMessage's doc comment).
+    logServerError(
+      "Invitation email delivery failed",
+      new Error(result.errorMessage ?? "unknown"),
+      undefined,
+      {
+        operation: "sendInvitationEmail",
+        recipient: maskEmail(input.email),
+        providerErrorCode: result.errorCode,
+      },
+    );
     return {
       attempted: true,
       success: false,
       errorCode: result.errorCode,
       errorMessage: result.errorMessage,
     };
-  } catch {
+  } catch (error) {
+    // The audit found this path fully swallowed the exception with zero
+    // diagnostic info -- fixed to log it (sanitized, never the recipient
+    // address or email body) while preserving the exact same best-effort
+    // contract: this function still never throws, callers still never
+    // block the invitation flow on email delivery.
+    logServerError("Invitation email send threw unexpectedly", error, undefined, {
+      operation: "sendInvitationEmail",
+      recipient: maskEmail(input.email),
+    });
     return { attempted: true, success: false, errorCode: "unexpected_error" };
   }
 }

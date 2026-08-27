@@ -1483,6 +1483,26 @@ describe("processVoiceJob", () => {
       expect(new Set(claudeRequestEvents.map((e) => e.idempotencyKey)).size).toBe(2);
       expect(claudeRequestEvents.reduce((sum, e) => sum + e.quantity, 0)).toBe(2);
 
+      // P1 stabilization: the token metrics must ALSO be retained as two
+      // distinct sets, not just claude_requests (same rationale as the
+      // message-consumer counterpart test).
+      for (const metric of [
+        "claude_input_tokens",
+        "claude_output_tokens",
+        "claude_cached_input_tokens",
+      ] as const) {
+        const events = repo.recordedUsageEvents.filter((e) => e.metric === metric);
+        expect(events, `expected two distinct ${metric} events`).toHaveLength(2);
+        expect(
+          new Set(events.map((e) => e.idempotencyKey)).size,
+          `expected two distinct ${metric} idempotency keys`,
+        ).toBe(2);
+      }
+      const inputTokenEvents = repo.recordedUsageEvents.filter(
+        (e) => e.metric === "claude_input_tokens",
+      );
+      expect(inputTokenEvents.reduce((sum, e) => sum + e.quantity, 0)).toBe(200); // 100 per real call x 2 calls
+
       // TTS is structurally never genuinely re-invoked on redelivery -- the
       // reserve/claim guard in reserveAiOutboundMessage returns early before
       // synthesize() is called -- so its usage stays deduped to one set,

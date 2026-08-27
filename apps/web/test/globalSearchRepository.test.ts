@@ -276,4 +276,17 @@ describe("searchLeads", () => {
     expect(result?.displayName).toBe("********5678");
     expect(result?.displayName).not.toBe("Unknown lead");
   });
+
+  it("propagates a genuine database error rather than silently swallowing it (P1 stabilization regression)", async () => {
+    const chain = fakeChain({
+      data: null,
+      error: { code: "53300", message: "too many connections" },
+    });
+    const client = fakeSupabaseClient(
+      { leads: chain },
+      { search_company_leads: { data: [{ lead_id: "lead-1" }], error: null } },
+    );
+
+    await expect(searchLeads(client, "company-a", "priya")).rejects.toThrow("too many connections");
+  });
 });

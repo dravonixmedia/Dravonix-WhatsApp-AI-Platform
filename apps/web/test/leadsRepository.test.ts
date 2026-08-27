@@ -300,6 +300,38 @@ describe("listLeads", () => {
       }),
     ).rejects.toThrow("too many connections");
   });
+
+  it("logs the failure safely (companyId + operation + sanitized error only, never PII) before rethrowing (P1 stabilization)", async () => {
+    const chain = fakeChain({
+      data: null,
+      error: { code: "53300", message: "too many connections" },
+    });
+    const client = fakeSupabaseClient(chain);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await expect(
+      listLeads(client, {
+        companyId: "company-a",
+        callerMemberId: "member-1",
+        page: 1,
+        pageSize: 25,
+      }),
+    ).rejects.toThrow();
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+    expect(logged).toMatchObject({
+      severity: "error",
+      companyId: "company-a",
+      operation: "listLeads",
+      message: "Failed to list leads",
+    });
+    const serialized = JSON.stringify(logged);
+    expect(serialized).not.toContain("Priya");
+    expect(serialized).not.toContain("@example.com");
+    expect(serialized).not.toContain("member-1");
+    logSpy.mockRestore();
+  });
 });
 
 describe("lead identity resolution (resolveLeadDisplayName via listLeads)", () => {
