@@ -49,6 +49,13 @@
         // already-deployed staging Worker URL, not invented.
         "APP_URL": "https://dravonix-dashboard-staging.muddy-smoke-afe4.workers.dev",
       },
+      // P1 dashboard hygiene batch (voice playback): read-only access into
+      // the SAME R2 bucket apps/workers/voice-consumer already writes
+      // voice-message audio into (see its wrangler.toml's identical
+      // binding name/bucket) -- not a new bucket, not a new storage
+      // architecture, just this Worker's first read path into it, via
+      // apps/web/app/api/media/audio/[mediaFileId]/route.ts.
+      "r2_buckets": [{ "binding": "AUDIO_BUCKET", "bucket_name": "dravonix-audio-staging" }],
     },
     "production": {
       "name": "dravonix-dashboard",
@@ -58,6 +65,11 @@
         // confirmed here; set via `wrangler deploy --env production` once
         // known, kept fully independent of the staging value above.
       },
+      // Same binding as staging above, pointed at the existing production
+      // audio bucket (apps/workers/voice-consumer's own production
+      // r2_buckets block) -- kept symmetric with staging so voice playback
+      // doesn't silently work in one environment and 503 in the other.
+      "r2_buckets": [{ "binding": "AUDIO_BUCKET", "bucket_name": "dravonix-audio" }],
     },
   },
 }

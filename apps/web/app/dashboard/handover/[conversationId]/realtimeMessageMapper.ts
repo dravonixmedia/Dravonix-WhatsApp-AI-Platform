@@ -17,5 +17,15 @@ export function mapRealtimeMessageRow(row: Record<string, unknown>): Conversatio
     outboundStatus: (row.outbound_status as ConversationThreadMessage["outboundStatus"]) ?? null,
     providerMessageId: (row.provider_message_id as string | null) ?? null,
     createdAt: row.created_at as string,
+    // A realtime postgres_changes payload is the raw `messages` row only --
+    // no media_files join is possible here, so a voice message that just
+    // arrived shows no player until the next full reload (router.refresh()
+    // on reconnect, or navigating back to the conversation) picks up its
+    // media_files row via the server loader's query above. The existing
+    // placeholder text (messageBodyDisplay.ts) already covers this gap for
+    // the message body in exactly the same way.
+    mediaFileId: null,
+    mediaMimeType: null,
+    mediaDurationSeconds: null,
   };
 }

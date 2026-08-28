@@ -277,3 +277,36 @@ export async function listLeadEvents(
     createdAt: row.created_at as string,
   }));
 }
+
+/**
+ * The Conversation -> Lead direction (P1 dashboard hygiene batch, reciprocal
+ * to leads.conversation_id already used for the existing Lead -> Conversation
+ * "View conversation" link). Returns only the lead id -- callers only ever
+ * need it to build a /dashboard/leads/{id} link, never a second copy of the
+ * lead's fields. Returns null uniformly when no lead is associated with this
+ * conversation for this company, whether because none exists or because it
+ * belongs to another tenant (RLS + the explicit company_id filter below both
+ * enforce this) -- the caller simply omits the "View Lead" action either way.
+ */
+export async function getLeadIdByConversationId(
+  client: SupabaseClient,
+  companyId: string,
+  conversationId: string,
+): Promise<string | null> {
+  const { data, error } = await client
+    .from("leads")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("conversation_id", conversationId)
+    .maybeSingle();
+  if (error) {
+    logServerError(
+      "Failed to resolve lead for conversation",
+      error,
+      { companyId, conversationId },
+      { operation: "getLeadIdByConversationId" },
+    );
+    throw error;
+  }
+  return (data?.id as string | undefined) ?? null;
+}

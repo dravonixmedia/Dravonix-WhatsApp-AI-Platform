@@ -20,6 +20,7 @@
     "@dravonix/email": "workspace:*",
     "@dravonix/handover": "workspace:*",
     "@dravonix/observability": "workspace:*",
+    "@dravonix/storage": "workspace:*",
     "@dravonix/tenant": "workspace:*",
     "@dravonix/whatsapp": "workspace:*",
     "@supabase/ssr": "^0.5.2",

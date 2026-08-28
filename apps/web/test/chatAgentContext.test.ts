@@ -86,6 +86,9 @@ function threadMessage(
     outboundStatus: null,
     providerMessageId: null,
     createdAt: "2026-01-01T00:00:00Z",
+    mediaFileId: null,
+    mediaMimeType: null,
+    mediaDurationSeconds: null,
     ...overrides,
   };
 }

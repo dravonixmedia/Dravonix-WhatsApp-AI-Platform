@@ -15,6 +15,7 @@ import { resolveMessageBodyDisplay } from "./messageBodyDisplay.js";
 import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
 import { mapRealtimeMessageRow } from "./realtimeMessageMapper.js";
 import { bottomScrollTop, isNearBottom, scrollTopAfterPrepend } from "./scrollBehavior.js";
+import { VoiceMessagePlayer } from "./VoiceMessagePlayer.js";
 import {
   appendRealtimeMessage,
   applyRealtimeMessagePatch,
@@ -259,7 +260,15 @@ export function ConversationThread({
                 </span>
                 <OutboundStatusBadge status={message.outboundStatus} />
               </div>
-              <div className={bubbleClass}>{resolveMessageBodyDisplay(message)}</div>
+              <div className={bubbleClass}>
+                {resolveMessageBodyDisplay(message)}
+                {message.mediaFileId ? (
+                  <VoiceMessagePlayer
+                    mediaFileId={message.mediaFileId}
+                    durationSeconds={message.mediaDurationSeconds}
+                  />
+                ) : null}
+              </div>
               {needsReconcile ? (
                 <div style={{ marginTop: "0.4rem" }}>
                   <p style={{ color: "var(--warning)", fontSize: "0.75rem", margin: "0 0 0.3rem" }}>

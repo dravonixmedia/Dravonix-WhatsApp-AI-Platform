@@ -1,6 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it, vi } from "vitest";
-import { getLead, listLeadEvents, listLeads } from "../lib/repositories/leadsRepository.js";
+import {
+  getLead,
+  getLeadIdByConversationId,
+  listLeadEvents,
+  listLeads,
+} from "../lib/repositories/leadsRepository.js";
 
 interface QueryResult {
   data: unknown;
@@ -532,5 +537,49 @@ describe("listLeadEvents", () => {
     const client = fakeSupabaseClient(chain);
 
     expect(await listLeadEvents(client, "company-a", "lead-1")).toEqual([]);
+  });
+});
+
+describe("getLeadIdByConversationId (Conversation -> Lead, P1 dashboard hygiene batch)", () => {
+  it("resolves the lead id for a conversation that has an associated lead, scoped by companyId and conversationId", async () => {
+    const chain = fakeChain({ data: { id: "lead-1" }, error: null });
+    const client = fakeSupabaseClient(chain);
+
+    const leadId = await getLeadIdByConversationId(client, "company-a", "conv-1");
+
+    expect(leadId).toBe("lead-1");
+    expect(chain.calls).toContainEqual({ method: "eq", args: ["company_id", "company-a"] });
+    expect(chain.calls).toContainEqual({ method: "eq", args: ["conversation_id", "conv-1"] });
+  });
+
+  it("returns null when no lead is associated with the conversation -- never a misleading placeholder", async () => {
+    const chain = fakeChain({ data: null, error: null });
+    const client = fakeSupabaseClient(chain);
+
+    expect(await getLeadIdByConversationId(client, "company-a", "conv-2")).toBeNull();
+  });
+
+  it("returns null uniformly for a cross-tenant conversationId -- never distinguishing not-found from cross-tenant", async () => {
+    // A conversationId that belongs to a different company's lead: scoping
+    // by this caller's own company_id (above) means the driver/RLS returns
+    // no row, identical to the "genuinely no lead" case.
+    const chain = fakeChain({ data: null, error: null });
+    const client = fakeSupabaseClient(chain);
+
+    expect(
+      await getLeadIdByConversationId(client, "company-a", "conv-owned-by-company-b"),
+    ).toBeNull();
+  });
+
+  it("propagates a genuine database error rather than silently swallowing it", async () => {
+    const chain = fakeChain({
+      data: null,
+      error: { code: "53300", message: "too many connections" },
+    });
+    const client = fakeSupabaseClient(chain);
+
+    await expect(getLeadIdByConversationId(client, "company-a", "conv-1")).rejects.toThrow(
+      "too many connections",
+    );
   });
 });

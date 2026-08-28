@@ -27,6 +27,9 @@ function baseMessage(
     outboundStatus: null,
     providerMessageId: null,
     createdAt: new Date().toISOString(),
+    mediaFileId: null,
+    mediaMimeType: null,
+    mediaDurationSeconds: null,
     ...overrides,
   };
 }

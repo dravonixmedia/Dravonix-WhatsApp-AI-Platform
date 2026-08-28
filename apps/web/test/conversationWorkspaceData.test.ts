@@ -37,6 +37,11 @@ vi.mock("../app/dashboard/loadContactSummary.js", () => ({
   loadContactSummary: (...args: unknown[]) => loadContactSummary(...args),
 }));
 
+const getLeadIdByConversationId = vi.fn(async (..._args: unknown[]) => null as string | null);
+vi.mock("../lib/repositories/leadsRepository.js", () => ({
+  getLeadIdByConversationId: (...args: unknown[]) => getLeadIdByConversationId(...args),
+}));
+
 const COMPANY_ID = "company-1";
 const CONVERSATION_ID = "conversation-1";
 
@@ -172,6 +177,39 @@ describe("loadConversationWorkspaceData", () => {
     expect(result.members).toEqual([{ id: "m1", role: "sales_person" }]);
   });
 
+  it("resolves the associated lead (P1 dashboard hygiene batch) via getLeadIdByConversationId, scoped to the caller's own companyId and this conversationId", async () => {
+    const { loadConversationWorkspaceData } =
+      await import("../app/dashboard/conversationWorkspaceData.js");
+    getConversationThreadForDashboard.mockResolvedValueOnce(threadResult);
+    getLeadIdByConversationId.mockResolvedValueOnce("lead-1");
+    const { client } = fakeSupabase();
+
+    const result = await loadConversationWorkspaceData(client, {} as never, {
+      companyId: COMPANY_ID,
+      conversationId: CONVERSATION_ID,
+      canAssignConversations: false,
+    });
+
+    expect(getLeadIdByConversationId).toHaveBeenCalledWith(client, COMPANY_ID, CONVERSATION_ID);
+    expect(result.leadId).toBe("lead-1");
+  });
+
+  it("returns leadId: null when no lead is associated with the conversation", async () => {
+    const { loadConversationWorkspaceData } =
+      await import("../app/dashboard/conversationWorkspaceData.js");
+    getConversationThreadForDashboard.mockResolvedValueOnce(threadResult);
+    getLeadIdByConversationId.mockResolvedValueOnce(null);
+    const { client } = fakeSupabase();
+
+    const result = await loadConversationWorkspaceData(client, {} as never, {
+      companyId: COMPANY_ID,
+      conversationId: CONVERSATION_ID,
+      canAssignConversations: false,
+    });
+
+    expect(result.leadId).toBeNull();
+  });
+
   it("calls notFound() (never re-throws the raw error) when the conversation is missing, cross-tenant, or otherwise inaccessible -- and never proceeds to load the contact", async () => {
     const { loadConversationWorkspaceData } =
       await import("../app/dashboard/conversationWorkspaceData.js");
@@ -188,5 +226,6 @@ describe("loadConversationWorkspaceData", () => {
 
     expect(notFound).toHaveBeenCalledTimes(1);
     expect(loadContactSummary).not.toHaveBeenCalled();
+    expect(getLeadIdByConversationId).not.toHaveBeenCalled();
   });
 });

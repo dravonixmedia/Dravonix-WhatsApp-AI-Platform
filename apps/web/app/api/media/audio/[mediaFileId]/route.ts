@@ -1,0 +1,74 @@
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { R2StorageProvider, type R2BucketLike } from "@dravonix/storage";
+import { NextResponse } from "next/server";
+import { getPlayableAudioMediaFile } from "../../../../../lib/repositories/mediaFilesRepository.js";
+import { getDashboardSession } from "../../../../../lib/session.js";
+import { createServerSupabaseClient } from "../../../../../lib/supabase/server.js";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Streams one company-scoped voice-message audio file for the dashboard's
+ * <audio> player (P1 dashboard hygiene batch). Reuses the existing R2
+ * storage architecture (packages/storage's R2StorageProvider, the same
+ * class apps/workers/voice-consumer already writes through) -- this is not
+ * a new storage provider, only apps/web's first read path into the bucket
+ * voice-consumer already populates.
+ *
+ * This is deliberately NOT a general-purpose media oracle:
+ *  - the caller's company comes only from their authenticated session
+ *    (getDashboardSession), never from a request parameter;
+ *  - getPlayableAudioMediaFile only ever resolves inbound_audio/
+ *    outbound_audio kind rows scoped to that company, excluding anything
+ *    retention-deleted;
+ *  - a missing, cross-tenant, wrong-kind, or deleted media_file_id all
+ *    produce the same 404, never revealing which case applied.
+ *
+ * No byte-range support: voice notes are short, and this keeps the
+ * authorization/storage path simple. Native <audio controls> still works
+ * fully against a plain 200 response, just without fine-grained seeking on
+ * a still-downloading file.
+ */
+export async function GET(
+  _request: Request,
+  { params }: { params: Promise<{ mediaFileId: string }> },
+): Promise<Response> {
+  const session = await getDashboardSession();
+  if (!session) {
+    return new NextResponse(null, { status: 401 });
+  }
+
+  const { mediaFileId } = await params;
+  const supabase = await createServerSupabaseClient();
+  const media = await getPlayableAudioMediaFile(supabase, session.activeCompanyId, mediaFileId);
+  if (!media) {
+    return new NextResponse(null, { status: 404 });
+  }
+
+  const { env } = getCloudflareContext();
+  const bucket = (env as unknown as { AUDIO_BUCKET?: R2BucketLike }).AUDIO_BUCKET;
+  if (!bucket) {
+    // Binding not configured for this deploy target -- fail closed, never
+    // fall back to any other access path.
+    return new NextResponse(null, { status: 503 });
+  }
+
+  const bytes = await new R2StorageProvider(bucket).get(media.storageKey);
+  if (!bytes) {
+    // Object missing from R2 (e.g. expired between the media_files check
+    // above and this read) -- same 404 as "not found", no different signal.
+    return new NextResponse(null, { status: 404 });
+  }
+
+  return new NextResponse(bytes, {
+    status: 200,
+    headers: {
+      "Content-Type": media.mimeType,
+      "Content-Length": String(bytes.byteLength),
+      // Private: this is tenant customer audio, never suitable for a shared
+      // cache. Short max-age only smooths out a user re-seeking/replaying
+      // the same message in one sitting.
+      "Cache-Control": "private, max-age=300",
+    },
+  });
+}
