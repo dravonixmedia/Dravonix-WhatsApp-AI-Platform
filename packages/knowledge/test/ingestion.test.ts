@@ -110,6 +110,14 @@ describe("prepareKnowledgeChunks", () => {
     expect(prepareKnowledgeChunks("   \n\n\t  ")).toEqual([]);
   });
 
+  it("returns an empty array for input consisting only of tabs/newlines/CR (mirrors the SQL-side ingest_knowledge_source fix)", () => {
+    expect(prepareKnowledgeChunks("\t\t\t")).toEqual([]);
+    expect(prepareKnowledgeChunks("\n\n\n")).toEqual([]);
+    expect(prepareKnowledgeChunks("\r\r\r")).toEqual([]);
+    expect(prepareKnowledgeChunks("\r\n\r\n")).toEqual([]);
+    expect(prepareKnowledgeChunks(" \t\n\r ")).toEqual([]);
+  });
+
   it("returns an empty array for empty input", () => {
     expect(prepareKnowledgeChunks("")).toEqual([]);
   });

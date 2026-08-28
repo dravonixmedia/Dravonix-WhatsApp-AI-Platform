@@ -109,9 +109,24 @@ begin
   -- Defense-in-depth re-validation: never trust that the caller already
   -- cleaned/filtered these, even though prepareKnowledgeChunks (the
   -- intended, only real caller) already does.
+  --
+  -- Postgres's own trim(text) (no explicit character argument) strips ONLY
+  -- the plain space character -- it does NOT recognize tab/newline/CR as
+  -- whitespace (confirmed directly: trim(E'\t') = E'\t', not ''). A chunk
+  -- consisting entirely of tabs/newlines/CRs would therefore have passed
+  -- this check as "non-empty" and silently replaced an existing source's
+  -- last-known-good chunks with content-free garbage. btrim(text, text)
+  -- with an explicit character set has no such gap -- verified directly
+  -- against exactly this set (space, tab, newline, CR, vertical tab, form
+  -- feed; CRLF is just CR immediately followed by LF, both already in the
+  -- set) and confirmed to strip only leading/trailing occurrences, never
+  -- anything internal, so "hello   world" keeps its internal spacing and
+  -- non-Latin content (e.g. Malayalam, Arabic) surrounded by whitespace is
+  -- preserved exactly, boundaries only.
   v_clean_chunks := array(
-    select trim(c) from unnest(coalesce(p_chunks, '{}'::text[])) as c
-    where trim(c) <> ''
+    select btrim(c, E' \t\n\r\v\f')
+    from unnest(coalesce(p_chunks, '{}'::text[])) as c
+    where btrim(c, E' \t\n\r\v\f') <> ''
   );
 
   if array_length(v_clean_chunks, 1) is null then
@@ -130,7 +145,7 @@ begin
             when public.knowledge_sources.ingestion_status = 'ready' then 'ready'::public.knowledge_ingestion_status
             else 'failed'::public.knowledge_ingestion_status
           end,
-          ingestion_error = coalesce(nullif(trim(p_empty_error), ''), 'Content was empty after cleaning.')
+          ingestion_error = coalesce(nullif(btrim(p_empty_error, E' \t\n\r\v\f'), ''), 'Content was empty after cleaning.')
       where public.knowledge_sources.id = p_source_id
       returning * into v_source;
     return query select v_source.id, v_source.ingestion_status, v_source.ingestion_error;
@@ -189,7 +204,9 @@ set search_path = ''
 as $$
 declare
   v_source public.knowledge_sources%rowtype;
-  v_title text := nullif(trim(coalesce(p_title, '')), '');
+  -- Same whitespace-detection fix as ingest_knowledge_source above: plain
+  -- trim() would accept a tab/newline/CR-only title as "meaningful".
+  v_title text := nullif(btrim(coalesce(p_title, ''), E' \t\n\r\v\f'), '');
 begin
   if auth.uid() is null then raise exception 'unauthorized'; end if;
   if public.current_platform_role() is distinct from 'super_admin' then raise exception 'permission_denied'; end if;

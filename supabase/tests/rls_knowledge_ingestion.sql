@@ -76,7 +76,23 @@ insert into knowledge_sources (id, company_id, source_type, title, is_enabled, i
   ('94100001-0000-0000-0000-000000000002', '92100001-0000-0000-0000-000000000001', 'faq', 'New Source', true, 'pending'),
   ('94100001-0000-0000-0000-000000000003', '92100001-0000-0000-0000-000000000001', 'faq', 'Retry Source', true, 'pending'),
   ('94100001-0000-0000-0000-000000000004', '92100001-0000-0000-0000-000000000001', 'faq', 'Oversized Source', true, 'pending'),
-  ('94100002-0000-0000-0000-000000000001', '92100002-0000-0000-0000-000000000001', 'faq', 'Company B Source', true, 'pending');
+  ('94100002-0000-0000-0000-000000000001', '92100002-0000-0000-0000-000000000001', 'faq', 'Company B Source', true, 'pending'),
+  -- Fixtures for the whitespace-classification blocker correction: one
+  -- 'pending' source per whitespace-only first-ingestion case, plus one per
+  -- valid-boundary-whitespace-content case.
+  ('94100001-0000-0000-0000-000000000005', '92100001-0000-0000-0000-000000000001', 'faq', 'WS Space Source', true, 'pending'),
+  ('94100001-0000-0000-0000-000000000006', '92100001-0000-0000-0000-000000000001', 'faq', 'WS Tab Source', true, 'pending'),
+  ('94100001-0000-0000-0000-000000000007', '92100001-0000-0000-0000-000000000001', 'faq', 'WS Newline Source', true, 'pending'),
+  ('94100001-0000-0000-0000-000000000008', '92100001-0000-0000-0000-000000000001', 'faq', 'WS CR Source', true, 'pending'),
+  ('94100001-0000-0000-0000-000000000009', '92100001-0000-0000-0000-000000000001', 'faq', 'WS CRLF Source', true, 'pending'),
+  ('9410000a-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', 'faq', 'WS Mixed Source', true, 'pending'),
+  ('9410000b-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', 'faq', 'WS NullPlusWhitespace Source', true, 'pending'),
+  ('9410000c-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', 'faq', 'Valid Hello Source', true, 'pending'),
+  ('9410000d-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', 'faq', 'Valid TabHelloNewline Source', true, 'pending'),
+  ('9410000e-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', 'faq', 'Valid CrlfFaq Source', true, 'pending'),
+  ('9410000f-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', 'faq', 'Valid HelloWorld Source', true, 'pending'),
+  ('94100010-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', 'faq', 'Valid Malayalam Source', true, 'pending'),
+  ('94100011-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', 'faq', 'Valid Arabic Source', true, 'pending');
 
 insert into knowledge_chunks (id, company_id, knowledge_source_id, content, chunk_index) values
   ('95100001-0000-0000-0000-000000000001', '92100001-0000-0000-0000-000000000001', '94100001-0000-0000-0000-000000000001', 'Old chunk zero', 0),
@@ -260,6 +276,215 @@ begin
     );
   perform test_assert('oversized-content override: a never-ready source is marked failed', v_status = 'failed');
   perform test_assert('oversized-content override: the caller-supplied message is stored verbatim', v_error = 'Content exceeds the allowed size.');
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 4c. CRITICAL -- the actual reported defect: Postgres's trim(text) with no
+--     explicit character argument strips ONLY the plain space character, not
+--     tab/newline/CR (confirmed directly: trim(E'\t') = E'\t', not ''). A
+--     replacement attempt made entirely of tab/newline/CR/mixed-whitespace
+--     content must be classified exactly like the plain-space case in
+--     section 3 above: invalid, so the already-'ready' source's chunks
+--     (still the three from section 2) are left completely untouched. This
+--     also verifies the mandatory searchability check -- the old chunks
+--     must remain findable through the real production path
+--     (search_knowledge_chunks via service_role), not merely present in the
+--     table.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  v_status knowledge_ingestion_status;
+  v_error text;
+  v_chunk_count integer;
+  v_chunks text[];
+  v_indexes integer[];
+begin
+  select ingestion_status, ingestion_error into v_status, v_error
+    from ingest_knowledge_source(
+      '92100001-0000-0000-0000-000000000001',
+      '94100001-0000-0000-0000-000000000001',
+      array[E'\t', E'\n', E'\r', E'\r\n', E' \t\n\r ', null]::text[]
+    );
+  perform test_assert(
+    'CRITICAL: tab/newline/CR/CRLF/mixed-whitespace replacement is classified invalid, not a valid non-empty chunk set',
+    v_status = 'ready'
+  );
+  perform test_assert('CRITICAL: a safe error is recorded so the failure is still visible', v_error is not null);
+
+  select count(*) into v_chunk_count
+    from knowledge_chunks where knowledge_source_id = '94100001-0000-0000-0000-000000000001';
+  perform test_assert('CRITICAL: exactly the prior three chunks remain -- no partial/duplicate/garbage rows', v_chunk_count = 3);
+
+  select array_agg(content order by chunk_index), array_agg(chunk_index order by chunk_index)
+    into v_chunks, v_indexes
+    from knowledge_chunks where knowledge_source_id = '94100001-0000-0000-0000-000000000001';
+  perform test_assert(
+    'CRITICAL: chunk content is byte-for-byte unchanged from section 2''s replacement set',
+    v_chunks = array['Replacement chunk A', 'Replacement chunk B', 'Replacement chunk C']
+  );
+  perform test_assert('CRITICAL: chunk_index values unchanged (0, 1, 2)', v_indexes = array[0, 1, 2]);
+  perform test_assert(
+    'CRITICAL: no whitespace-only garbage chunk exists anywhere for this source',
+    not exists (
+      select 1 from knowledge_chunks
+      where knowledge_source_id = '94100001-0000-0000-0000-000000000001'
+        and content !~ '\S'
+    )
+  );
+end;
+$$;
+
+-- Mandatory: the last-known-good chunks must still be actually searchable
+-- through the real production call path, not merely present in the table --
+-- this is the check that catches the defect at its real user-facing impact
+-- (message-consumer/voice-consumer would otherwise silently retrieve zero
+-- knowledge for this source after a "failed" edit attempt).
+do $$
+declare
+  v_count integer;
+begin
+  set local role service_role;
+  select count(*) into v_count
+    from search_knowledge_chunks('92100001-0000-0000-0000-000000000001', 'Replacement', 10);
+  perform test_assert(
+    'last-known-good chunks remain searchable after the failed tab/newline/CR/mixed-whitespace re-ingestion attempt',
+    v_count = 3
+  );
+  set local role authenticated;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 4d. First-ingestion whitespace rejection matrix: a brand-new source (never
+--     'ready') must end up 'failed' with zero chunks for EVERY whitespace
+--     type individually, not just plain spaces -- space, tab, newline, CR,
+--     CRLF, mixed whitespace, and NULL-mixed-with-whitespace.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  v_status knowledge_ingestion_status;
+  v_error text;
+  v_chunk_count integer;
+begin
+  select ingestion_status, ingestion_error into v_status, v_error
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '94100001-0000-0000-0000-000000000005', array['   ']);
+  perform test_assert('first-ingestion, space-only: failed, never ready', v_status = 'failed');
+  perform test_assert('first-ingestion, space-only: a safe error is recorded', v_error is not null);
+  select count(*) into v_chunk_count from knowledge_chunks where knowledge_source_id = '94100001-0000-0000-0000-000000000005';
+  perform test_assert('first-ingestion, space-only: zero chunks written', v_chunk_count = 0);
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '94100001-0000-0000-0000-000000000006', array[E'\t\t\t']);
+  perform test_assert('first-ingestion, tab-only: failed, never ready', v_status = 'failed');
+  select count(*) into v_chunk_count from knowledge_chunks where knowledge_source_id = '94100001-0000-0000-0000-000000000006';
+  perform test_assert('first-ingestion, tab-only: zero chunks written', v_chunk_count = 0);
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '94100001-0000-0000-0000-000000000007', array[E'\n\n']);
+  perform test_assert('first-ingestion, newline-only: failed, never ready', v_status = 'failed');
+  select count(*) into v_chunk_count from knowledge_chunks where knowledge_source_id = '94100001-0000-0000-0000-000000000007';
+  perform test_assert('first-ingestion, newline-only: zero chunks written', v_chunk_count = 0);
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '94100001-0000-0000-0000-000000000008', array[E'\r\r']);
+  perform test_assert('first-ingestion, CR-only: failed, never ready', v_status = 'failed');
+  select count(*) into v_chunk_count from knowledge_chunks where knowledge_source_id = '94100001-0000-0000-0000-000000000008';
+  perform test_assert('first-ingestion, CR-only: zero chunks written', v_chunk_count = 0);
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '94100001-0000-0000-0000-000000000009', array[E'\r\n\r\n']);
+  perform test_assert('first-ingestion, CRLF-only: failed, never ready', v_status = 'failed');
+  select count(*) into v_chunk_count from knowledge_chunks where knowledge_source_id = '94100001-0000-0000-0000-000000000009';
+  perform test_assert('first-ingestion, CRLF-only: zero chunks written', v_chunk_count = 0);
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '9410000a-0000-0000-0000-000000000001', array[E' \t\n\r ']);
+  perform test_assert('first-ingestion, mixed whitespace: failed, never ready', v_status = 'failed');
+  select count(*) into v_chunk_count from knowledge_chunks where knowledge_source_id = '9410000a-0000-0000-0000-000000000001';
+  perform test_assert('first-ingestion, mixed whitespace: zero chunks written', v_chunk_count = 0);
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '9410000b-0000-0000-0000-000000000001', array[null, E'\t', '']::text[]);
+  perform test_assert('first-ingestion, NULL mixed with whitespace: failed, never ready', v_status = 'failed');
+  select count(*) into v_chunk_count from knowledge_chunks where knowledge_source_id = '9410000b-0000-0000-0000-000000000001';
+  perform test_assert('first-ingestion, NULL mixed with whitespace: zero chunks written', v_chunk_count = 0);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 4e. Valid content regression: meaningful content surrounded by tab/
+--     newline/CR whitespace must still ingest successfully, with only the
+--     leading/trailing whitespace normalized away -- internal whitespace
+--     between words, and non-Latin content, must be preserved exactly.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  v_status knowledge_ingestion_status;
+  v_content text;
+begin
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '9410000c-0000-0000-0000-000000000001', array['hello']);
+  select content into v_content from knowledge_chunks where knowledge_source_id = '9410000c-0000-0000-0000-000000000001';
+  perform test_assert('valid content "hello": ready', v_status = 'ready');
+  perform test_assert('valid content "hello": stored exactly', v_content = 'hello');
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '9410000d-0000-0000-0000-000000000001', array[E'\thello\n']);
+  select content into v_content from knowledge_chunks where knowledge_source_id = '9410000d-0000-0000-0000-000000000001';
+  perform test_assert('valid content "\thello\n": ready', v_status = 'ready');
+  perform test_assert('valid content "\thello\n": boundary tab/newline stripped, content preserved', v_content = 'hello');
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '9410000e-0000-0000-0000-000000000001', array[E'\r\nFAQ answer\r\n']);
+  select content into v_content from knowledge_chunks where knowledge_source_id = '9410000e-0000-0000-0000-000000000001';
+  perform test_assert('valid content "\r\nFAQ answer\r\n": ready', v_status = 'ready');
+  perform test_assert('valid content "\r\nFAQ answer\r\n": boundary CRLF stripped, internal space preserved', v_content = 'FAQ answer');
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '9410000f-0000-0000-0000-000000000001', array[E'hello\nworld']);
+  select content into v_content from knowledge_chunks where knowledge_source_id = '9410000f-0000-0000-0000-000000000001';
+  perform test_assert('valid content "hello\nworld": ready', v_status = 'ready');
+  perform test_assert('valid content "hello\nworld": internal newline is NOT a boundary -- preserved exactly', v_content = E'hello\nworld');
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '94100010-0000-0000-0000-000000000001', array[E'  \t' || 'സ്വാഗതം' || E'\n  ']);
+  select content into v_content from knowledge_chunks where knowledge_source_id = '94100010-0000-0000-0000-000000000001';
+  perform test_assert('valid Malayalam content surrounded by whitespace: ready', v_status = 'ready');
+  perform test_assert('valid Malayalam content: boundary whitespace stripped, script preserved exactly', v_content = 'സ്വാഗതം');
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('92100001-0000-0000-0000-000000000001', '94100011-0000-0000-0000-000000000001', array[E'  \t' || 'مرحبا' || E'\n  ']);
+  select content into v_content from knowledge_chunks where knowledge_source_id = '94100011-0000-0000-0000-000000000001';
+  perform test_assert('valid Arabic content surrounded by whitespace: ready', v_status = 'ready');
+  perform test_assert('valid Arabic content: boundary whitespace stripped, script preserved exactly', v_content = 'مرحبا');
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 4f. Title validation has the identical whitespace-classification defect
+--     (admin_add_knowledge_source's v_title used plain trim()) -- a
+--     whitespace-only title must be rejected, and a meaningful title
+--     surrounded by whitespace must be accepted with only the boundaries
+--     normalized away.
+-- ---------------------------------------------------------------------------
+
+select test_assert_raises(
+  'a title made entirely of tab/newline/space is rejected as invalid, not accepted as "meaningful"',
+  $sql$ select id from admin_add_knowledge_source('92100001-0000-0000-0000-000000000001', 'faq', E'  \t\n  ') $sql$,
+  'invalid_title'
+);
+
+do $$
+declare
+  v_title text;
+begin
+  select title into v_title
+    from admin_add_knowledge_source('92100001-0000-0000-0000-000000000001', 'faq', E'  \tPricing Info\n  ');
+  perform test_assert('a meaningful title surrounded by whitespace is accepted, boundary-normalized', v_title = 'Pricing Info');
 end;
 $$;
 

@@ -197,6 +197,18 @@ describe("adminReingestKnowledgeSourceAction", () => {
     });
   });
 
+  it("tab/newline/CR-only replacement is treated identically to plain-space-only -- zero chunks reach the RPC", async () => {
+    await adminReingestKnowledgeSourceAction(
+      COMPANY_ID,
+      formData({ source_id: SOURCE_ID, source_type: "faq", content: "\t\r\n\t\r\n" }),
+    );
+    expect(rpc).toHaveBeenCalledWith("ingest_knowledge_source", {
+      p_company_id: COMPANY_ID,
+      p_source_id: SOURCE_ID,
+      p_chunks: [],
+    });
+  });
+
   it("propagates a wrong source/company rejection from the RPC rather than swallowing it", async () => {
     const notFoundError = Object.assign(new Error("knowledge_source_not_found"), {
       message: "knowledge_source_not_found",
