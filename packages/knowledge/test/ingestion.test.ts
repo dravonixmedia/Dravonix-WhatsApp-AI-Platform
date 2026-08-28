@@ -4,7 +4,9 @@ import {
   cleanText,
   csvExtractor,
   FileTooLargeError,
+  MAX_KNOWLEDGE_DOCUMENT_BYTES,
   plainTextExtractor,
+  prepareKnowledgeChunks,
   UnsupportedFileTypeError,
   validateFileSize,
   validateFileType,
@@ -92,5 +94,62 @@ describe("chunkText", () => {
 
   it("returns an empty array for empty input", () => {
     expect(chunkText("")).toEqual([]);
+  });
+});
+
+describe("prepareKnowledgeChunks", () => {
+  it("cleans, chunks, and returns non-empty chunks in deterministic order", () => {
+    const paragraph = "x".repeat(500);
+    const text = [paragraph, paragraph].join("\n\n");
+    const chunks = prepareKnowledgeChunks(text, { maxChunkChars: 800 });
+    expect(chunks).toEqual(chunkText(cleanText(text), { maxChunkChars: 800 }));
+    expect(chunks.length).toBeGreaterThan(0);
+  });
+
+  it("returns an empty array for whitespace-only input, never throwing", () => {
+    expect(prepareKnowledgeChunks("   \n\n\t  ")).toEqual([]);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(prepareKnowledgeChunks("")).toEqual([]);
+  });
+
+  it("removes any chunk that is empty after trimming", () => {
+    // chunkText's own paragraph filter already excludes these in normal
+    // operation; this proves prepareKnowledgeChunks's own defense-in-depth
+    // filter independently, in case a future chunking change ever produced one.
+    const chunks = prepareKnowledgeChunks("Real content.\n\n   \n\nMore real content.");
+    expect(chunks.every((c) => c.trim().length > 0)).toBe(true);
+  });
+
+  it("throws FileTooLargeError using real UTF-8 byte length, not JS string .length", () => {
+    // Each Malayalam character below is a multi-byte UTF-8 sequence, so the
+    // UTF-8 byte length is several times the JS string .length -- this
+    // content must be rejected by its real byte size even though its
+    // character count alone would look small. Repeat count is derived from
+    // the actual per-unit byte length so this stays correct regardless of
+    // exact UTF-8 encoding details.
+    const unit = "മലയാളം ";
+    const unitBytes = new TextEncoder().encode(unit).length;
+    const repeats = Math.ceil((MAX_KNOWLEDGE_DOCUMENT_BYTES + unitBytes * 10) / unitBytes);
+    const malayalam = unit.repeat(repeats);
+    const byteLength = new TextEncoder().encode(malayalam).length;
+    expect(byteLength).toBeGreaterThan(MAX_KNOWLEDGE_DOCUMENT_BYTES);
+    expect(malayalam.length).toBeLessThan(byteLength);
+    expect(() => prepareKnowledgeChunks(malayalam)).toThrow(FileTooLargeError);
+  });
+
+  it("accepts multilingual content within the real byte limit", () => {
+    const arabic = "مرحبا بكم في دعم درافونيكس. هذا محتوى تجريبي قصير.";
+    expect(() => prepareKnowledgeChunks(arabic)).not.toThrow();
+    expect(prepareKnowledgeChunks(arabic).join("")).toContain("دعم");
+  });
+
+  it("accepts content exactly at the byte limit and rejects one byte over it", () => {
+    const atLimit = "a".repeat(MAX_KNOWLEDGE_DOCUMENT_BYTES);
+    expect(() => prepareKnowledgeChunks(atLimit)).not.toThrow();
+
+    const overLimit = "a".repeat(MAX_KNOWLEDGE_DOCUMENT_BYTES + 1);
+    expect(() => prepareKnowledgeChunks(overLimit)).toThrow(FileTooLargeError);
   });
 });

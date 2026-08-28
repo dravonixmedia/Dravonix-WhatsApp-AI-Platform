@@ -80,7 +80,7 @@ declare
     'update_company_profile', 'list_company_member_identities', 'update_user_display_name',
     'admin_update_user_display_name', 'admin_update_company_profile', 'admin_update_company_ai_settings',
     'admin_update_company_voice_settings', 'admin_add_knowledge_source', 'admin_toggle_knowledge_source',
-    'admin_remove_knowledge_source'
+    'admin_remove_knowledge_source', 'ingest_knowledge_source'
   ];
 begin
   foreach fn in array fns loop
@@ -382,16 +382,31 @@ select test_set_current_user('80000001-0000-0000-0000-000000000001'); -- super_a
 do $$
 declare
   v_source_id uuid;
+  v_status knowledge_ingestion_status;
 begin
-  select id into v_source_id from admin_add_knowledge_source('90000001-0000-0000-0000-000000000001', 'faq', 'Test FAQ', 'Some answer content');
+  -- P2 knowledge ingestion (migration 34): admin_add_knowledge_source only
+  -- ever creates metadata now -- it no longer accepts or writes raw chunk
+  -- content, so a freshly created source starts 'pending' with zero chunks
+  -- until ingest_knowledge_source is called separately.
+  select id into v_source_id from admin_add_knowledge_source('90000001-0000-0000-0000-000000000001', 'faq', 'Test FAQ');
 
   perform test_assert('Super Admin can add a knowledge source for any company', v_source_id is not null);
   perform test_assert(
     'knowledge_source_added audit row was written for the Super Admin add',
     exists (select 1 from audit_logs where action = 'knowledge_source_added' and target_id = v_source_id::text)
   );
+  select ingestion_status into v_status from knowledge_sources where id = v_source_id;
+  perform test_assert('a freshly created source starts pending, never ready', v_status = 'pending');
   perform test_assert(
-    'the initial content was written to knowledge_chunks by the SECURITY DEFINER function, despite knowledge_chunks having no authenticated INSERT policy',
+    'no chunks exist yet -- admin_add_knowledge_source is metadata-only now',
+    not exists (select 1 from knowledge_chunks where knowledge_source_id = v_source_id)
+  );
+
+  select ingestion_status into v_status
+    from ingest_knowledge_source('90000001-0000-0000-0000-000000000001', v_source_id, array['Some answer content']);
+  perform test_assert('ingest_knowledge_source marks the source ready after a successful commit', v_status = 'ready');
+  perform test_assert(
+    'the prepared content was written to knowledge_chunks by the SECURITY DEFINER function, despite knowledge_chunks having no authenticated INSERT policy',
     exists (select 1 from knowledge_chunks where knowledge_source_id = v_source_id and content = 'Some answer content')
   );
 

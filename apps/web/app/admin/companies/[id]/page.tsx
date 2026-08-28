@@ -18,6 +18,7 @@ import {
 } from "../../../../lib/actions/admin.js";
 import {
   adminAddKnowledgeSourceAction,
+  adminReingestKnowledgeSourceAction,
   adminRemoveKnowledgeSourceAction,
   adminToggleKnowledgeSourceAction,
   adminUpdateCompanyAiSettingsAction,
@@ -315,6 +316,7 @@ export default async function AdminCompanyDetailPage({
   const adminAddKnowledgeSourceWithId = adminAddKnowledgeSourceAction.bind(null, id);
   const adminToggleKnowledgeSourceWithId = adminToggleKnowledgeSourceAction.bind(null, id);
   const adminRemoveKnowledgeSourceWithId = adminRemoveKnowledgeSourceAction.bind(null, id);
+  const adminReingestKnowledgeSourceWithId = adminReingestKnowledgeSourceAction.bind(null, id);
 
   return (
     <div>
@@ -1061,9 +1063,16 @@ export default async function AdminCompanyDetailPage({
 
       {/* Knowledge Base -- Client Dashboard Permission Hardening (migration
           00000000000022) made /dashboard/knowledge read-only; this is the
-          one place sources can be added/enabled/disabled/removed now, over
-          the same knowledge_sources/knowledge_chunks schema (no parallel
-          knowledge system, no upload/reindex/ingestion capability). */}
+          one place sources can be added/enabled/disabled/removed/edited now,
+          over the same knowledge_sources/knowledge_chunks schema (no
+          parallel knowledge system). P2 knowledge ingestion (migration 34)
+          made "Add source"/"Edit content" real, transactional ingestion --
+          content is cleaned, chunked, and committed via ingest_knowledge_source,
+          with ingestion_status/ingestion_error genuinely reflecting whether
+          that succeeded, instead of the prior single-raw-chunk write that
+          always left the source cosmetically 'ready'. Still text/FAQ paste
+          only -- no file upload, no PDF/DOCX, per the P2 audit's launch
+          scope. */}
       <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
         <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
           Knowledge base
@@ -1126,6 +1135,40 @@ export default async function AdminCompanyDetailPage({
                       </button>
                     </form>
                   </span>
+                  <details style={{ width: "100%", marginTop: "0.4rem" }}>
+                    <summary
+                      className="dvx-muted"
+                      style={{ fontSize: "0.78rem", cursor: "pointer" }}
+                    >
+                      Edit content
+                    </summary>
+                    <form
+                      action={adminReingestKnowledgeSourceWithId}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "0.4rem",
+                        marginTop: "0.4rem",
+                      }}
+                    >
+                      <input type="hidden" name="source_id" value={source.id} />
+                      <input type="hidden" name="source_type" value={source.source_type} />
+                      <textarea
+                        className="dvx-input"
+                        name="content"
+                        placeholder="Replace this source's content -- committing re-ingests it atomically; a failed attempt never removes the current content"
+                        rows={3}
+                        style={{ resize: "vertical" }}
+                      />
+                      <button
+                        className="dvx-button dvx-button--secondary"
+                        type="submit"
+                        style={{ fontSize: "0.75rem", alignSelf: "flex-start" }}
+                      >
+                        Save content
+                      </button>
+                    </form>
+                  </details>
                 </div>
               );
             })}
