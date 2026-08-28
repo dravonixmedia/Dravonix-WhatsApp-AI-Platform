@@ -332,6 +332,36 @@ describe("listLeads", () => {
     expect(serialized).not.toContain("member-1");
     logSpy.mockRestore();
   });
+
+  it("still rejects with the ORIGINAL database error, never a logging error, even when logServerError's own internal logging fails (P1 correction regression)", async () => {
+    // Forces loadEnv(process.env) -- called internally by logServerError --
+    // to throw EnvValidationError (invalid APP_ENV), simulating exactly the
+    // scenario the independent review found: a logging-path environment
+    // failure must never replace or mask the caller's real repository error.
+    vi.stubEnv("APP_ENV", "not-a-real-app-env");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const chain = fakeChain({
+      data: null,
+      error: { code: "53300", message: "too many connections" },
+    });
+    const client = fakeSupabaseClient(chain);
+
+    await expect(
+      listLeads(client, {
+        companyId: "company-a",
+        callerMemberId: "member-1",
+        page: 1,
+        pageSize: 25,
+      }),
+    ).rejects.toThrow("too many connections");
+
+    // logServerError's internal loadEnv failure was swallowed silently --
+    // no log line was ever written, and (critically) no exception from the
+    // logging path escaped in place of the original database error above.
+    expect(logSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
 });
 
 describe("lead identity resolution (resolveLeadDisplayName via listLeads)", () => {
