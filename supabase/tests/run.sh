@@ -123,6 +123,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_super_admin_s
 echo "Running P0 leads -> contacts embed grant regression (migration 33) assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_leads_contact_embed.sql"
 
+echo "Running P1 stabilization search_knowledge_chunks (migrations 10/11) RLS/RPC regression assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_knowledge_search.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------

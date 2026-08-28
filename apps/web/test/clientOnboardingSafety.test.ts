@@ -53,9 +53,6 @@ describe("No Meta/Embedded Signup API is called anywhere in the new client onboa
     "app/invite/[token]/AcceptInviteForm.tsx",
     "lib/actions/invitations.ts",
     "lib/actions/acceptInvite.ts",
-    "lib/actions/companyProfile.ts",
-    "lib/actions/aiSettings.ts",
-    "lib/actions/knowledge.ts",
     "lib/onboarding.ts",
     "app/admin/companies/[id]/page.tsx",
   ];
@@ -86,12 +83,15 @@ describe("No Meta/Embedded Signup API is called anywhere in the new client onboa
 });
 
 describe("Client dashboard access resolves company scope server-side, never from a client-supplied id", () => {
-  it("companyProfileAction resolves the company from the session, not from form input", () => {
-    const source = readSource("lib/actions/companyProfile.ts");
-    expect(source).toContain("getDashboardSession");
-    expect(source).toContain("session.activeCompanyId");
-    expect(source).not.toMatch(/formData\.get\(\s*["']company_id["']\s*\)/);
-  });
+  // lib/actions/companyProfile.ts, lib/actions/aiSettings.ts, and
+  // lib/actions/knowledge.ts were removed in the P1 stabilization pass
+  // (dead code: Client Dashboard Permission Hardening, migration 22,
+  // permanently revoked settings.manage/ai_settings.manage/knowledge.manage
+  // from every client role, and the corresponding dashboard pages were
+  // already made fully read-only with no Server Action binding at all --
+  // see settingsPageCleanup.test.ts and app/dashboard/ai-settings/page.tsx's
+  // own doc comment). Their company-scoping properties are moot for code
+  // that no longer exists.
 
   it("invitation/team RPCs accept a caller-supplied company/member id but the RPC itself re-verifies authorization server-side (not a trusted client value) -- these actions add no authorization logic of their own", () => {
     const source = readSource("lib/actions/invitations.ts");
@@ -102,15 +102,6 @@ describe("Client dashboard access resolves company scope server-side, never from
     // client-supplied id -- the RPC's own has_company_permission()/auth.uid()
     // checks are the real boundary (see rls_client_onboarding.sql).
     expect(source).toContain("re-verifies authorization itself");
-  });
-
-  it("aiSettings and knowledge actions resolve the company id from the session, never from form input", () => {
-    for (const relativePath of ["lib/actions/aiSettings.ts", "lib/actions/knowledge.ts"]) {
-      const source = readSource(relativePath);
-      expect(source).toContain("getDashboardSession");
-      expect(source).toContain("session.activeCompanyId");
-      expect(source).not.toMatch(/formData\.get\(\s*["']company_id["']\s*\)/);
-    }
   });
 });
 

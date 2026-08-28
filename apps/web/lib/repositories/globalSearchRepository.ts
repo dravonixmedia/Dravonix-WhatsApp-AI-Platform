@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { logServerError } from "../serverLogging.js";
 import {
   getConversationPhoneDisplays,
   getLeadPhoneDisplays,
@@ -133,7 +134,15 @@ export async function searchLeads(
     .in("id", leadIds)
     .order("updated_at", { ascending: false })
     .limit(GLOBAL_SEARCH_RESULT_LIMIT);
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Failed to search leads (global search)",
+      error,
+      { companyId },
+      { operation: "searchLeads" },
+    );
+    throw error;
+  }
 
   const rows = (data ?? []) as unknown as Array<{
     id: string;

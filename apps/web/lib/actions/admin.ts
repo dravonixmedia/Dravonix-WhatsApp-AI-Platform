@@ -17,6 +17,7 @@
 
 import { revalidatePath } from "next/cache";
 import { isActiveCompanyRole } from "../companyRoles.js";
+import { logServerError } from "../serverLogging.js";
 import { getPlatformSession } from "../session.js";
 import { createServerSupabaseClient } from "../supabase/server.js";
 
@@ -51,7 +52,10 @@ export async function createCompanyAction(formData: FormData): Promise<void> {
     p_currency: str(formData, "currency") ?? "INR",
     p_is_demo: formData.get("is_demo") === "on",
   });
-  if (error) throw error;
+  if (error) {
+    logServerError("Admin action failed", error, undefined, { action: "createCompanyAction" });
+    throw error;
+  }
   revalidateAdminCompanyPaths();
 }
 
@@ -61,14 +65,34 @@ export async function suspendCompanyAction(companyId: string, formData: FormData
     p_company_id: companyId,
     p_reason: str(formData, "reason"),
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "suspendCompanyAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
 }
 
 export async function reactivateCompanyAction(companyId: string): Promise<void> {
   const supabase = await requireSuperAdminClient();
   const { error } = await supabase.rpc("admin_reactivate_company", { p_company_id: companyId });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "reactivateCompanyAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
 }
 
@@ -78,7 +102,10 @@ export async function closeCompanyAction(companyId: string, formData: FormData):
     p_company_id: companyId,
     p_reason: str(formData, "reason"),
   });
-  if (error) throw error;
+  if (error) {
+    logServerError("Admin action failed", error, { companyId }, { action: "closeCompanyAction" });
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
 }
 
@@ -97,7 +124,17 @@ export async function inviteCompanyMemberAction(
     p_email: email,
     p_role: role,
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "inviteCompanyMemberAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
 }
 
@@ -116,7 +153,17 @@ export async function changeCompanyMemberRoleAction(
     p_member_id: memberId,
     p_new_role: newRole,
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "changeCompanyMemberRoleAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
 }
 
@@ -132,7 +179,17 @@ export async function deactivateCompanyMemberAction(
     p_company_id: companyId,
     p_member_id: memberId,
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "deactivateCompanyMemberAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
 }
 
@@ -145,7 +202,10 @@ export async function assignPlanAction(companyId: string, formData: FormData): P
     p_company_id: companyId,
     p_plan_key: planKey,
   });
-  if (error) throw error;
+  if (error) {
+    logServerError("Admin action failed", error, { companyId }, { action: "assignPlanAction" });
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
   revalidatePath("/admin/subscriptions");
 }
@@ -163,7 +223,17 @@ export async function changeSubscriptionStateAction(
     p_new_state: newState,
     p_reason: str(formData, "reason"),
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "changeSubscriptionStateAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
   revalidatePath("/admin/subscriptions");
 }
@@ -184,7 +254,17 @@ export async function setCompanyEntitlementAction(
     p_numeric_limit: numericLimitRaw ? Number(numericLimitRaw) : null,
     p_reason: str(formData, "reason"),
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "setCompanyEntitlementAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
   revalidatePath("/admin/entitlements");
 }
@@ -202,7 +282,17 @@ export async function resetCompanyEntitlementAction(
     p_feature_key: featureKey,
     p_reason: str(formData, "reason"),
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "resetCompanyEntitlementAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
   revalidatePath("/admin/entitlements");
 }
@@ -221,7 +311,17 @@ export async function startSupportAccessAction(
     p_reason: reason,
     p_duration_minutes: durationRaw ? Number(durationRaw) : 60,
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "startSupportAccessAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
   revalidatePath("/admin/support-access");
 }
@@ -232,7 +332,17 @@ export async function endSupportAccessAction(companyId: string, formData: FormDa
   if (!sessionId) throw new Error("Session is required");
 
   const { error } = await supabase.rpc("admin_end_support_access", { p_session_id: sessionId });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Admin action failed",
+      error,
+      { companyId },
+      {
+        action: "endSupportAccessAction",
+      },
+    );
+    throw error;
+  }
   revalidateAdminCompanyPaths(companyId);
   revalidatePath("/admin/support-access");
 }

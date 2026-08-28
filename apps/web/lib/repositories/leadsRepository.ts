@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { logServerError } from "../serverLogging.js";
 import {
   getLeadPhoneDisplays,
   searchCompanyLeadIds,
@@ -188,7 +189,15 @@ export async function listLeads(
   query = query.order("updated_at", { ascending: false }).range(from, to);
 
   const { data, count, error } = await query;
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Failed to list leads",
+      error,
+      { companyId: filters.companyId },
+      { operation: "listLeads" },
+    );
+    throw error;
+  }
 
   const rows = (data ?? []) as unknown as LeadRow[];
   const phoneDisplays = await getLeadPhoneDisplays(
@@ -216,7 +225,10 @@ export async function getLead(
     .eq("company_id", companyId)
     .eq("id", leadId)
     .maybeSingle();
-  if (error) throw error;
+  if (error) {
+    logServerError("Failed to get lead", error, { companyId }, { operation: "getLead", leadId });
+    throw error;
+  }
   if (!data) return null;
 
   const row = data as unknown as LeadRow;
@@ -247,7 +259,15 @@ export async function listLeadEvents(
     .eq("company_id", companyId)
     .eq("lead_id", leadId)
     .order("created_at", { ascending: false });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Failed to list lead events",
+      error,
+      { companyId },
+      { operation: "listLeadEvents", leadId },
+    );
+    throw error;
+  }
 
   return (data ?? []).map((row) => ({
     id: row.id as string,

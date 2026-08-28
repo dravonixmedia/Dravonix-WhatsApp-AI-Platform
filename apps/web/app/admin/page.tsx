@@ -114,11 +114,11 @@ export default async function AdminDashboardPage() {
       </div>
 
       <div className="dvx-card" style={{ marginTop: "1.5rem", maxWidth: 640 }}>
-        <h2 style={{ fontSize: "0.95rem", margin: "0 0 0.5rem" }}>Foundation phase</h2>
+        <h2 style={{ fontSize: "0.95rem", margin: "0 0 0.5rem" }}>Platform operations</h2>
         <p className="dvx-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-          This is the Super Admin foundation only. Company management, billing, subscriptions,
-          entitlements, usage, research, audit tooling, support access, and WhatsApp connection
-          management are not implemented yet -- see the sidebar for what&apos;s coming.
+          Company management, users & roles, plans, subscriptions, entitlements, usage, billing,
+          invoices, payments, audit logs, and support access/requests are all available from the
+          sidebar. Research and Settings remain not yet implemented.
         </p>
       </div>
     </div>

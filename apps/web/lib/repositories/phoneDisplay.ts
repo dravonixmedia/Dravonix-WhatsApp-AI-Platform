@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { logServerError } from "../serverLogging.js";
 
 export type PhoneVisibility = "full" | "masked";
 
@@ -90,7 +91,12 @@ export async function getLeadPhoneDisplays(
   const { data, error } = await supabase.rpc("get_lead_phone_displays", {
     p_lead_ids: uniqueIds,
   });
-  if (error) throw error;
+  if (error) {
+    logServerError("Failed to resolve lead phone displays", error, undefined, {
+      operation: "getLeadPhoneDisplays",
+    });
+    throw error;
+  }
 
   for (const row of (data ?? []) as LeadPhoneDisplayRow[]) {
     result.set(row.lead_id, {
@@ -148,6 +154,14 @@ export async function searchCompanyLeadIds(
     p_term: term,
     p_limit: limit,
   });
-  if (error) throw error;
+  if (error) {
+    logServerError(
+      "Failed to search company leads",
+      error,
+      { companyId },
+      { operation: "searchCompanyLeadIds" },
+    );
+    throw error;
+  }
   return ((data ?? []) as Array<{ lead_id: string }>).map((row) => row.lead_id);
 }

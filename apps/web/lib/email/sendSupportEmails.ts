@@ -10,6 +10,7 @@ import {
   type SupportReplyEmailInput,
   type SupportRequestTypeLabelInput,
 } from "@dravonix/email";
+import { logServerError } from "../serverLogging.js";
 
 export interface SendSupportEmailResult {
   /** False when no email provider (or, for the new-request notification, no SUPPORT_NOTIFICATION_EMAIL) is configured. */
@@ -74,13 +75,25 @@ export async function sendNewSupportRequestNotification(
     if (result.success) {
       return { attempted: true, success: true, providerMessageId: result.providerMessageId };
     }
+    logServerError(
+      "Support-request notification email delivery failed",
+      new Error(result.errorMessage ?? "unknown"),
+      undefined,
+      { operation: "sendNewSupportRequestNotification", providerErrorCode: result.errorCode },
+    );
     return {
       attempted: true,
       success: false,
       errorCode: result.errorCode,
       errorMessage: result.errorMessage,
     };
-  } catch {
+  } catch (error) {
+    // Previously fully swallowed with zero diagnostic info -- fixed to log
+    // it (sanitized, never the email body) while preserving the exact same
+    // best-effort contract: this function still never throws.
+    logServerError("Support-request notification email send threw unexpectedly", error, undefined, {
+      operation: "sendNewSupportRequestNotification",
+    });
     return { attempted: true, success: false, errorCode: "unexpected_error" };
   }
 }
@@ -111,13 +124,33 @@ export async function sendSupportReplyNotification(
     if (result.success) {
       return { attempted: true, success: true, providerMessageId: result.providerMessageId };
     }
+    // Never the recipient address or email body/subject -- maskEmail and the
+    // provider's own already-sanitized errorCode/errorMessage only.
+    logServerError(
+      "Support-reply notification email delivery failed",
+      new Error(result.errorMessage ?? "unknown"),
+      undefined,
+      {
+        operation: "sendSupportReplyNotification",
+        recipient: maskEmail(recipientEmail),
+        providerErrorCode: result.errorCode,
+      },
+    );
     return {
       attempted: true,
       success: false,
       errorCode: result.errorCode,
       errorMessage: result.errorMessage,
     };
-  } catch {
+  } catch (error) {
+    // Previously fully swallowed with zero diagnostic info -- fixed to log
+    // it (sanitized, never the recipient address or email body) while
+    // preserving the exact same best-effort contract: this function still
+    // never throws.
+    logServerError("Support-reply notification email send threw unexpectedly", error, undefined, {
+      operation: "sendSupportReplyNotification",
+      recipient: maskEmail(recipientEmail),
+    });
     return { attempted: true, success: false, errorCode: "unexpected_error" };
   }
 }

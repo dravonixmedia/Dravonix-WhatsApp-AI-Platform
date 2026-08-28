@@ -49,6 +49,15 @@ describe("accumulateCompanyUsage", () => {
     expect(usage.voiceDurationSeconds).toBe(42);
   });
 
+  it("sums speech_to_text_seconds and generated_voice_seconds together into one voiceDurationSeconds total (P1 stabilization regression)", () => {
+    const usage = build([
+      { metric: "speech_to_text_seconds", totalQuantity: 12 },
+      { metric: "generated_voice_seconds", totalQuantity: 8 },
+    ]);
+    expect(usage.voiceDurationSeconds).toBe(20);
+    expect(usage.voiceDurationMetered).toBe(true);
+  });
+
   it("marks voiceDurationMetered true only once a real speech_to_text_seconds or generated_voice_seconds row is observed", () => {
     const unmetered = build([{ metric: "text_to_speech_characters", totalQuantity: 200 }]);
     expect(unmetered.voiceDurationMetered).toBe(false);
