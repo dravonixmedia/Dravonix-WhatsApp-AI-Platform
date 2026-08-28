@@ -277,3 +277,52 @@ export async function listLeadEvents(
     createdAt: row.created_at as string,
   }));
 }
+
+/**
+ * The Conversation -> Lead direction (P1 dashboard hygiene batch, reciprocal
+ * to leads.conversation_id already used for the existing Lead -> Conversation
+ * "View conversation" link). Returns only the lead id -- callers only ever
+ * need it to build a /dashboard/leads/{id} link, never a second copy of the
+ * lead's fields. Returns null uniformly when no lead is associated with this
+ * conversation for this company, whether because none exists or because it
+ * belongs to another tenant (RLS + the explicit company_id filter below both
+ * enforce this) -- the caller simply omits the "View Lead" action either way.
+ *
+ * Correction (independent review): leads.conversation_id is nullable with no
+ * unique constraint or index anywhere in the schema, so nothing prevents two
+ * leads from referencing the same conversation. `.maybeSingle()` throws on a
+ * multi-row match, which would have propagated uncaught through
+ * loadConversationWorkspaceData and broken the ENTIRE conversation/handover/
+ * DRAIVA detail page over what is only an optional "View Lead" link. This
+ * uses an explicit deterministic order (oldest lead first, by created_at
+ * then id as a tiebreak for an exact timestamp collision) + limit(1) instead,
+ * so a duplicate-lead data-quality condition can never take the page down --
+ * it just consistently picks the original lead. A genuine query/connection
+ * failure still logs and throws exactly as before; only the row-count
+ * ambiguity `.maybeSingle()` couldn't tolerate is handled differently.
+ */
+export async function getLeadIdByConversationId(
+  client: SupabaseClient,
+  companyId: string,
+  conversationId: string,
+): Promise<string | null> {
+  const { data, error } = await client
+    .from("leads")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(1);
+  if (error) {
+    logServerError(
+      "Failed to resolve lead for conversation",
+      error,
+      { companyId, conversationId },
+      { operation: "getLeadIdByConversationId" },
+    );
+    throw error;
+  }
+  const rows = (data ?? []) as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
+}

@@ -1,6 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it, vi } from "vitest";
-import { getLead, listLeadEvents, listLeads } from "../lib/repositories/leadsRepository.js";
+import {
+  getLead,
+  getLeadIdByConversationId,
+  listLeadEvents,
+  listLeads,
+} from "../lib/repositories/leadsRepository.js";
 
 interface QueryResult {
   data: unknown;
@@ -17,6 +22,7 @@ interface FakeChain {
   is: (...args: unknown[]) => FakeChain;
   order: (...args: unknown[]) => FakeChain;
   range: (...args: unknown[]) => FakeChain;
+  limit: (...args: unknown[]) => FakeChain;
   maybeSingle: () => Promise<QueryResult>;
   then: (resolve: (value: QueryResult) => unknown) => unknown;
 }
@@ -39,6 +45,7 @@ function fakeChain(result: QueryResult): FakeChain {
     is: record("is"),
     order: record("order"),
     range: record("range"),
+    limit: record("limit"),
     maybeSingle: async () => result,
     then: (resolve) => resolve(result),
   };
@@ -532,5 +539,90 @@ describe("listLeadEvents", () => {
     const client = fakeSupabaseClient(chain);
 
     expect(await listLeadEvents(client, "company-a", "lead-1")).toEqual([]);
+  });
+});
+
+describe("getLeadIdByConversationId (Conversation -> Lead, P1 dashboard hygiene batch)", () => {
+  it("resolves the lead id for a conversation that has an associated lead, scoped by companyId and conversationId", async () => {
+    const chain = fakeChain({ data: [{ id: "lead-1" }], error: null });
+    const client = fakeSupabaseClient(chain);
+
+    const leadId = await getLeadIdByConversationId(client, "company-a", "conv-1");
+
+    expect(leadId).toBe("lead-1");
+    expect(chain.calls).toContainEqual({ method: "eq", args: ["company_id", "company-a"] });
+    expect(chain.calls).toContainEqual({ method: "eq", args: ["conversation_id", "conv-1"] });
+  });
+
+  it("returns null when no lead is associated with the conversation -- never a misleading placeholder", async () => {
+    const chain = fakeChain({ data: [], error: null });
+    const client = fakeSupabaseClient(chain);
+
+    expect(await getLeadIdByConversationId(client, "company-a", "conv-2")).toBeNull();
+  });
+
+  it("returns null for an empty result even if the driver returns null instead of an empty array", async () => {
+    const chain = fakeChain({ data: null, error: null });
+    const client = fakeSupabaseClient(chain);
+
+    expect(await getLeadIdByConversationId(client, "company-a", "conv-2")).toBeNull();
+  });
+
+  it("returns null uniformly for a cross-tenant conversationId -- never distinguishing not-found from cross-tenant", async () => {
+    // A conversationId that belongs to a different company's lead: scoping
+    // by this caller's own company_id (above) means the driver/RLS returns
+    // no row, identical to the "genuinely no lead" case.
+    const chain = fakeChain({ data: [], error: null });
+    const client = fakeSupabaseClient(chain);
+
+    expect(
+      await getLeadIdByConversationId(client, "company-a", "conv-owned-by-company-b"),
+    ).toBeNull();
+  });
+
+  it("CARDINALITY CORRECTION: multiple leads sharing one conversation_id (possible under the current schema -- no unique constraint/index exists on leads.conversation_id) never throws -- it deterministically returns one lead id", async () => {
+    // The real query orders by created_at asc, id asc, limit 1 -- the fake
+    // driver doesn't re-sort, but this proves the call site requests exactly
+    // that deterministic ordering + cap, and that a multi-row result (which
+    // would make .maybeSingle() throw) is consumed without error.
+    const chain = fakeChain({
+      data: [{ id: "lead-oldest" }, { id: "lead-newest" }],
+      error: null,
+    });
+    const client = fakeSupabaseClient(chain);
+
+    const leadId = await getLeadIdByConversationId(client, "company-a", "conv-1");
+
+    expect(leadId).toBe("lead-oldest");
+    expect(chain.calls).toContainEqual({
+      method: "order",
+      args: ["created_at", { ascending: true }],
+    });
+    expect(chain.calls).toContainEqual({ method: "order", args: ["id", { ascending: true }] });
+    expect(chain.calls).toContainEqual({ method: "limit", args: [1] });
+  });
+
+  it("the deterministic ordering is applied before limit(1), and both company_id/conversation_id filters remain present alongside it", async () => {
+    const chain = fakeChain({ data: [{ id: "lead-1" }], error: null });
+    const client = fakeSupabaseClient(chain);
+
+    await getLeadIdByConversationId(client, "company-a", "conv-1");
+
+    const methodsInOrder = chain.calls.map((c) => c.method);
+    expect(methodsInOrder).toEqual(["select", "eq", "eq", "order", "order", "limit"]);
+    expect(chain.calls).toContainEqual({ method: "eq", args: ["company_id", "company-a"] });
+    expect(chain.calls).toContainEqual({ method: "eq", args: ["conversation_id", "conv-1"] });
+  });
+
+  it("propagates a genuine database error rather than silently swallowing it -- cardinality tolerance never suppresses a real connection/query failure", async () => {
+    const chain = fakeChain({
+      data: null,
+      error: { code: "53300", message: "too many connections" },
+    });
+    const client = fakeSupabaseClient(chain);
+
+    await expect(getLeadIdByConversationId(client, "company-a", "conv-1")).rejects.toThrow(
+      "too many connections",
+    );
   });
 });

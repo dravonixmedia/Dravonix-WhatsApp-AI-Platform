@@ -16,6 +16,7 @@ import { AiModeBadge, ConversationStateBadge } from "../../badges.js";
 import { ConversationComposerWithAssistant } from "../../ConversationComposerWithAssistant.js";
 import { loadConversationWorkspaceData } from "../../conversationWorkspaceData.js";
 import { CustomerTimezoneField } from "../../CustomerTimezoneField.js";
+import { ViewLeadLink } from "../../ViewLeadLink.js";
 // Reused directly from the Human Handover module: this component is
 // conversation-generic (pagination, composer, reconciliation), not
 // handover-specific, so Live Conversations shares it rather than
@@ -74,7 +75,7 @@ export default async function ConversationDetailPage({
     listParams,
   );
 
-  const { conversation, thread, contact, aiLikelyProcessing, members } =
+  const { conversation, thread, contact, aiLikelyProcessing, members, leadId } =
     await loadConversationWorkspaceData(supabase, repo, {
       companyId: session.activeCompanyId,
       conversationId,
@@ -125,6 +126,8 @@ export default async function ConversationDetailPage({
                   justifyContent: "flex-end",
                 }}
               >
+                <ViewLeadLink leadId={leadId} />
+
                 {capabilities.canAssignConversations &&
                 !conversation.assignedMemberId &&
                 (conversation.state === "handover_requested" ||

@@ -114,6 +114,9 @@ importers:
       '@dravonix/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@dravonix/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@dravonix/tenant':
         specifier: workspace:*
         version: link:../../packages/tenant

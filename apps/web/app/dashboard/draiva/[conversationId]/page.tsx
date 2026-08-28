@@ -15,6 +15,7 @@ import { Avatar } from "../../Avatar.js";
 import { loadConversationWorkspaceData } from "../../conversationWorkspaceData.js";
 import { WhatsAppIcon } from "../../Icons.js";
 import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
+import { ViewLeadLink } from "../../ViewLeadLink.js";
 // Reused directly from the Human Handover module -- see
 // conversations/[conversationId]/page.tsx's identical import for why
 // (conversation-generic, not handover-specific).
@@ -74,19 +75,20 @@ export default async function DraivaConversationPage({
   const supabase = await createServerSupabaseClient();
   const repo = new SupabaseHandoverRepository(supabase);
 
-  const [{ items }, { conversation, thread, contact, aiLikelyProcessing }] = await Promise.all([
-    listConversations(supabase, {
-      companyId: session.activeCompanyId,
-      callerMemberId: session.activeMemberId,
-      page: 1,
-      pageSize: DRAIVA_CONVERSATION_PAGE_SIZE,
-    }),
-    loadConversationWorkspaceData(supabase, repo, {
-      companyId: session.activeCompanyId,
-      conversationId,
-      canAssignConversations: false,
-    }),
-  ]);
+  const [{ items }, { conversation, thread, contact, aiLikelyProcessing, leadId }] =
+    await Promise.all([
+      listConversations(supabase, {
+        companyId: session.activeCompanyId,
+        callerMemberId: session.activeMemberId,
+        page: 1,
+        pageSize: DRAIVA_CONVERSATION_PAGE_SIZE,
+      }),
+      loadConversationWorkspaceData(supabase, repo, {
+        companyId: session.activeCompanyId,
+        conversationId,
+        canAssignConversations: false,
+      }),
+    ]);
 
   const displayName = contact?.displayName ?? contact?.maskedPhoneNumber ?? "Customer";
 
@@ -141,6 +143,8 @@ export default async function DraivaConversationPage({
                     justifyContent: "flex-end",
                   }}
                 >
+                  <ViewLeadLink leadId={leadId} />
+
                   {capabilities.canPauseResumeAi ? (
                     conversation.aiMode === "active" ? (
                       <form

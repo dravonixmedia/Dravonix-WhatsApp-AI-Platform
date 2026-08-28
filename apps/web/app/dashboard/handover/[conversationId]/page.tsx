@@ -22,6 +22,7 @@ import { loadConversationWorkspaceData } from "../../conversationWorkspaceData.j
 import { CustomerTimezoneField } from "../../CustomerTimezoneField.js";
 import { WhatsAppIcon } from "../../Icons.js";
 import { MarkConversationReadOnMount } from "../../MarkConversationReadOnMount.js";
+import { ViewLeadLink } from "../../ViewLeadLink.js";
 import { HandoverQueuePanel } from "../HandoverQueuePanel.js";
 import { ConversationThread } from "./ConversationThread.js";
 
@@ -79,10 +80,8 @@ export default async function ConversationDetailPage({
       .eq("is_active", true),
   ]);
 
-  const { conversation, thread, contact, aiLikelyProcessing } = await loadConversationWorkspaceData(
-    supabase,
-    repo,
-    {
+  const { conversation, thread, contact, aiLikelyProcessing, leadId } =
+    await loadConversationWorkspaceData(supabase, repo, {
       companyId: session.activeCompanyId,
       conversationId,
       // The handover detail page's own per-row assignment dropdown lives in
@@ -90,8 +89,7 @@ export default async function ConversationDetailPage({
       // per-conversation panel, so it never needs the shared loader's
       // members-for-assign-dropdown fetch.
       canAssignConversations: false,
-    },
-  );
+    });
 
   const displayName = contact?.displayName ?? contact?.maskedPhoneNumber ?? "Customer";
 
@@ -144,6 +142,8 @@ export default async function ConversationDetailPage({
                   justifyContent: "flex-end",
                 }}
               >
+                <ViewLeadLink leadId={leadId} />
+
                 {conversation.aiMode === "active" ? (
                   <form
                     action={async () => {

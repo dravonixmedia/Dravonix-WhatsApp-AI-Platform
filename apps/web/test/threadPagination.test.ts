@@ -19,6 +19,9 @@ function msg(id: string, createdAt: string): ConversationThreadMessage {
     outboundStatus: null,
     providerMessageId: null,
     createdAt,
+    mediaFileId: null,
+    mediaMimeType: null,
+    mediaDurationSeconds: null,
   };
 }
 

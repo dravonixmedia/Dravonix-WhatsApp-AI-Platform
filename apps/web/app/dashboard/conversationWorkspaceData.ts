@@ -8,6 +8,7 @@ import {
 import { createLogger } from "@dravonix/observability";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { notFound } from "next/navigation";
+import { getLeadIdByConversationId } from "../../lib/repositories/leadsRepository.js";
 import { loadContactSummary, type ContactSummary } from "./loadContactSummary.js";
 
 type ThreadResult = Awaited<ReturnType<typeof getConversationThreadForDashboard>>;
@@ -19,6 +20,8 @@ export interface ConversationWorkspaceData {
   aiLikelyProcessing: boolean;
   /** Only populated when `canAssignConversations` is true -- see loadConversationWorkspaceData. */
   members: Array<{ id: string; role: string }> | null;
+  /** Non-null only when a lead is already associated with this conversation (leads.conversation_id) -- see getLeadIdByConversationId. */
+  leadId: string | null;
 }
 
 /**
@@ -71,6 +74,7 @@ export async function loadConversationWorkspaceData(
   }
 
   const contact = await loadContactSummary(supabase, conversationId);
+  const leadId = await getLeadIdByConversationId(supabase, companyId, conversationId);
 
   const latestInbound = [...thread.messages].reverse().find((m) => m.direction === "inbound");
   const latestAiOutbound = [...thread.messages]
@@ -90,5 +94,5 @@ export async function loadConversationWorkspaceData(
         .eq("is_active", true)
     : { data: null };
 
-  return { conversation, thread, contact, aiLikelyProcessing, members };
+  return { conversation, thread, contact, aiLikelyProcessing, members, leadId };
 }

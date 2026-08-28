@@ -80,6 +80,17 @@ export interface ConversationThreadMessage {
   outboundStatus: OutboundDeliveryStatus | null;
   providerMessageId: string | null;
   createdAt: string;
+  /**
+   * Set only when a non-deleted media_files row exists for this message
+   * (voice playback, P1 dashboard hygiene batch) -- null for a text message,
+   * a voice message whose media was never stored, or one already removed by
+   * retention. The dashboard resolves playback through
+   * /api/media/audio/{mediaFileId}, which independently re-verifies
+   * company ownership server-side -- this id alone grants no access.
+   */
+  mediaFileId: string | null;
+  mediaMimeType: string | null;
+  mediaDurationSeconds: number | null;
 }
 
 export interface ConversationThreadPage {

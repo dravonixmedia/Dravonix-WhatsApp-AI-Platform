@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -295,6 +295,12 @@ describe("dashboard sidebar navigation", () => {
     expect(layoutSource).toContain('className="dvx-nav-toggle-input"');
     expect(cssSource).toContain(".dvx-nav-toggle-input:checked ~ .dvx-sidebar");
     expect(cssSource).toMatch(/body:has\(#dvx-nav-toggle:checked\)\s*\{\s*overflow:\s*hidden;/);
+  });
+
+  it("never links to /dashboard/inbox -- the dead redirect stub was removed (P1 dashboard hygiene batch)", () => {
+    expect(layoutSource).not.toContain("/dashboard/inbox");
+    expect(navLinksSource).not.toContain("/dashboard/inbox");
+    expect(existsSync(join(webRoot, "app/dashboard/inbox"))).toBe(false);
   });
 
   it("gives every nav card at least a 44px touch target for mobile", () => {

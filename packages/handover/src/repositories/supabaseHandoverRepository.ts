@@ -316,10 +316,19 @@ export class SupabaseHandoverRepository implements HandoverRepository {
     pagination?: { before?: string; limit?: number },
   ): Promise<ConversationThreadPage> {
     const limit = pagination?.limit ?? DEFAULT_THREAD_PAGE_SIZE;
+    // P1 dashboard hygiene batch: embeds media_files (the only mechanism
+    // connecting a message to its stored audio, see supabase/migrations/
+    // 00000000000004_conversations.sql) so voice playback never needs a
+    // second per-message query. A soft-deleted (retention-expired) row is
+    // filtered out in the mapping below, not in this query, since
+    // PostgREST's embedded-resource syntax can't express an is-null filter
+    // on the embedded table without an inner join that would then drop the
+    // whole message row for a text message (which has no media_files row at
+    // all) -- excluding after the fact is simpler and just as safe.
     let query = this.client
       .from("messages")
       .select(
-        "id, direction, channel_type, sender_type, sender_member_id, body, outbound_status, provider_message_id, created_at",
+        "id, direction, channel_type, sender_type, sender_member_id, body, outbound_status, provider_message_id, created_at, media_files (id, mime_type, duration_seconds, deleted_at)",
       )
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: false })
@@ -341,6 +350,20 @@ export class SupabaseHandoverRepository implements HandoverRepository {
       outbound_status: OutboundDeliveryStatus | null;
       provider_message_id: string | null;
       created_at: string;
+      media_files:
+        | {
+            id: string;
+            mime_type: string | null;
+            duration_seconds: number | null;
+            deleted_at: string | null;
+          }[]
+        | {
+            id: string;
+            mime_type: string | null;
+            duration_seconds: number | null;
+            deleted_at: string | null;
+          }
+        | null;
     }>;
 
     const hasMore = rows.length > limit;
@@ -349,17 +372,24 @@ export class SupabaseHandoverRepository implements HandoverRepository {
     return {
       hasMore,
       messages: page
-        .map((row) => ({
-          id: row.id,
-          direction: row.direction,
-          channelType: row.channel_type,
-          senderType: row.sender_type,
-          senderMemberId: row.sender_member_id,
-          body: row.body,
-          outboundStatus: row.outbound_status,
-          providerMessageId: row.provider_message_id,
-          createdAt: row.created_at,
-        }))
+        .map((row) => {
+          const embedded = Array.isArray(row.media_files) ? row.media_files[0] : row.media_files;
+          const media = embedded && !embedded.deleted_at ? embedded : null;
+          return {
+            id: row.id,
+            direction: row.direction,
+            channelType: row.channel_type,
+            senderType: row.sender_type,
+            senderMemberId: row.sender_member_id,
+            body: row.body,
+            outboundStatus: row.outbound_status,
+            providerMessageId: row.provider_message_id,
+            createdAt: row.created_at,
+            mediaFileId: media?.id ?? null,
+            mediaMimeType: media?.mime_type ?? null,
+            mediaDurationSeconds: media?.duration_seconds ?? null,
+          };
+        })
         .reverse(),
     };
   }
