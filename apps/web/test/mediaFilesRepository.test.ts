@@ -156,4 +156,30 @@ describe("getPlayableAudioMediaFile", () => {
       "too many connections",
     );
   });
+
+  it("MALFORMED-ID CORRECTION: a malformed (non-UUID) mediaFileId returns null, matching the established 22P02 handling elsewhere in this codebase, rather than throwing and surfacing a 500", async () => {
+    const chain = fakeChain({
+      data: null,
+      error: { code: "22P02", message: 'invalid input syntax for type uuid: "not-a-uuid"' },
+    });
+    const client = fakeSupabaseClient(chain);
+
+    const result = await getPlayableAudioMediaFile(client, COMPANY_A, "not-a-uuid");
+
+    expect(result).toBeNull();
+  });
+
+  it("a malformed mediaFileId never logs the error -- it is treated identically to a routine not-found, not an infrastructure failure", async () => {
+    const chain = fakeChain({
+      data: null,
+      error: { code: "22P02", message: "invalid input syntax for type uuid" },
+    });
+    const client = fakeSupabaseClient(chain);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await getPlayableAudioMediaFile(client, COMPANY_A, "not-a-uuid");
+
+    expect(logSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
 });

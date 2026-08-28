@@ -13,7 +13,7 @@ import { OutboundStatusBadge } from "../../badges.js";
 import { MicIcon } from "../../Icons.js";
 import { resolveMessageBodyDisplay } from "./messageBodyDisplay.js";
 import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
-import { mapRealtimeMessageRow } from "./realtimeMessageMapper.js";
+import { mapRealtimeMessageRow, toRealtimeUpdatePatch } from "./realtimeMessageMapper.js";
 import { bottomScrollTop, isNearBottom, scrollTopAfterPrepend } from "./scrollBehavior.js";
 import { VoiceMessagePlayer } from "./VoiceMessagePlayer.js";
 import {
@@ -117,7 +117,7 @@ export function ConversationThread({
         const id = (payload.new as { id?: string }).id;
         if (id) {
           setState((prev) =>
-            applyRealtimeMessagePatch(prev, id, mapRealtimeMessageRow(payload.new)),
+            applyRealtimeMessagePatch(prev, id, toRealtimeUpdatePatch(payload.new)),
           );
         }
       }

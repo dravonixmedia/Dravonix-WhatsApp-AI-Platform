@@ -25,9 +25,10 @@ const DEFAULT_AUDIO_MIME_TYPE = "audio/ogg";
  * -- matching leadsRepository.ts's getLead() convention.
  *
  * Returns null uniformly for a missing, cross-tenant, RLS-hidden, non-audio
- * (e.g. a knowledge_document media_files row), or retention-deleted media
- * file -- the caller (the /api/media/audio route) responds the same way
- * (404) to all of these, never revealing which case applied.
+ * (e.g. a knowledge_document media_files row), retention-deleted, or
+ * malformed-UUID mediaFileId -- the caller (the /api/media/audio route)
+ * responds the same way (404) to all of these, never revealing which case
+ * applied.
  */
 export async function getPlayableAudioMediaFile(
   client: SupabaseClient,
@@ -43,6 +44,13 @@ export async function getPlayableAudioMediaFile(
     .is("deleted_at", null)
     .maybeSingle();
   if (error) {
+    // 22P02 = invalid_text_representation (a malformed, non-UUID
+    // mediaFileId) -- same established handling as
+    // packages/handover/src/repositories/supabaseHandoverRepository.ts's
+    // getConversationForThread: indistinguishable from "not found" as far
+    // as the caller/route should ever reveal, so the route's uniform 404
+    // covers this case too instead of a generic 500.
+    if (error.code === "22P02") return null;
     logServerError(
       "Failed to resolve playable audio media file",
       error,
