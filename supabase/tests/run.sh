@@ -129,6 +129,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_knowledge_sea
 echo "Running P2 knowledge ingestion (migration 34) RLS/RPC regression assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_knowledge_ingestion.sql"
 
+echo "Running Meta/WhatsApp Batch 1 connection foundation (migration 35) RLS/RPC regression assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_connections.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------

@@ -242,3 +242,93 @@ export async function adminRemoveKnowledgeSourceAction(
   if (error) throw error;
   revalidateAdminCompanyPaths(companyId);
 }
+
+/**
+ * Meta/WhatsApp Batch 1 (migration 35): Super-Admin-assisted WABA + phone
+ * connection management. These four actions are thin wrappers around the
+ * migration's four SECURITY DEFINER RPCs -- the RPCs, not this layer, are
+ * the actual authorization/tenant-ownership boundary. No Meta credential
+ * (access token, app secret, verify token) is ever accepted, stored, or
+ * returned by any of these -- the platform continues to send outbound
+ * WhatsApp messages using the single environment-scoped META_ACCESS_TOKEN
+ * secret, unchanged by this batch.
+ */
+
+export async function adminConnectWhatsappAccountAction(
+  companyId: string,
+  formData: FormData,
+): Promise<void> {
+  const supabase = await requireSuperAdminClient();
+  const wabaId = str(formData, "waba_id");
+  if (!wabaId) throw new Error("WABA ID is required");
+  const businessName = str(formData, "business_name");
+  const isTestAccount = formData.get("is_test_account") === "true";
+
+  const { error } = await supabase.rpc("admin_connect_whatsapp_account", {
+    p_company_id: companyId,
+    p_waba_id: wabaId,
+    p_business_name: businessName,
+    p_is_test_account: isTestAccount,
+  });
+  if (error) throw error;
+  revalidateAdminCompanyPaths(companyId);
+}
+
+export async function adminConnectWhatsappPhoneNumberAction(
+  companyId: string,
+  formData: FormData,
+): Promise<void> {
+  const supabase = await requireSuperAdminClient();
+  const whatsappAccountId = str(formData, "whatsapp_account_id");
+  if (!whatsappAccountId) throw new Error("WhatsApp account is required");
+  const phoneNumberId = str(formData, "phone_number_id");
+  if (!phoneNumberId) throw new Error("Phone number ID is required");
+  const displayPhoneNumber = str(formData, "display_phone_number");
+
+  const { error } = await supabase.rpc("admin_connect_whatsapp_phone_number", {
+    p_company_id: companyId,
+    p_whatsapp_account_id: whatsappAccountId,
+    p_phone_number_id: phoneNumberId,
+    p_display_phone_number: displayPhoneNumber,
+  });
+  if (error) throw error;
+  revalidateAdminCompanyPaths(companyId);
+}
+
+export async function adminSetWhatsappAccountStatusAction(
+  companyId: string,
+  formData: FormData,
+): Promise<void> {
+  const supabase = await requireSuperAdminClient();
+  const whatsappAccountId = str(formData, "whatsapp_account_id");
+  if (!whatsappAccountId) throw new Error("WhatsApp account is required");
+  const status = str(formData, "status");
+  if (!status) throw new Error("Status is required");
+
+  const { error } = await supabase.rpc("admin_set_whatsapp_account_status", {
+    p_company_id: companyId,
+    p_whatsapp_account_id: whatsappAccountId,
+    p_status: status,
+  });
+  if (error) throw error;
+  revalidateAdminCompanyPaths(companyId);
+}
+
+export async function adminSetWhatsappPhoneNumberStatusAction(
+  companyId: string,
+  formData: FormData,
+): Promise<void> {
+  const supabase = await requireSuperAdminClient();
+  const phoneNumberRowId = str(formData, "phone_number_row_id");
+  if (!phoneNumberRowId) throw new Error("Phone number is required");
+  const status = str(formData, "status");
+  if (!status) throw new Error("Status is required");
+
+  const { error } = await supabase.rpc("admin_set_whatsapp_phone_number_status", {
+    p_company_id: companyId,
+    p_phone_number_row_id: phoneNumberRowId,
+    p_status: status,
+  });
+  if (error) throw error;
+  revalidateAdminCompanyPaths(companyId);
+}

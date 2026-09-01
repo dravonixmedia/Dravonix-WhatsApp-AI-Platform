@@ -182,7 +182,7 @@ export async function sendHumanReplyAction(
   const { data: routing, error: routingError } = await serviceRoleClient
     .from("conversations")
     .select(
-      "whatsapp_phone_number_id, contacts (whatsapp_wa_id), whatsapp_phone_numbers (phone_number_id)",
+      "whatsapp_phone_number_id, contacts (whatsapp_wa_id), whatsapp_phone_numbers (phone_number_id, status)",
     )
     .eq("id", conversationId)
     .single();
@@ -195,7 +195,12 @@ export async function sendHumanReplyAction(
 
   const toWaId = routingContact?.whatsapp_wa_id as string | undefined;
   const phoneNumberId = routingPhoneNumber?.phone_number_id as string | undefined;
-  if (!toWaId || !phoneNumberId) {
+  // status must be "connected" -- a disabled/not_connected/error mapping
+  // must never be used to send (Meta/WhatsApp Batch 1, migration 35). Kept
+  // as the same generic error as a missing mapping so this never reveals
+  // *why* the number is unusable.
+  const phoneNumberStatus = routingPhoneNumber?.status as string | undefined;
+  if (!toWaId || !phoneNumberId || phoneNumberStatus !== "connected") {
     throw new Error("Conversation is missing WhatsApp routing information");
   }
 

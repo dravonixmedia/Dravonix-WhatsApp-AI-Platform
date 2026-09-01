@@ -80,7 +80,9 @@ declare
     'update_company_profile', 'list_company_member_identities', 'update_user_display_name',
     'admin_update_user_display_name', 'admin_update_company_profile', 'admin_update_company_ai_settings',
     'admin_update_company_voice_settings', 'admin_add_knowledge_source', 'admin_toggle_knowledge_source',
-    'admin_remove_knowledge_source', 'ingest_knowledge_source'
+    'admin_remove_knowledge_source', 'ingest_knowledge_source', 'admin_connect_whatsapp_account',
+    'admin_connect_whatsapp_phone_number', 'admin_set_whatsapp_account_status',
+    'admin_set_whatsapp_phone_number_status'
   ];
 begin
   foreach fn in array fns loop

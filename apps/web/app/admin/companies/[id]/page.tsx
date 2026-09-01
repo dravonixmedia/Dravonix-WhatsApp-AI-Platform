@@ -18,8 +18,12 @@ import {
 } from "../../../../lib/actions/admin.js";
 import {
   adminAddKnowledgeSourceAction,
+  adminConnectWhatsappAccountAction,
+  adminConnectWhatsappPhoneNumberAction,
   adminReingestKnowledgeSourceAction,
   adminRemoveKnowledgeSourceAction,
+  adminSetWhatsappAccountStatusAction,
+  adminSetWhatsappPhoneNumberStatusAction,
   adminToggleKnowledgeSourceAction,
   adminUpdateCompanyAiSettingsAction,
   adminUpdateCompanyProfileAction,
@@ -141,7 +145,7 @@ export default async function AdminCompanyDetailPage({
       .eq("company_id", id),
     supabase
       .from("whatsapp_phone_numbers")
-      .select("id, phone_number_id, display_phone_number, status")
+      .select("id, whatsapp_account_id, phone_number_id, display_phone_number, status")
       .eq("company_id", id),
     supabase
       .from("support_access_sessions")
@@ -317,6 +321,16 @@ export default async function AdminCompanyDetailPage({
   const adminToggleKnowledgeSourceWithId = adminToggleKnowledgeSourceAction.bind(null, id);
   const adminRemoveKnowledgeSourceWithId = adminRemoveKnowledgeSourceAction.bind(null, id);
   const adminReingestKnowledgeSourceWithId = adminReingestKnowledgeSourceAction.bind(null, id);
+  const adminConnectWhatsappAccountWithId = adminConnectWhatsappAccountAction.bind(null, id);
+  const adminConnectWhatsappPhoneNumberWithId = adminConnectWhatsappPhoneNumberAction.bind(
+    null,
+    id,
+  );
+  const adminSetWhatsappAccountStatusWithId = adminSetWhatsappAccountStatusAction.bind(null, id);
+  const adminSetWhatsappPhoneNumberStatusWithId = adminSetWhatsappPhoneNumberStatusAction.bind(
+    null,
+    id,
+  );
 
   return (
     <div>
@@ -1344,57 +1358,188 @@ export default async function AdminCompanyDetailPage({
         )}
       </div>
 
-      {/* WhatsApp */}
+      {/* WhatsApp connection -- Meta/WhatsApp Batch 1 (migration 35). This is
+          administrative/manual connection management, registering the WABA
+          and phone-number identifiers a client has already shared with
+          Dravonix outside the app -- it is NOT Meta Embedded Signup, and it
+          never asks for or stores a Meta access token, App Secret, or
+          verify token; the platform continues to send every outbound
+          message using the single environment-scoped META_ACCESS_TOKEN
+          secret. */}
       <div className="dvx-card" style={{ marginTop: "1.5rem" }}>
-        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+        <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.25rem" }}>
           WhatsApp connection
         </div>
+        <p className="dvx-muted" style={{ fontSize: "0.78rem", margin: "0 0 0.75rem" }}>
+          Manual administrative connection management. Registers WABA/phone identifiers already
+          shared with Dravonix -- never a Meta access token or other credential.
+        </p>
         {whatsappAccounts.length === 0 ? (
           <p className="dvx-muted" style={{ fontSize: "0.85rem" }}>
             No WhatsApp Business Account connected.
           </p>
         ) : (
           <div className="dvx-team-member-list">
-            {whatsappAccounts.map((account) => (
-              <div key={account.id} className="dvx-team-member-row">
-                <span className="dvx-team-member-name">
-                  {account.business_name ?? "Business account"}
-                  <span className="dvx-muted" style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}>
-                    WABA {account.waba_id}
-                  </span>
-                </span>
-                <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
-                  {account.status.replace(/_/g, " ")}
-                </span>
-              </div>
-            ))}
+            {whatsappAccounts.map((account) => {
+              const accountPhones = whatsappPhoneNumbers.filter(
+                (phone) => phone.whatsapp_account_id === account.id,
+              );
+              const nextAccountStatus = account.status === "disabled" ? "connected" : "disabled";
+              return (
+                <div key={account.id} style={{ width: "100%" }}>
+                  <div className="dvx-team-member-row">
+                    <span className="dvx-team-member-name">
+                      {account.business_name ?? "Business account"}
+                      <span
+                        className="dvx-muted"
+                        style={{ marginLeft: "0.5rem", fontSize: "0.78rem" }}
+                      >
+                        WABA {account.waba_id}
+                      </span>
+                    </span>
+                    <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                      <span
+                        className="dvx-badge dvx-badge--neutral"
+                        style={{ fontSize: "0.7rem" }}
+                        title={account.last_error ?? undefined}
+                      >
+                        {account.status.replace(/_/g, " ")}
+                      </span>
+                      <form action={adminSetWhatsappAccountStatusWithId}>
+                        <input type="hidden" name="whatsapp_account_id" value={account.id} />
+                        <input type="hidden" name="status" value={nextAccountStatus} />
+                        <button
+                          className="dvx-button dvx-button--secondary"
+                          type="submit"
+                          style={{ fontSize: "0.75rem", padding: "0.3rem 0.6rem" }}
+                        >
+                          {account.status === "disabled"
+                            ? "Reconnect account"
+                            : "Disconnect account"}
+                        </button>
+                      </form>
+                    </span>
+                  </div>
+
+                  {accountPhones.length > 0 ? (
+                    <div
+                      className="dvx-team-member-list"
+                      style={{ marginTop: "0.4rem", paddingLeft: "1rem" }}
+                    >
+                      {accountPhones.map((phone) => {
+                        const nextPhoneStatus =
+                          phone.status === "disabled" ? "connected" : "disabled";
+                        return (
+                          <div key={phone.id} className="dvx-team-member-row">
+                            <span className="dvx-team-member-name">
+                              {phone.display_phone_number ?? phone.phone_number_id}
+                            </span>
+                            <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                              <span
+                                className="dvx-badge dvx-badge--neutral"
+                                style={{ fontSize: "0.7rem" }}
+                              >
+                                {phone.status.replace(/_/g, " ")}
+                              </span>
+                              <form action={adminSetWhatsappPhoneNumberStatusWithId}>
+                                <input type="hidden" name="phone_number_row_id" value={phone.id} />
+                                <input type="hidden" name="status" value={nextPhoneStatus} />
+                                <button
+                                  className="dvx-button dvx-button--secondary"
+                                  type="submit"
+                                  style={{ fontSize: "0.7rem", padding: "0.25rem 0.5rem" }}
+                                >
+                                  {phone.status === "disabled" ? "Reconnect" : "Disconnect"}
+                                </button>
+                              </form>
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  <details style={{ marginTop: "0.4rem", paddingLeft: "1rem" }}>
+                    <summary
+                      className="dvx-muted"
+                      style={{ fontSize: "0.78rem", cursor: "pointer" }}
+                    >
+                      Connect a phone number to this WABA
+                    </summary>
+                    <form
+                      action={adminConnectWhatsappPhoneNumberWithId}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "0.4rem",
+                        marginTop: "0.4rem",
+                        maxWidth: 360,
+                      }}
+                    >
+                      <input type="hidden" name="whatsapp_account_id" value={account.id} />
+                      <input
+                        className="dvx-input"
+                        name="phone_number_id"
+                        placeholder="Meta phone_number_id"
+                        required
+                      />
+                      <input
+                        className="dvx-input"
+                        name="display_phone_number"
+                        placeholder="Display phone number (optional)"
+                      />
+                      <button
+                        className="dvx-button dvx-button--secondary"
+                        type="submit"
+                        style={{ fontSize: "0.75rem", alignSelf: "flex-start" }}
+                      >
+                        Connect phone number
+                      </button>
+                    </form>
+                  </details>
+                </div>
+              );
+            })}
           </div>
         )}
-        {whatsappPhoneNumbers.length > 0 ? (
-          <div className="dvx-team-member-list" style={{ marginTop: "0.5rem" }}>
-            {whatsappPhoneNumbers.map((phone) => (
-              <div key={phone.id} className="dvx-team-member-row">
-                <span className="dvx-team-member-name">
-                  {phone.display_phone_number ?? phone.phone_number_id}
-                </span>
-                <span className="dvx-badge dvx-badge--neutral" style={{ fontSize: "0.7rem" }}>
-                  {phone.status.replace(/_/g, " ")}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : null}
 
-        <div style={{ marginTop: "1rem" }}>
-          <button
-            className="dvx-button dvx-button--secondary"
-            type="button"
-            disabled
-            style={{ opacity: 0.6, cursor: "not-allowed" }}
+        <details
+          style={{
+            marginTop: "1rem",
+            paddingTop: "1rem",
+            borderTop: "1px solid var(--border-default)",
+          }}
+        >
+          <summary className="dvx-muted" style={{ fontSize: "0.85rem", cursor: "pointer" }}>
+            Connect a new WhatsApp Business Account
+          </summary>
+          <form
+            action={adminConnectWhatsappAccountWithId}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.5rem",
+              marginTop: "0.5rem",
+              maxWidth: 360,
+            }}
           >
-            Meta WhatsApp onboarding — Integration in progress
-          </button>
-        </div>
+            <input className="dvx-input" name="waba_id" placeholder="Meta WABA ID" required />
+            <input
+              className="dvx-input"
+              name="business_name"
+              placeholder="Business name (optional)"
+            />
+            <label
+              style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem" }}
+            >
+              <input type="checkbox" name="is_test_account" value="true" />
+              Test account
+            </label>
+            <button className="dvx-button" type="submit" style={{ alignSelf: "flex-start" }}>
+              Connect WABA
+            </button>
+          </form>
+        </details>
       </div>
 
       {/* Support access */}

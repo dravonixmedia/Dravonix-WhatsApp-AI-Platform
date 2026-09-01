@@ -74,16 +74,23 @@ export class SupabaseVoiceConsumerRepository implements VoiceConsumerRepository 
         .eq("company_id", companyId)
         .maybeSingle(),
       this.client.from("voice_settings").select("*").eq("company_id", companyId).single(),
+      // status = "connected" only in both branches -- outbound sends must
+      // never use a disabled/not_connected/error phone mapping (Meta/
+      // WhatsApp Batch 1, migration 35). A missing/disconnected number
+      // resolves phoneNumberId to undefined below, which already throws a
+      // safe error rather than sending through a stale mapping.
       conversation.whatsapp_phone_number_id
         ? this.client
             .from("whatsapp_phone_numbers")
             .select("phone_number_id")
             .eq("id", conversation.whatsapp_phone_number_id)
-            .single()
+            .eq("status", "connected")
+            .maybeSingle()
         : this.client
             .from("whatsapp_phone_numbers")
             .select("phone_number_id")
             .eq("company_id", companyId)
+            .eq("status", "connected")
             .limit(1)
             .maybeSingle(),
       this.client

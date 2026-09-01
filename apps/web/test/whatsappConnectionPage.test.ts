@@ -58,6 +58,18 @@ describe("WhatsApp connection page", () => {
     expect(pageSource).toContain("maskIdentifier(phone.phone_number_id)");
   });
 
+  it("no longer claims Meta App Review is in progress -- App Review is approved (Meta/WhatsApp Batch 1)", () => {
+    expect(pageSource).not.toContain("Meta App Review in progress");
+    expect(pageSource).not.toContain("Meta App Review is currently in progress");
+    expect(pageSource).toContain(
+      "WhatsApp connection setup is managed by Dravonix during onboarding.",
+    );
+  });
+
+  it("still does not render any connect/disconnect/edit action -- connection management stays Super-Admin-only", () => {
+    expect(pageSource).not.toContain("<form");
+  });
+
   function actionGuardIndex(): number {
     return pageSource.indexOf("if (!capabilities.canViewWhatsapp) return <PermissionDenied />;");
   }

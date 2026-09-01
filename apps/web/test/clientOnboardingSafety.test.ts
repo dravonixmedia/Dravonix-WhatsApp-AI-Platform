@@ -23,21 +23,27 @@ function readSource(relativePath: string): string {
   return readFileSync(join(webRoot, relativePath), "utf8");
 }
 
-describe("WhatsApp connection CTA stays disabled while Meta App Review is in progress", () => {
-  it("the dashboard WhatsApp settings page renders a disabled Connect button, never a live one", () => {
+describe("WhatsApp connection: client dashboard stays read-only; Super Admin gained real (non-Embedded-Signup) connection management (Meta/WhatsApp Batch 1)", () => {
+  // Superseded by whatsappConnectionPage.test.ts's own dedicated assertions
+  // ("still does not render any connect/disconnect/edit action", "no longer
+  // claims Meta App Review is in progress") now that App Review is approved
+  // -- this test only re-confirms the client page still has no live connect
+  // control of any kind, disabled or otherwise.
+  it("the dashboard WhatsApp settings page renders no Connect button at all -- connection setup is Dravonix-managed, not client-initiated", () => {
     const source = readSource("app/dashboard/settings/whatsapp/page.tsx");
-    const buttonBlock = source.match(/<button[\s\S]*?Connect WhatsApp[\s\S]*?<\/button>/);
-    expect(buttonBlock).not.toBeNull();
-    expect(buttonBlock?.[0]).toContain("disabled");
-    expect(buttonBlock?.[0]).not.toContain("onClick");
+    expect(source).not.toMatch(/<button[\s\S]*?Connect WhatsApp/);
   });
 
-  it("the Super Admin company detail page renders a disabled Meta onboarding button, never a live one", () => {
+  // The Super Admin company detail page's WhatsApp section is no longer a
+  // disabled placeholder -- Meta/WhatsApp Batch 1 (migration 35) gave Super
+  // Admin real connect/disconnect/reconnect actions for manually registering
+  // a client's already-shared WABA/phone identifiers. This is deliberately
+  // NOT Meta Embedded Signup (see adminWhatsappConnectionUiWiring.test.ts
+  // for the full behavioral/credential-safety coverage of that surface) --
+  // this test only confirms the old disabled-placeholder copy is gone.
+  it("the Super Admin company detail page no longer shows the old disabled Meta-onboarding placeholder", () => {
     const source = readSource("app/admin/companies/[id]/page.tsx");
-    const buttonBlock = source.match(/<button[\s\S]*?Meta WhatsApp onboarding[\s\S]*?<\/button>/);
-    expect(buttonBlock).not.toBeNull();
-    expect(buttonBlock?.[0]).toContain("disabled");
-    expect(buttonBlock?.[0]).not.toContain("onClick");
+    expect(source).not.toContain("Meta WhatsApp onboarding — Integration in progress");
   });
 });
 
@@ -54,8 +60,14 @@ describe("No Meta/Embedded Signup API is called anywhere in the new client onboa
     "lib/actions/invitations.ts",
     "lib/actions/acceptInvite.ts",
     "lib/onboarding.ts",
-    "app/admin/companies/[id]/page.tsx",
   ];
+  // app/admin/companies/[id]/page.tsx is deliberately NOT in this list as of
+  // Meta/WhatsApp Batch 1 (migration 35): that page now legitimately
+  // documents its own relationship to a *future* Embedded Signup batch (a
+  // scope-boundary comment, not a call), which a naive substring ban like
+  // this one cannot distinguish from real usage. Its own comment-stripped,
+  // dedicated coverage lives in adminWhatsappConnectionUiWiring.test.ts's
+  // "does not introduce Meta Embedded Signup / OAuth in this batch".
 
   // Secret-exposure banned terms (encrypted_access_token, META_ACCESS_TOKEN)
   // are covered separately, with comment-stripping, by
