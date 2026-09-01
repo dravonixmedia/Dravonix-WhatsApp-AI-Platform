@@ -13,11 +13,13 @@ import {
   reconcileOutboundMessage,
   resumeAi,
   sendHumanReply,
+  sendServiceWindowReengagementTemplate,
   startHumanConversation,
   SupabaseHandoverRepository,
   type ConversationThreadMessage,
 } from "@dravonix/handover";
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
 import { SupabaseEntitlementRepository } from "../repositories/supabaseEntitlementRepository.js";
 import { getDashboardSession } from "../session.js";
@@ -127,12 +129,13 @@ export async function loadOlderMessagesAction(
   return thread;
 }
 
+interface ConversationSendTarget {
+  toWaId: string;
+  phoneNumberId: string;
+}
+
 /**
- * Sends a human reply (Human Handover Inbox final plan section 11): looks up
- * the conversation's phone_number_id/contact wa_id, then delegates to
- * @dravonix/handover's sendHumanReply, which reserves the outbound message,
- * checks whatsapp_send entitlement, calls the real WhatsApp provider, and
- * finalizes/classifies the result -- all before this action returns.
+ * Resolves the raw wa_id/phone_number_id a WhatsApp send actually needs.
  *
  * Phase 3A final security correction: an earlier draft resolved the raw
  * wa_id via a get_conversation_send_target RPC granted to `authenticated`.
@@ -153,32 +156,16 @@ export async function loadOlderMessagesAction(
  * never granted to any Postgres role at all, never importable outside the
  * server/RSC module graph (see apps/web/test/serviceRoleGuard.test.ts), and
  * its key is a server-only env var Next.js never inlines into a client
- * bundle. Authorization happens FIRST, via the normal authenticated
- * session's own RLS-scoped repo.getConversationForThread() (the same
- * tenant-checked entry point the conversation-detail page itself uses,
- * reading only id/company_id/state/ai_mode/assigned_member_id/
- * handover_reason -- no phone data at all) -- only once that succeeds does
- * this function reach for the service-role client to resolve the actual
- * send destination. The raw value is consumed immediately below to build
- * the outbound send, never logged, and never returned -- this function's
- * return type is void.
+ * bundle. The caller MUST authorize the conversation first (tenant-checked
+ * repo.getConversationForThread()) -- this function assumes that already
+ * happened. The raw value returned here is consumed immediately by the
+ * caller to build an outbound send, never logged, and never returned to the
+ * browser.
  */
-export async function sendHumanReplyAction(
+async function resolveConversationSendTarget(
+  serviceRoleClient: SupabaseClient,
   conversationId: string,
-  body: string,
-  clientIdempotencyKey: string,
-): Promise<void> {
-  const session = await getDashboardSession();
-  if (!session) throw new Error("Not authenticated");
-
-  const { supabase, repo } = await getHandoverRepo();
-
-  const conversation = await repo.getConversationForThread(conversationId);
-  if (!conversation || conversation.companyId !== session.activeCompanyId) {
-    throw new Error("Conversation not found or not accessible");
-  }
-
-  const serviceRoleClient = createServerOnlyServiceRoleClient();
+): Promise<ConversationSendTarget> {
   const { data: routing, error: routingError } = await serviceRoleClient
     .from("conversations")
     .select(
@@ -204,6 +191,41 @@ export async function sendHumanReplyAction(
     throw new Error("Conversation is missing WhatsApp routing information");
   }
 
+  return { toWaId, phoneNumberId };
+}
+
+/**
+ * Sends a human reply (Human Handover Inbox final plan section 11): looks up
+ * the conversation's phone_number_id/contact wa_id, then delegates to
+ * @dravonix/handover's sendHumanReply, which checks the WhatsApp 24-hour
+ * customer service window (Meta/WhatsApp Batch 2), reserves the outbound
+ * message, checks whatsapp_send entitlement, calls the real WhatsApp
+ * provider, and finalizes/classifies the result -- all before this action
+ * returns. Outside the window, sendHumanReply throws
+ * WhatsAppServiceWindowClosedError before anything is reserved/sent; its
+ * message is the exact copy shown to the agent.
+ */
+export async function sendHumanReplyAction(
+  conversationId: string,
+  body: string,
+  clientIdempotencyKey: string,
+): Promise<void> {
+  const session = await getDashboardSession();
+  if (!session) throw new Error("Not authenticated");
+
+  const { supabase, repo } = await getHandoverRepo();
+
+  const conversation = await repo.getConversationForThread(conversationId);
+  if (!conversation || conversation.companyId !== session.activeCompanyId) {
+    throw new Error("Conversation not found or not accessible");
+  }
+
+  const serviceRoleClient = createServerOnlyServiceRoleClient();
+  const { toWaId, phoneNumberId } = await resolveConversationSendTarget(
+    serviceRoleClient,
+    conversationId,
+  );
+
   const env = loadEnv(process.env);
   if (!env.META_ACCESS_TOKEN) {
     throw new Error("META_ACCESS_TOKEN is not configured");
@@ -224,6 +246,53 @@ export async function sendHumanReplyAction(
       phoneNumberId,
       toWaId,
     },
+  );
+
+  revalidateHandoverPaths(conversationId);
+}
+
+/**
+ * Meta/WhatsApp Batch 2, Phase 8: lets an assigned/authorized human agent
+ * deliberately send the conversation's configured re-engagement template
+ * once the free-form service window has closed. Never accepts a template
+ * id/name from the browser -- @dravonix/handover's
+ * sendServiceWindowReengagementTemplate resolves and validates the ONE
+ * account-configured, currently-approved fallback template itself. Throws
+ * (surfacing "no_fallback_template_configured" verbatim) if none is
+ * configured/approved for this conversation's WhatsApp Business Account.
+ */
+export async function sendServiceWindowTemplateAction(
+  conversationId: string,
+  clientIdempotencyKey: string,
+): Promise<void> {
+  const session = await getDashboardSession();
+  if (!session) throw new Error("Not authenticated");
+
+  const { repo } = await getHandoverRepo();
+
+  const conversation = await repo.getConversationForThread(conversationId);
+  if (!conversation || conversation.companyId !== session.activeCompanyId) {
+    throw new Error("Conversation not found or not accessible");
+  }
+
+  const serviceRoleClient = createServerOnlyServiceRoleClient();
+  const { toWaId, phoneNumberId } = await resolveConversationSendTarget(
+    serviceRoleClient,
+    conversationId,
+  );
+
+  const env = loadEnv(process.env);
+  if (!env.META_ACCESS_TOKEN) {
+    throw new Error("META_ACCESS_TOKEN is not configured");
+  }
+
+  await sendServiceWindowReengagementTemplate(
+    repo,
+    new GraphApiWhatsAppProvider({
+      accessToken: env.META_ACCESS_TOKEN,
+      graphApiVersion: env.META_GRAPH_API_VERSION,
+    }),
+    { conversationId, idempotencyKey: clientIdempotencyKey, phoneNumberId, toWaId },
   );
 
   revalidateHandoverPaths(conversationId);

@@ -9,6 +9,7 @@ import type {
   HandoverConversationSummary,
   HandoverInboxItem,
   HandoverInboxListInput,
+  HumanTemplateOutboundReservation,
   OutboundDeliveryStatus,
   OutboundFinalizeResult,
   OutboundReservation,
@@ -87,6 +88,24 @@ export class FakeHandoverRepository implements HandoverRepository {
   private readonly messages = new Map<string, FakeMessage>();
   private readonly threadMessages: FakeThreadMessageSeed[];
   private callerMemberId: string | null = null;
+
+  /**
+   * Meta/WhatsApp Batch 2: defaults to "now" (a wide-open service window)
+   * and no fallback template configured, so every pre-existing test in this
+   * package that never calls setLastCustomerMessageAt/setFallbackTemplate
+   * keeps behaving exactly as before this batch. Configurable per test via
+   * the setters below for the window-gating/template-fallback scenarios.
+   */
+  private lastCustomerMessageAt: string | null = new Date().toISOString();
+  private fallbackTemplate: { id: string; name: string; language: string } | null = null;
+
+  setLastCustomerMessageAt(value: string | null): void {
+    this.lastCustomerMessageAt = value;
+  }
+
+  setFallbackTemplate(value: { id: string; name: string; language: string } | null): void {
+    this.fallbackTemplate = value;
+  }
 
   constructor(
     conversations: FakeConversationSeed[] = [],
@@ -399,6 +418,57 @@ export class FakeHandoverRepository implements HandoverRepository {
         .slice()
         .reverse()
         .map(({ conversationId: _conversationId, ...rest }) => rest),
+    };
+  }
+
+  async getLastCustomerMessageAt(_conversationId: string): Promise<string | null> {
+    return this.lastCustomerMessageAt;
+  }
+
+  async reserveHumanTemplateOutboundMessage(
+    conversationId: string,
+    idempotencyKey: string,
+  ): Promise<HumanTemplateOutboundReservation> {
+    const conv = this.getConversationState(conversationId);
+    const member = this.caller(conv.companyId);
+    this.requirePermission(member, "conversations.reply");
+    if (conv.state !== "human_active") throw new Error("invalid_state_transition");
+    if (conv.assignedMemberId === null) throw new Error("conversation_not_assigned");
+    if (conv.assignedMemberId !== member.id && !member.permissions.has("conversations.reassign")) {
+      throw new Error("conversation_not_assigned_to_caller");
+    }
+    if (!this.fallbackTemplate) throw new Error("no_fallback_template_configured");
+
+    const key = `${member.id}:${conversationId}:${idempotencyKey}`;
+    const existing = [...this.messages.values()].find((m) => m.idempotencyKey === key);
+    if (existing) {
+      return {
+        id: existing.id,
+        claimed: false,
+        outboundStatus: existing.outboundStatus,
+        providerMessageId: existing.providerMessageId,
+        templateName: this.fallbackTemplate.name,
+        templateLanguage: this.fallbackTemplate.language,
+      };
+    }
+
+    const id = nextId("msg");
+    this.messages.set(id, {
+      id,
+      companyId: conv.companyId,
+      conversationId,
+      senderMemberId: member.id,
+      idempotencyKey: key,
+      outboundStatus: "sending",
+      providerMessageId: null,
+    });
+    return {
+      id,
+      claimed: true,
+      outboundStatus: "sending",
+      providerMessageId: null,
+      templateName: this.fallbackTemplate.name,
+      templateLanguage: this.fallbackTemplate.language,
     };
   }
 

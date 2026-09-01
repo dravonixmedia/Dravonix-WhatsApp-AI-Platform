@@ -170,9 +170,24 @@ class FakeHandoverWorkerRepository implements HandoverWorkerRepository {
     sourceType: string;
   }> = [];
 
+  /**
+   * Meta/WhatsApp Batch 2: defaults to "now" (a wide-open service window)
+   * and no fallback template, so every pre-existing test in this file that
+   * never overrides serviceWindowState keeps behaving exactly as before
+   * this batch (sendAiOutboundMessage now checks this unconditionally).
+   */
+  serviceWindowState: { lastCustomerMessageAt: string | null; fallbackTemplate: null } = {
+    lastCustomerMessageAt: new Date().toISOString(),
+    fallbackTemplate: null,
+  };
+
   private messages = new Map<string, FakeOutboundMessage>();
   private bySourceAndChannel = new Map<string, string>();
   private counter = 0;
+
+  async getServiceWindowState(_sourceMessageId: string) {
+    return this.serviceWindowState;
+  }
 
   async triggerHandover(input: {
     conversationId: string;
@@ -280,6 +295,34 @@ describe("processMessageJob", () => {
     expect(aiProvider.calls).toHaveLength(1);
     expect(whatsappProvider.sentText).toHaveLength(1);
     expect(whatsappProvider.sentText[0]?.toWaId).toBe("919820000001");
+  });
+
+  it("Meta/WhatsApp Batch 2: outside the 24-hour service window, never sends the AI's free-form text -- sends the configured template fallback instead (item 10)", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    handoverRepo.serviceWindowState = {
+      lastCustomerMessageAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+      fallbackTemplate: { id: "tpl-1", name: "reengagement_v1", language: "en" },
+    };
+
+    await processMessageJob(deps, makePayload());
+
+    expect(aiProvider.calls).toHaveLength(1); // Claude still runs (lead updates/handover decisions).
+    expect(whatsappProvider.sentText).toHaveLength(0);
+    expect(whatsappProvider.sentTemplate).toHaveLength(1);
+    expect(whatsappProvider.sentTemplate[0]).toMatchObject({ templateName: "reengagement_v1" });
+  });
+
+  it("Meta/WhatsApp Batch 2: outside the window with no fallback template configured, fails safely without any WhatsApp call (item 17)", async () => {
+    const deps = makeDeps(activeEntitlementSnapshot());
+    handoverRepo.serviceWindowState = {
+      lastCustomerMessageAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+      fallbackTemplate: null,
+    };
+
+    await processMessageJob(deps, makePayload());
+
+    expect(whatsappProvider.sentText).toHaveLength(0);
+    expect(whatsappProvider.sentTemplate).toHaveLength(0);
   });
 
   it("passes the conversation's resolved temporal context through to the AI generation input unchanged (Global Timezone + Daypart Awareness)", async () => {

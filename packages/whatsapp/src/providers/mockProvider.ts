@@ -2,6 +2,7 @@ import type {
   MediaMetadata,
   SendAudioInput,
   SendResult,
+  SendTemplateInput,
   SendTextInput,
   WhatsAppProvider,
 } from "../provider.js";
@@ -14,6 +15,7 @@ import type {
 export class MockWhatsAppProvider implements WhatsAppProvider {
   readonly sentText: SendTextInput[] = [];
   readonly sentAudio: SendAudioInput[] = [];
+  readonly sentTemplate: SendTemplateInput[] = [];
   private counter = 0;
 
   private nextId(prefix: string): string {
@@ -29,6 +31,11 @@ export class MockWhatsAppProvider implements WhatsAppProvider {
   async sendAudio(input: SendAudioInput): Promise<SendResult> {
     this.sentAudio.push(input);
     return { providerMessageId: this.nextId("audio") };
+  }
+
+  async sendTemplate(input: SendTemplateInput): Promise<SendResult> {
+    this.sentTemplate.push(input);
+    return { providerMessageId: this.nextId("template") };
   }
 
   async getMediaMetadata(mediaId: string): Promise<MediaMetadata> {

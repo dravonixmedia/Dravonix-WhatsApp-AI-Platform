@@ -132,6 +132,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_knowledge_ing
 echo "Running Meta/WhatsApp Batch 1 connection foundation (migration 35) RLS/RPC regression assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_connections.sql"
 
+echo "Running Meta/WhatsApp Batch 2 service-window/template foundation (migration 36) RLS/RPC regression assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_service_window.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
@@ -176,6 +179,10 @@ for f in "$MIGRATIONS_DIR"/*.sql; do
   # using the conversation_ai_mode type migration 12 itself defines --
   # deferred to right after 12/13 below, same reason 12/13 are deferred.
   [[ "$base" == "00000000000024_client_role_team_security.sql" ]] && continue
+  # Meta/WhatsApp Batch 2 (migration 36) is the first migration since 12
+  # itself to reference a migration-12 type (outbound_delivery_status) --
+  # deferred for the exact same reason as 12/13/24 above.
+  [[ "$base" == "00000000000036_whatsapp_service_window.sql" ]] && continue
   run_file "$LEGACY_DB_URL" "$f"
 done
 
@@ -187,6 +194,9 @@ run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000012_human_handover.sql"
 
 echo "[legacy-upgrade] Applying migration 13 (dashboard Realtime) against the upgraded database..."
 run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000013_dashboard_realtime.sql"
+
+echo "[legacy-upgrade] Applying migration 36 (Meta/WhatsApp Batch 2) now that migration 12's outbound_delivery_status type exists..."
+run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000036_whatsapp_service_window.sql"
 
 echo "[legacy-upgrade] Applying migration 24 (Phase 2 role model expansion) now that migration 12's types/functions exist..."
 run_file "$LEGACY_DB_URL" "$MIGRATIONS_DIR/00000000000024_client_role_team_security.sql"

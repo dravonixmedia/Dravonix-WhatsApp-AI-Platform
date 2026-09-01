@@ -9,6 +9,7 @@ import type {
   HandoverConversationSummary,
   HandoverInboxItem,
   HandoverInboxListInput,
+  HumanTemplateOutboundReservation,
   OutboundDeliveryStatus,
   OutboundFinalizeResult,
   OutboundReservation,
@@ -192,6 +193,45 @@ export class SupabaseHandoverRepository implements HandoverRepository {
       },
     );
     return { id: row.id, outboundStatus: row.outbound_status };
+  }
+
+  async getLastCustomerMessageAt(conversationId: string): Promise<string | null> {
+    const { data, error } = await this.client
+      .from("messages")
+      .select("created_at")
+      .eq("conversation_id", conversationId)
+      .eq("direction", "inbound")
+      .eq("sender_type", "customer")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return (data?.created_at as string | undefined) ?? null;
+  }
+
+  async reserveHumanTemplateOutboundMessage(
+    conversationId: string,
+    idempotencyKey: string,
+  ): Promise<HumanTemplateOutboundReservation> {
+    const row = await callRpc<{
+      id: string;
+      claimed: boolean;
+      outbound_status: OutboundDeliveryStatus;
+      provider_message_id: string | null;
+      template_name: string;
+      template_language: string;
+    }>(this.client, "reserve_human_template_outbound_message", {
+      p_conversation_id: conversationId,
+      p_idempotency_key: idempotencyKey,
+    });
+    return {
+      id: row.id,
+      claimed: row.claimed,
+      outboundStatus: row.outbound_status,
+      providerMessageId: row.provider_message_id,
+      templateName: row.template_name,
+      templateLanguage: row.template_language,
+    };
   }
 
   async listHandoverInbox(input: HandoverInboxListInput): Promise<HandoverInboxItem[]> {

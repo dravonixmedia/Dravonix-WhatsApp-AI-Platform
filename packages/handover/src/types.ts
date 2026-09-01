@@ -105,3 +105,26 @@ export interface ExpiredOutboundMessage {
   companyId: string;
   senderType: MessageSenderType;
 }
+
+/**
+ * Meta/WhatsApp Batch 2: the ONE approved template configured as a
+ * conversation's WhatsApp Business Account's service-window fallback, or
+ * absent if none is configured or the configured one is no longer approved.
+ */
+export interface ServiceWindowFallbackTemplate {
+  id: string;
+  name: string;
+  language: string;
+}
+
+/** Everything sendAiOutboundMessage/resolveServiceWindowState need to decide free-form-vs-template-vs-blocked for one inbound message's reply. */
+export interface ServiceWindowState {
+  lastCustomerMessageAt: string | null;
+  fallbackTemplate: ServiceWindowFallbackTemplate | null;
+}
+
+/** Result shape returned by reserve_human_template_outbound_message. */
+export interface HumanTemplateOutboundReservation extends OutboundReservation {
+  templateName: string;
+  templateLanguage: string;
+}

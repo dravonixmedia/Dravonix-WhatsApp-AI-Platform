@@ -5,11 +5,13 @@ import type {
   HandoverConversationSummary,
   HandoverInboxItem,
   HandoverInboxListInput,
+  HumanTemplateOutboundReservation,
   MessageChannelType,
   MessageSenderType,
   OutboundDeliveryStatus,
   OutboundFinalizeResult,
   OutboundReservation,
+  ServiceWindowState,
 } from "./types.js";
 
 /** Minimal projection needed to authorize an AI-message reconciliation request before invoking the trusted RPC. */
@@ -54,6 +56,28 @@ export interface HandoverRepository {
     errorCode?: string | null,
     retryable?: boolean | null,
   ): Promise<OutboundFinalizeResult>;
+
+  /**
+   * Meta/WhatsApp Batch 2: the most recent qualifying inbound customer
+   * message for this conversation, used to decide whether the 24-hour
+   * WhatsApp free-form service window is open. Read under RLS (this
+   * repository's authenticated client) -- safe because any role holding
+   * conversations.reply (required to reach this at all) is expected to also
+   * hold conversations.view, which messages_select_member requires.
+   */
+  getLastCustomerMessageAt(conversationId: string): Promise<string | null>;
+
+  /**
+   * Reserves an explicit, human-initiated send of the conversation's
+   * configured service-window re-engagement template (Phase 8) -- never
+   * accepts a template id/name from the caller; the underlying RPC resolves
+   * and validates the ONE account-configured, currently-approved fallback
+   * itself and returns its name/language.
+   */
+  reserveHumanTemplateOutboundMessage(
+    conversationId: string,
+    idempotencyKey: string,
+  ): Promise<HumanTemplateOutboundReservation>;
 
   reconcileOutboundMessage(
     messageId: string,
@@ -104,6 +128,17 @@ export interface HandoverWorkerRepository {
     sourceMessageId: string,
     channelType: MessageChannelType,
   ): Promise<OutboundReservation>;
+
+  /**
+   * Meta/WhatsApp Batch 2: resolves, from the inbound message that triggered
+   * this reply, the most recent qualifying inbound customer message for its
+   * conversation (for the 24-hour free-form window check) and the WABA's
+   * currently-approved service-window fallback template, if any. Reads
+   * directly (bypasses RLS, since this is the service-role repository) --
+   * correct regardless of any per-role whatsapp.view grant, which the
+   * background workers calling this never have a session for anyway.
+   */
+  getServiceWindowState(sourceMessageId: string): Promise<ServiceWindowState>;
 
   finalizeAiOutboundMessage(
     messageId: string,

@@ -82,7 +82,8 @@ declare
     'admin_update_company_voice_settings', 'admin_add_knowledge_source', 'admin_toggle_knowledge_source',
     'admin_remove_knowledge_source', 'ingest_knowledge_source', 'admin_connect_whatsapp_account',
     'admin_connect_whatsapp_phone_number', 'admin_set_whatsapp_account_status',
-    'admin_set_whatsapp_phone_number_status'
+    'admin_set_whatsapp_phone_number_status', 'admin_register_whatsapp_template',
+    'admin_set_service_window_fallback_template', 'reserve_human_template_outbound_message'
   ];
 begin
   foreach fn in array fns loop

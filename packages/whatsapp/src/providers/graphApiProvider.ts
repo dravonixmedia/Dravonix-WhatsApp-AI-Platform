@@ -2,6 +2,7 @@ import type {
   MediaMetadata,
   SendAudioInput,
   SendResult,
+  SendTemplateInput,
   SendTextInput,
   WhatsAppProvider,
 } from "../provider.js";
@@ -13,12 +14,21 @@ export interface GraphApiConfig {
   baseUrl?: string;
 }
 
-/** Thrown for any non-2xx Graph API response, carrying enough detail to log without leaking the access token. */
+/**
+ * Thrown for any non-2xx Graph API response, carrying enough detail to log
+ * without leaking the access token. `errorSubcode` (Meta's `error_subcode`,
+ * e.g. the family of codes Meta uses for an outside-service-window
+ * rejection) is captured alongside `errorCode` purely for structured
+ * observability -- see classifySendError's doc comment (Meta/WhatsApp Batch
+ * 2, Phase 9): neither field is ever matched against a fragile English
+ * error string to decide behavior.
+ */
 export class WhatsAppProviderError extends Error {
   constructor(
     message: string,
     public readonly status: number,
     public readonly errorCode?: string,
+    public readonly errorSubcode?: string,
   ) {
     super(message);
     this.name = "WhatsAppProviderError";
@@ -47,11 +57,14 @@ export class GraphApiWhatsAppProvider implements WhatsAppProvider {
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      const errorCode = (body as { error?: { code?: string } })?.error?.code;
+      const apiError = (
+        body as { error?: { code?: string | number; error_subcode?: string | number } }
+      )?.error;
       throw new WhatsAppProviderError(
         `WhatsApp Graph API request to ${path} failed with status ${response.status}`,
         response.status,
-        errorCode,
+        apiError?.code !== undefined ? String(apiError.code) : undefined,
+        apiError?.error_subcode !== undefined ? String(apiError.error_subcode) : undefined,
       );
     }
 
@@ -87,6 +100,38 @@ export class GraphApiWhatsAppProvider implements WhatsAppProvider {
         to: input.toWaId,
         type: "audio",
         audio: isUrl ? { link: input.audioMediaIdOrUrl } : { id: input.audioMediaIdOrUrl },
+      }),
+    })) as { messages: Array<{ id: string }> };
+
+    const message = data.messages[0];
+    if (!message) {
+      throw new WhatsAppProviderError("WhatsApp send response had no message ID", 502);
+    }
+    return { providerMessageId: message.id };
+  }
+
+  async sendTemplate(input: SendTemplateInput): Promise<SendResult> {
+    const data = (await this.request(`/${input.phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: input.toWaId,
+        type: "template",
+        template: {
+          name: input.templateName,
+          language: { code: input.languageCode },
+          ...(input.bodyParameters.length > 0
+            ? {
+                components: [
+                  {
+                    type: "body",
+                    parameters: input.bodyParameters.map((text) => ({ type: "text", text })),
+                  },
+                ],
+              }
+            : {}),
+        },
       }),
     })) as { messages: Array<{ id: string }> };
 

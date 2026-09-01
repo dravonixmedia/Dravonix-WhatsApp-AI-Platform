@@ -284,9 +284,24 @@ class FakeHandoverWorkerRepository implements HandoverWorkerRepository {
     sourceType: string;
   }> = [];
 
+  /**
+   * Meta/WhatsApp Batch 2: defaults to "now" (a wide-open service window)
+   * and no fallback template, so every pre-existing test in this file that
+   * never overrides serviceWindowState keeps behaving exactly as before
+   * this batch.
+   */
+  serviceWindowState: { lastCustomerMessageAt: string | null; fallbackTemplate: null } = {
+    lastCustomerMessageAt: new Date().toISOString(),
+    fallbackTemplate: null,
+  };
+
   private messages = new Map<string, FakeOutboundMessage>();
   private bySourceAndChannel = new Map<string, string>();
   private counter = 0;
+
+  async getServiceWindowState(_sourceMessageId: string) {
+    return this.serviceWindowState;
+  }
 
   async triggerHandover(input: {
     conversationId: string;
@@ -441,6 +456,40 @@ describe("processVoiceJob", () => {
     expect(temporal?.company.timezone).toBe("Asia/Dubai");
     expect(temporal?.customer.timezone).toBe("Europe/London");
     expect(temporal?.customer.timezoneKnown).toBe(true);
+  });
+
+  it("Meta/WhatsApp Batch 2: sends the voice reply normally when inside the service window (item 11)", async () => {
+    const synthesizeSpy = vi.spyOn(ttsProvider, "synthesize");
+    const deps = makeDeps(activeEntitlementSnapshot());
+    handoverRepo.serviceWindowState = {
+      lastCustomerMessageAt: new Date().toISOString(),
+      fallbackTemplate: null,
+    };
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(synthesizeSpy).toHaveBeenCalledTimes(1);
+    expect(whatsappProvider.sentAudio).toHaveLength(1);
+    expect(whatsappProvider.sentTemplate).toHaveLength(0);
+  });
+
+  it("Meta/WhatsApp Batch 2: outside the service window, never invokes TTS at all and sends the template fallback instead (items 12, 13)", async () => {
+    const synthesizeSpy = vi.spyOn(ttsProvider, "synthesize");
+    const deps = makeDeps(activeEntitlementSnapshot());
+    handoverRepo.serviceWindowState = {
+      lastCustomerMessageAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+      fallbackTemplate: { id: "tpl-1", name: "reengagement_v1", language: "en" },
+    };
+
+    await processVoiceJob(deps, makePayload());
+
+    expect(synthesizeSpy).not.toHaveBeenCalled();
+    expect(whatsappProvider.sentText).toHaveLength(0);
+    expect(whatsappProvider.sentAudio).toHaveLength(0);
+    // text_and_voice mode wants both a text and an audio reply for this one
+    // inbound message -- outside the window, both collapse into exactly one
+    // shared template send (see sendServiceWindowFallback's dedup).
+    expect(whatsappProvider.sentTemplate).toHaveLength(1);
   });
 
   it("sends exactly one text and one voice reply per inbound message across a simulated redelivery, without re-synthesizing", async () => {

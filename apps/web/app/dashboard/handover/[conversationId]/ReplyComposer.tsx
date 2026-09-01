@@ -1,7 +1,22 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { sendHumanReplyAction } from "../../../../lib/actions/handover.js";
+import {
+  sendHumanReplyAction,
+  sendServiceWindowTemplateAction,
+} from "../../../../lib/actions/handover.js";
+
+/**
+ * Meta/WhatsApp Batch 2, Phase 8: the exact copy WhatsAppServiceWindowClosedError
+ * throws (packages/handover/src/errors.ts) when the 24-hour free-form
+ * service window has closed. Matched verbatim against OUR OWN
+ * first-party error string (never Meta's) purely to decide whether to
+ * offer the "Send re-engagement template" fallback action -- Server
+ * Actions only cross the client boundary as a plain Error, losing the
+ * original WhatsAppServiceWindowClosedError class identity.
+ */
+const SERVICE_WINDOW_CLOSED_MESSAGE =
+  "The WhatsApp customer service window has expired. An approved template is required before free-form replies can resume.";
 
 /**
  * Client component only for the client-generated idempotency key (Human
@@ -31,10 +46,15 @@ export function ReplyComposer({
   onChange?: (value: string) => void;
 }) {
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [templateIdempotencyKey, setTemplateIdempotencyKey] = useState(() => crypto.randomUUID());
   const [isPending, startTransition] = useTransition();
+  const [isSendingTemplate, startTemplateTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [templateSent, setTemplateSent] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const isControlled = value !== undefined && onChange !== undefined;
+  const windowClosed = error === SERVICE_WINDOW_CLOSED_MESSAGE;
 
   return (
     <form
@@ -77,6 +97,42 @@ export function ReplyComposer({
       </div>
       {error ? (
         <p style={{ color: "#dc2626", fontSize: "0.8rem", marginTop: "0.35rem" }}>{error}</p>
+      ) : null}
+      {windowClosed ? (
+        templateSent ? (
+          <p className="dvx-muted" style={{ fontSize: "0.78rem", marginTop: "0.35rem" }}>
+            Re-engagement template sent. The customer's next reply will reopen free-form replies.
+          </p>
+        ) : (
+          <div style={{ marginTop: "0.35rem" }}>
+            <button
+              className="dvx-button dvx-button--secondary"
+              type="button"
+              disabled={isSendingTemplate}
+              onClick={() => {
+                setTemplateError(null);
+                startTemplateTransition(async () => {
+                  try {
+                    await sendServiceWindowTemplateAction(conversationId, templateIdempotencyKey);
+                    setTemplateIdempotencyKey(crypto.randomUUID());
+                    setTemplateSent(true);
+                  } catch (err) {
+                    setTemplateError(
+                      err instanceof Error ? err.message : "Failed to send re-engagement template",
+                    );
+                  }
+                });
+              }}
+            >
+              {isSendingTemplate ? "Sending template..." : "Send re-engagement template"}
+            </button>
+            {templateError ? (
+              <p style={{ color: "#dc2626", fontSize: "0.78rem", marginTop: "0.25rem" }}>
+                {templateError}
+              </p>
+            ) : null}
+          </div>
+        )
       ) : null}
     </form>
   );

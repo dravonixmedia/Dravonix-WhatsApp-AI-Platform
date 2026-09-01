@@ -8,6 +8,8 @@ import type {
   OutboundDeliveryStatus,
   OutboundFinalizeResult,
   OutboundReservation,
+  ServiceWindowFallbackTemplate,
+  ServiceWindowState,
 } from "../types.js";
 
 async function callRpc<T>(
@@ -99,6 +101,86 @@ export class SupabaseHandoverWorkerRepository implements HandoverWorkerRepositor
       },
     );
     return { id: row.id, outboundStatus: row.outbound_status };
+  }
+
+  /**
+   * Four small, explicit, sequential queries rather than one PostgREST
+   * embedded-resource select: whatsapp_templates has two distinct FK
+   * relationships to whatsapp_accounts (whatsapp_templates.whatsapp_account_id
+   * and whatsapp_accounts.service_window_fallback_template_id), which
+   * PostgREST cannot disambiguate for an embed without an explicit
+   * relationship hint -- explicit queries avoid that ambiguity entirely.
+   */
+  async getServiceWindowState(sourceMessageId: string): Promise<ServiceWindowState> {
+    const { data: source, error: sourceError } = await this.client
+      .from("messages")
+      .select("conversation_id")
+      .eq("id", sourceMessageId)
+      .single();
+    if (sourceError) throw new Error(sourceError.message);
+    const conversationId = source.conversation_id as string;
+
+    const [conversationResult, lastInboundResult] = await Promise.all([
+      this.client
+        .from("conversations")
+        .select("whatsapp_phone_number_id")
+        .eq("id", conversationId)
+        .single(),
+      this.client
+        .from("messages")
+        .select("created_at")
+        .eq("conversation_id", conversationId)
+        .eq("direction", "inbound")
+        .eq("sender_type", "customer")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    if (conversationResult.error) throw new Error(conversationResult.error.message);
+    if (lastInboundResult.error) throw new Error(lastInboundResult.error.message);
+
+    const phoneNumberId = conversationResult.data.whatsapp_phone_number_id as string | null;
+    const lastCustomerMessageAt =
+      (lastInboundResult.data?.created_at as string | undefined) ?? null;
+
+    let fallbackTemplate: ServiceWindowFallbackTemplate | null = null;
+    if (phoneNumberId) {
+      const { data: phoneNumber, error: phoneNumberError } = await this.client
+        .from("whatsapp_phone_numbers")
+        .select("whatsapp_account_id")
+        .eq("id", phoneNumberId)
+        .maybeSingle();
+      if (phoneNumberError) throw new Error(phoneNumberError.message);
+
+      const accountId = phoneNumber?.whatsapp_account_id as string | undefined;
+      if (accountId) {
+        const { data: account, error: accountError } = await this.client
+          .from("whatsapp_accounts")
+          .select("service_window_fallback_template_id")
+          .eq("id", accountId)
+          .maybeSingle();
+        if (accountError) throw new Error(accountError.message);
+
+        const templateId = account?.service_window_fallback_template_id as string | undefined;
+        if (templateId) {
+          const { data: template, error: templateError } = await this.client
+            .from("whatsapp_templates")
+            .select("id, name, language, status")
+            .eq("id", templateId)
+            .maybeSingle();
+          if (templateError) throw new Error(templateError.message);
+          if (template && template.status === "approved") {
+            fallbackTemplate = {
+              id: template.id,
+              name: template.name,
+              language: template.language,
+            };
+          }
+        }
+      }
+    }
+
+    return { lastCustomerMessageAt, fallbackTemplate };
   }
 
   async expireStaleOutboundSends(): Promise<ExpiredOutboundMessage[]> {

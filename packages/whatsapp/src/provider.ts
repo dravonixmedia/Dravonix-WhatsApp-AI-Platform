@@ -11,6 +11,25 @@ export interface SendAudioInput {
   audioMediaIdOrUrl: string;
 }
 
+/**
+ * Sends a pre-approved WhatsApp message template (Meta/WhatsApp Batch 2) --
+ * the only message type Meta allows once the 24-hour customer service
+ * window has closed. `templateName`/`languageCode` must already be an
+ * approved template on Meta's side; this call never submits anything for
+ * approval. `bodyParameters` fills the template's positional {{1}}, {{2}},
+ * ... body placeholders in order -- empty for a fixed-text template with no
+ * variables, which is what this batch's service-window fallback template is
+ * expected to be (see whatsapp_accounts.service_window_fallback_template_id's
+ * column comment, migration 36).
+ */
+export interface SendTemplateInput {
+  phoneNumberId: string;
+  toWaId: string;
+  templateName: string;
+  languageCode: string;
+  bodyParameters: string[];
+}
+
 export interface SendResult {
   providerMessageId: string;
 }
@@ -30,6 +49,7 @@ export interface MediaMetadata {
 export interface WhatsAppProvider {
   sendText(input: SendTextInput): Promise<SendResult>;
   sendAudio(input: SendAudioInput): Promise<SendResult>;
+  sendTemplate(input: SendTemplateInput): Promise<SendResult>;
   getMediaMetadata(mediaId: string): Promise<MediaMetadata>;
   downloadMedia(url: string): Promise<ArrayBuffer>;
   uploadMedia(

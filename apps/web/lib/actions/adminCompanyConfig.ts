@@ -332,3 +332,56 @@ export async function adminSetWhatsappPhoneNumberStatusAction(
   if (error) throw error;
   revalidateAdminCompanyPaths(companyId);
 }
+
+/**
+ * Meta/WhatsApp Batch 2 (migration 36): registers a template Meta has
+ * ALREADY approved via Business Manager -- never calls Meta, never submits
+ * anything for approval. See admin_register_whatsapp_template's own doc
+ * comment.
+ */
+export async function adminRegisterWhatsappTemplateAction(
+  companyId: string,
+  formData: FormData,
+): Promise<void> {
+  const supabase = await requireSuperAdminClient();
+  const whatsappAccountId = str(formData, "whatsapp_account_id");
+  if (!whatsappAccountId) throw new Error("WhatsApp account is required");
+  const name = str(formData, "name");
+  if (!name) throw new Error("Template name is required");
+  const language = str(formData, "language");
+  if (!language) throw new Error("Template language is required");
+
+  const { error } = await supabase.rpc("admin_register_whatsapp_template", {
+    p_company_id: companyId,
+    p_whatsapp_account_id: whatsappAccountId,
+    p_name: name,
+    p_language: language,
+    p_category: str(formData, "category"),
+    p_status: str(formData, "status") ?? "approved",
+  });
+  if (error) throw error;
+  revalidateAdminCompanyPaths(companyId);
+}
+
+/**
+ * Meta/WhatsApp Batch 2 (migration 36): designates (or, with an empty
+ * selection, clears) the ONE approved template used as a WABA's
+ * service-window fallback.
+ */
+export async function adminSetServiceWindowFallbackTemplateAction(
+  companyId: string,
+  formData: FormData,
+): Promise<void> {
+  const supabase = await requireSuperAdminClient();
+  const whatsappAccountId = str(formData, "whatsapp_account_id");
+  if (!whatsappAccountId) throw new Error("WhatsApp account is required");
+  const templateId = str(formData, "template_id");
+
+  const { error } = await supabase.rpc("admin_set_service_window_fallback_template", {
+    p_company_id: companyId,
+    p_whatsapp_account_id: whatsappAccountId,
+    p_template_id: templateId,
+  });
+  if (error) throw error;
+  revalidateAdminCompanyPaths(companyId);
+}
