@@ -80,6 +80,23 @@ export class HandoverInvalidSourceTypeError extends AppError {
 }
 
 /**
+ * Meta/WhatsApp Batch 2, Phase 8: thrown by sendHumanReply when the WhatsApp
+ * 24-hour customer service window has closed for this conversation. A human
+ * agent's ordinary free-form reply is never sent, and never falsely marked
+ * as sent, when this is thrown -- no reservation is even created. The
+ * message text matches the task's own specified UX copy exactly, since it
+ * is shown to the agent as-is.
+ */
+export class WhatsAppServiceWindowClosedError extends AppError {
+  constructor(public readonly conversationId: string) {
+    super(
+      "whatsapp_service_window_closed",
+      "The WhatsApp customer service window has expired. An approved template is required before free-form replies can resume.",
+    );
+  }
+}
+
+/**
  * Thrown by reconcileAiOutboundMessage (the trusted, server-only AI-message
  * reconciliation path) when the target message was not sent by the AI --
  * human-agent messages must go through the ordinary authenticated

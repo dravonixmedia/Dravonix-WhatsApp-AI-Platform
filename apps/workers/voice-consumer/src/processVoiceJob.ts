@@ -8,7 +8,9 @@ import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravon
 import { EntitlementDeniedError, isAiReplyAllowed } from "@dravonix/core";
 import {
   classifySendError,
+  resolveServiceWindowState,
   sendAiOutboundMessage,
+  sendServiceWindowFallback,
   triggerHandoverAtomic,
   type HandoverWorkerRepository,
 } from "@dravonix/handover";
@@ -626,6 +628,15 @@ export async function processVoiceJob(
   const audioForcedOff = deps.voiceReplyMode === "text_only";
   const effectiveReplyMode = audioForcedOff ? "text_only" : replyMode.mode;
 
+  // Meta/WhatsApp Batch 2, Phase 7: resolved ONCE, up front, so the audio
+  // branch below can skip text-to-speech synthesis entirely (never wasting
+  // paid TTS usage on a reply already known to be prohibited) rather than
+  // only skipping the final WhatsApp send. sendAiOutboundMessage (used by
+  // the text branch) re-resolves this itself -- a small redundant read, but
+  // it keeps that shared function correct and self-contained for every
+  // other caller too.
+  const serviceWindow = await resolveServiceWindowState(deps.handoverRepo, payload.messageId);
+
   let textReplySent = false;
   if (effectiveReplyMode === "text_only" || effectiveReplyMode === "text_and_voice") {
     log.info("Stage: whatsapp_text_generation", {
@@ -683,6 +694,31 @@ export async function processVoiceJob(
   });
 
   if (shouldSendAudio) {
+    // Meta/WhatsApp Batch 2, Phase 7: outside the service window, skip TTS
+    // synthesis and the audio reservation entirely -- attempt the shared
+    // template fallback instead. Keyed by the SAME source_message_id under
+    // channel_type = 'template' regardless of channel, so if the text
+    // branch above already attempted (or is concurrently attempting) this
+    // exact fallback for a text_and_voice reply, only one template is ever
+    // actually sent (see sendServiceWindowFallback's doc comment).
+    if (!serviceWindow.open) {
+      const fallbackResult = await sendServiceWindowFallback(
+        deps.handoverRepo,
+        deps.whatsappProvider,
+        {
+          sourceMessageId: payload.messageId,
+          phoneNumberId: context.phoneNumberId,
+          toWaId: context.waId,
+          fallbackTemplate: serviceWindow.fallbackTemplate,
+        },
+      );
+      log.info("Skipped voice reply synthesis: outside the WhatsApp service window", {
+        outboundStatus: fallbackResult.outboundStatus,
+        alreadyHandled: fallbackResult.alreadyHandled,
+      });
+      return;
+    }
+
     // Reserved before synthesizing (rather than using sendAiOutboundMessage's
     // generic helper) so a redelivered job that already produced a voice
     // reply for this message skips the paid TTS/upload work entirely instead

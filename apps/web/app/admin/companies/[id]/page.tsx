@@ -21,7 +21,9 @@ import {
   adminConnectWhatsappAccountAction,
   adminConnectWhatsappPhoneNumberAction,
   adminReingestKnowledgeSourceAction,
+  adminRegisterWhatsappTemplateAction,
   adminRemoveKnowledgeSourceAction,
+  adminSetServiceWindowFallbackTemplateAction,
   adminSetWhatsappAccountStatusAction,
   adminSetWhatsappPhoneNumberStatusAction,
   adminToggleKnowledgeSourceAction,
@@ -100,6 +102,7 @@ export default async function AdminCompanyDetailPage({
     usageResult,
     whatsappAccountsResult,
     whatsappPhoneNumbersResult,
+    whatsappTemplatesResult,
     supportSessionsResult,
     companySettingsResult,
     knowledgeSourcesResult,
@@ -141,12 +144,17 @@ export default async function AdminCompanyDetailPage({
       .limit(20),
     supabase
       .from("whatsapp_accounts")
-      .select("id, waba_id, business_name, status, last_error")
+      .select("id, waba_id, business_name, status, last_error, service_window_fallback_template_id")
       .eq("company_id", id),
     supabase
       .from("whatsapp_phone_numbers")
       .select("id, whatsapp_account_id, phone_number_id, display_phone_number, status")
       .eq("company_id", id),
+    supabase
+      .from("whatsapp_templates")
+      .select("id, whatsapp_account_id, name, language, category, status")
+      .eq("company_id", id)
+      .order("name"),
     supabase
       .from("support_access_sessions")
       .select("id, platform_user_id, reason, started_at, expires_at, ended_at")
@@ -231,6 +239,7 @@ export default async function AdminCompanyDetailPage({
   const usage = usageResult.data ?? [];
   const whatsappAccounts = whatsappAccountsResult.data ?? [];
   const whatsappPhoneNumbers = whatsappPhoneNumbersResult.data ?? [];
+  const whatsappTemplates = whatsappTemplatesResult.data ?? [];
   const supportSessions = supportSessionsResult.data ?? [];
 
   const planRow = subscription?.plan_versions;
@@ -331,6 +340,9 @@ export default async function AdminCompanyDetailPage({
     null,
     id,
   );
+  const adminRegisterWhatsappTemplateWithId = adminRegisterWhatsappTemplateAction.bind(null, id);
+  const adminSetServiceWindowFallbackTemplateWithId =
+    adminSetServiceWindowFallbackTemplateAction.bind(null, id);
 
   return (
     <div>
@@ -1497,6 +1509,119 @@ export default async function AdminCompanyDetailPage({
                       </button>
                     </form>
                   </details>
+
+                  {(() => {
+                    const accountTemplates = whatsappTemplates.filter(
+                      (t) => t.whatsapp_account_id === account.id,
+                    );
+                    const approvedTemplates = accountTemplates.filter(
+                      (t) => t.status === "approved",
+                    );
+                    const fallbackTemplate = accountTemplates.find(
+                      (t) => t.id === account.service_window_fallback_template_id,
+                    );
+                    return (
+                      <div
+                        style={{
+                          marginTop: "0.5rem",
+                          paddingLeft: "1rem",
+                          fontSize: "0.78rem",
+                        }}
+                      >
+                        <span className="dvx-muted">
+                          Service-window fallback template:{" "}
+                          {fallbackTemplate ? (
+                            <strong>
+                              {fallbackTemplate.name} ({fallbackTemplate.language})
+                            </strong>
+                          ) : (
+                            "Not configured"
+                          )}
+                        </span>
+
+                        <details style={{ marginTop: "0.3rem" }}>
+                          <summary className="dvx-muted" style={{ cursor: "pointer" }}>
+                            Register an approved template
+                          </summary>
+                          <form
+                            action={adminRegisterWhatsappTemplateWithId}
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "0.4rem",
+                              marginTop: "0.4rem",
+                              maxWidth: 360,
+                            }}
+                          >
+                            <input type="hidden" name="whatsapp_account_id" value={account.id} />
+                            <input
+                              className="dvx-input"
+                              name="name"
+                              placeholder="Template name (as approved on Meta)"
+                              required
+                            />
+                            <input
+                              className="dvx-input"
+                              name="language"
+                              placeholder="Language code (e.g. en)"
+                              required
+                            />
+                            <input
+                              className="dvx-input"
+                              name="category"
+                              placeholder="Category (optional)"
+                            />
+                            <select className="dvx-input" name="status" defaultValue="approved">
+                              <option value="approved">approved</option>
+                              <option value="pending_review">pending_review</option>
+                              <option value="rejected">rejected</option>
+                              <option value="disabled">disabled</option>
+                              <option value="draft">draft</option>
+                            </select>
+                            <button
+                              className="dvx-button dvx-button--secondary"
+                              type="submit"
+                              style={{ fontSize: "0.75rem", alignSelf: "flex-start" }}
+                            >
+                              Register template
+                            </button>
+                          </form>
+                        </details>
+
+                        <form
+                          action={adminSetServiceWindowFallbackTemplateWithId}
+                          style={{
+                            display: "flex",
+                            gap: "0.4rem",
+                            alignItems: "center",
+                            marginTop: "0.4rem",
+                          }}
+                        >
+                          <input type="hidden" name="whatsapp_account_id" value={account.id} />
+                          <select
+                            className="dvx-input"
+                            name="template_id"
+                            defaultValue={fallbackTemplate?.id ?? ""}
+                            style={{ fontSize: "0.75rem" }}
+                          >
+                            <option value="">None</option>
+                            {approvedTemplates.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({t.language})
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="dvx-button dvx-button--secondary"
+                            type="submit"
+                            style={{ fontSize: "0.75rem" }}
+                          >
+                            Set fallback
+                          </button>
+                        </form>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
