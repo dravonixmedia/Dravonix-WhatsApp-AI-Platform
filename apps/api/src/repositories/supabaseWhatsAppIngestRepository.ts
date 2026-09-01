@@ -16,10 +16,17 @@ export class SupabaseWhatsAppIngestRepository implements WhatsAppIngestRepositor
   constructor(private readonly client: SupabaseClient) {}
 
   async resolveCompanyIdByPhoneNumberId(phoneNumberId: string): Promise<string | null> {
+    // status = "connected" only -- a disabled/not_connected/error mapping
+    // must never route a new inbound message into a tenant (Meta/WhatsApp
+    // Batch 1: admin_set_whatsapp_account_status/
+    // admin_set_whatsapp_phone_number_status, migration 35). This falls
+    // through to the existing safe "unrouted" behavior below, exactly like
+    // an unknown phone_number_id -- never a different code path.
     const { data, error } = await this.client
       .from("whatsapp_phone_numbers")
       .select("company_id")
       .eq("phone_number_id", phoneNumberId)
+      .eq("status", "connected")
       .maybeSingle();
     if (error) throw error;
     return data?.company_id ?? null;

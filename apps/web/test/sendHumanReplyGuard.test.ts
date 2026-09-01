@@ -62,4 +62,17 @@ describe("sendHumanReplyAction required-configuration guard", () => {
     expect(actionSource).not.toMatch(/env\.SUPABASE_SERVICE_ROLE_KEY/);
     expect(actionSource).toMatch(/createServerOnlyServiceRoleClient/);
   });
+
+  it('Meta/WhatsApp Batch 1: requires the resolved phone mapping\'s status to be "connected" before sending, and checks this before sendHumanReply, never after', () => {
+    // A disabled/not_connected/error phone mapping (migration 35) must never
+    // be used to send a human reply -- same "safe, generic error, checked
+    // before any send" shape as the META_ACCESS_TOKEN guard above.
+    expect(actionSource).toMatch(/status/);
+    expect(actionSource).toMatch(/phoneNumberStatus !== "connected"/);
+    const statusGuardIndex = actionSource.indexOf('phoneNumberStatus !== "connected"');
+    const sendHumanReplyCallIndex = actionSource.indexOf("await sendHumanReply(");
+    expect(statusGuardIndex).toBeGreaterThan(-1);
+    expect(sendHumanReplyCallIndex).toBeGreaterThan(-1);
+    expect(statusGuardIndex).toBeLessThan(sendHumanReplyCallIndex);
+  });
 });
