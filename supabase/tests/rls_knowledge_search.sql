@@ -5,21 +5,15 @@
 --
 -- search_knowledge_chunks is `language sql stable` -- NOT `security definer`
 -- (see migration 10's comment on the function) -- so it runs as SECURITY
--- INVOKER. This means two independent isolation layers exist depending on
--- who calls it:
---   1. service_role (the real production caller, via message-consumer's
---      Supabase client): RLS is bypassed entirely for this role, so the
---      function's own `kc.company_id = p_company_id` filter is the SOLE
---      isolation guarantee for this call path.
---   2. authenticated/anon (if ever called directly, e.g. from a future
---      client-side integration): RLS (knowledge_chunks_select_member /
---      knowledge_sources_select_member, migration 6) remains fully
---      authoritative regardless of what p_company_id is passed, since RLS
---      filters by has_company_permission(<row's own company_id>, ...)
---      evaluated per row, independent of the function's own parameter.
---
--- This file tests both layers explicitly rather than assuming either one
--- alone is sufficient.
+-- INVOKER; RLS therefore still applies whenever a role other than
+-- service_role somehow reaches it. But as of migration 34 (P2 knowledge
+-- ingestion), EXECUTE itself is revoked from public/anon/authenticated and
+-- granted only to service_role -- the only real caller (message-consumer/
+-- voice-consumer). This file locks in BOTH layers: the grant-level denial
+-- for anon/authenticated (section 2/3 below), and service_role's own
+-- `kc.company_id = p_company_id` filter plus the ingestion_status/is_enabled
+-- filters as the sole remaining isolation/quality guarantees for the one
+-- role that can still call it (sections 1 and 4).
 
 begin;
 
@@ -53,10 +47,14 @@ insert into company_members (id, company_id, user_id, role, is_active) values
   ('83000001-0000-0000-0000-000000000001', '82000001-0000-0000-0000-000000000001', '81000001-0000-0000-0000-000000000001', 'company_owner', true),
   ('83000002-0000-0000-0000-000000000001', '82000002-0000-0000-0000-000000000001', '81000002-0000-0000-0000-000000000001', 'company_owner', true);
 
-insert into knowledge_sources (id, company_id, source_type, title, is_enabled) values
-  ('84000001-0000-0000-0000-000000000001', '82000001-0000-0000-0000-000000000001', 'pricing', 'Co A Pricing', true),
-  ('84000001-0000-0000-0000-000000000002', '82000001-0000-0000-0000-000000000001', 'faq', 'Co A Disabled FAQ', false),
-  ('84000002-0000-0000-0000-000000000001', '82000002-0000-0000-0000-000000000001', 'pricing', 'Co B Pricing', true);
+-- ingestion_status is explicit (not left to the column default) throughout
+-- this fixture -- migration 34 changed that default to 'pending', so a real
+-- retrieval-focused test must state the status it actually intends per row
+-- rather than relying on whatever a future default happens to be.
+insert into knowledge_sources (id, company_id, source_type, title, is_enabled, ingestion_status) values
+  ('84000001-0000-0000-0000-000000000001', '82000001-0000-0000-0000-000000000001', 'pricing', 'Co A Pricing', true, 'ready'),
+  ('84000001-0000-0000-0000-000000000002', '82000001-0000-0000-0000-000000000001', 'faq', 'Co A Disabled FAQ', false, 'ready'),
+  ('84000002-0000-0000-0000-000000000001', '82000002-0000-0000-0000-000000000001', 'pricing', 'Co B Pricing', true, 'ready');
 
 insert into knowledge_chunks (id, company_id, knowledge_source_id, content, chunk_index) values
   ('85000001-0000-0000-0000-000000000001', '82000001-0000-0000-0000-000000000001', '84000001-0000-0000-0000-000000000001', 'Our website package costs fifty thousand rupees', 0),
@@ -93,48 +91,37 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 2. authenticated (defense-in-depth layer): RLS remains fully authoritative
---    regardless of what p_company_id is passed -- a caller belonging to
---    Company A can retrieve their own company's chunks, but passing
---    Company B's id gets zero rows (RLS-filtered), never Company B's real
---    data and never a permission error.
+-- 2. authenticated: migration 34 revokes EXECUTE entirely -- even a real,
+--    legitimately-authenticated Company A member (who genuinely has
+--    knowledge.view and would previously have been let through by RLS) now
+--    gets a permission error at the grant layer, before RLS is ever
+--    evaluated. This is a hardening/attack-surface reduction (Phase 19 of
+--    the P2 audit): the only real caller is service_role.
 -- ---------------------------------------------------------------------------
 
 do $$
-declare
-  v_count integer;
 begin
   set local role authenticated;
   perform set_config('request.jwt.claim.sub', '81000001-0000-0000-0000-000000000001', true);
 
-  select count(*) into v_count
-    from search_knowledge_chunks('82000001-0000-0000-0000-000000000001', 'website package pricing', 10);
-  perform test_assert('authenticated (Company A owner): own-company retrieval works under RLS', v_count = 1);
-
-  select count(*) into v_count
-    from search_knowledge_chunks('82000002-0000-0000-0000-000000000001', 'website package pricing', 10);
-  perform test_assert('authenticated (Company A owner): passing Company B''s id returns zero rows, never Company B''s data', v_count = 0);
+  begin
+    perform count(*) from search_knowledge_chunks('82000001-0000-0000-0000-000000000001', 'website package pricing', 10);
+    raise exception 'ASSERTION FAILED: authenticated should be denied execute on search_knowledge_chunks, but the call succeeded';
+  exception
+    when insufficient_privilege then
+      raise notice 'OK: authenticated (Company A owner, real knowledge.view) is denied EXECUTE on search_knowledge_chunks -- grant-level denial, not just RLS';
+  end;
 end;
 $$;
 
 reset role;
 
 -- ---------------------------------------------------------------------------
--- 3. anon: EXECUTE on this function (and table-level SELECT on
---    knowledge_chunks/knowledge_sources) is still the Postgres default
---    PUBLIC grant -- unlike the more recently hardened
---    search_company_leads/search_company_conversations (migration 25),
---    which explicitly revoke EXECUTE from anon. This is a real grant-model
---    inconsistency worth tightening in a future pass, but RLS independently
---    guarantees anon can never retrieve real company data through it today
---    -- has_company_permission() resolves to false with no auth.uid(), for
---    every row, regardless of which company_id is requested. This assertion
---    locks in that safety property so a future RLS regression here would be
---    caught even before the grant itself is ever tightened.
+-- 3. anon: same grant-level denial as authenticated above.
 -- ---------------------------------------------------------------------------
 
 do $$
-declare v_count integer; begin
+begin
   -- test_clear_current_user() is required here, not just `set local role
   -- anon` -- request.jwt.claim.sub was set (non-locally) to the Company A
   -- owner's id in section 2 above and does not reset on its own, so without
@@ -142,10 +129,55 @@ declare v_count integer; begin
   -- the anon role, silently testing the wrong scenario.
   perform test_clear_current_user();
   set local role anon;
+
+  begin
+    perform count(*) from search_knowledge_chunks('82000001-0000-0000-0000-000000000001', 'website package pricing', 10);
+    raise exception 'ASSERTION FAILED: anon should be denied execute on search_knowledge_chunks, but the call succeeded';
+  exception
+    when insufficient_privilege then
+      raise notice 'OK: anon is denied EXECUTE on search_knowledge_chunks';
+  end;
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------------
+-- 4. service_role retains EXECUTE, and ingestion_status = 'ready' (added by
+--    migration 34, alongside the pre-existing is_enabled = true filter) is
+--    genuinely enforced: an enabled source sitting at pending/processing/
+--    failed must never be retrievable, only a genuinely ready one.
+-- ---------------------------------------------------------------------------
+
+insert into knowledge_sources (id, company_id, source_type, title, is_enabled, ingestion_status) values
+  ('84000001-0000-0000-0000-000000000003', '82000001-0000-0000-0000-000000000001', 'faq', 'Co A Pending FAQ', true, 'pending'),
+  ('84000001-0000-0000-0000-000000000004', '82000001-0000-0000-0000-000000000001', 'faq', 'Co A Processing FAQ', true, 'processing'),
+  ('84000001-0000-0000-0000-000000000005', '82000001-0000-0000-0000-000000000001', 'faq', 'Co A Failed FAQ', true, 'failed');
+
+insert into knowledge_chunks (id, company_id, knowledge_source_id, content, chunk_index) values
+  ('85000001-0000-0000-0000-000000000003', '82000001-0000-0000-0000-000000000001', '84000001-0000-0000-0000-000000000003', 'Pending source website pricing info', 0),
+  ('85000001-0000-0000-0000-000000000004', '82000001-0000-0000-0000-000000000001', '84000001-0000-0000-0000-000000000004', 'Processing source website pricing info', 0),
+  ('85000001-0000-0000-0000-000000000005', '82000001-0000-0000-0000-000000000001', '84000001-0000-0000-0000-000000000005', 'Failed source website pricing info', 0);
+
+do $$
+declare
+  v_count integer;
+  v_title text;
+begin
+  set local role service_role;
+
   select count(*) into v_count
     from search_knowledge_chunks('82000001-0000-0000-0000-000000000001', 'website package pricing', 10);
-  perform test_assert('anon: RLS returns zero rows regardless of company_id, even though EXECUTE is still PUBLIC-granted', v_count = 0);
-end; $$;
+  perform test_assert(
+    'service_role: only the ready+enabled source is ever returned -- pending/processing/failed enabled sources are excluded',
+    v_count = 1
+  );
+
+  select title into v_title
+    from search_knowledge_chunks('82000001-0000-0000-0000-000000000001', 'website package pricing', 10);
+  perform test_assert('service_role: the one returned chunk is genuinely the ready source''s', v_title = 'Co A Pricing');
+end;
+$$;
 
 reset role;
 

@@ -19,6 +19,7 @@
     "@dravonix/database": "workspace:*",
     "@dravonix/email": "workspace:*",
     "@dravonix/handover": "workspace:*",
+    "@dravonix/knowledge": "workspace:*",
     "@dravonix/observability": "workspace:*",
     "@dravonix/storage": "workspace:*",
     "@dravonix/tenant": "workspace:*",

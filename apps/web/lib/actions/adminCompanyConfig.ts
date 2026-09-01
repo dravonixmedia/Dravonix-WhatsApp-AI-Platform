@@ -13,6 +13,9 @@
  */
 
 import { revalidatePath } from "next/cache";
+import { FileTooLargeError, prepareKnowledgeChunks } from "@dravonix/knowledge";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { logServerError } from "../serverLogging.js";
 import { getPlatformSession } from "../session.js";
 import { createServerSupabaseClient } from "../supabase/server.js";
 
@@ -94,6 +97,70 @@ export async function adminUpdateCompanyVoiceSettingsAction(
   revalidateAdminCompanyPaths(companyId);
 }
 
+/**
+ * Runs prepareKnowledgeChunks (clean -> chunk -> filter, real UTF-8 byte
+ * size enforced) and commits the result via the ingest_knowledge_source RPC
+ * -- the ONLY writer to knowledge_chunks (P2 knowledge ingestion). A
+ * FileTooLargeError is translated into the RPC's own caller-supplied-message
+ * path rather than a thrown action error, so an oversized submission still
+ * lands as a normal, visible ingestion_error on the source (never a 500) --
+ * the RPC's own last-known-good rule then decides whether that leaves the
+ * source 'ready' (an already-successful source, unaffected by a bad edit) or
+ * 'failed' (a source that has never successfully ingested). A genuine
+ * infrastructure failure (the RPC call itself throwing) is logged via
+ * logServerError with safe metadata only -- never the content/chunks -- and
+ * rethrown, since that is a real operational failure, not a validation
+ * outcome the RPC can represent.
+ */
+async function ingestKnowledgeSourceContent(
+  supabase: SupabaseClient,
+  companyId: string,
+  sourceId: string,
+  rawContent: string,
+  sourceType: string,
+): Promise<void> {
+  let chunks: string[];
+  let emptyError: string | undefined;
+  try {
+    chunks = prepareKnowledgeChunks(rawContent);
+  } catch (error) {
+    if (error instanceof FileTooLargeError) {
+      chunks = [];
+      emptyError = "Content exceeds the allowed size.";
+    } else {
+      throw error;
+    }
+  }
+
+  try {
+    const { error } = emptyError
+      ? await supabase.rpc("ingest_knowledge_source", {
+          p_company_id: companyId,
+          p_source_id: sourceId,
+          p_chunks: chunks,
+          p_empty_error: emptyError,
+        })
+      : await supabase.rpc("ingest_knowledge_source", {
+          p_company_id: companyId,
+          p_source_id: sourceId,
+          p_chunks: chunks,
+        });
+    if (error) throw error;
+  } catch (error) {
+    logServerError(
+      "Failed to ingest knowledge source content",
+      error,
+      { companyId },
+      {
+        operation: "ingestKnowledgeSourceContent",
+        knowledgeSourceId: sourceId,
+        sourceType,
+      },
+    );
+    throw error;
+  }
+}
+
 export async function adminAddKnowledgeSourceAction(
   companyId: string,
   formData: FormData,
@@ -103,13 +170,43 @@ export async function adminAddKnowledgeSourceAction(
   if (!title) throw new Error("Title is required");
   const sourceType = str(formData, "source_type") ?? "faq";
 
-  const { error } = await supabase.rpc("admin_add_knowledge_source", {
+  const { data, error } = await supabase.rpc("admin_add_knowledge_source", {
     p_company_id: companyId,
     p_source_type: sourceType,
     p_title: title,
-    p_content: str(formData, "content"),
   });
   if (error) throw error;
+  const sourceId = (data as Array<{ id: string }> | null)?.[0]?.id;
+  if (!sourceId) throw new Error("Failed to create knowledge source");
+
+  // No content submitted yet -- leave the freshly created source at its
+  // schema default ('pending') rather than forcing an immediate 'failed'
+  // over a deliberately empty first step; a real attempt (including a
+  // whitespace-only one) below always resolves to 'ready' or 'failed'.
+  const rawContent = String(formData.get("content") ?? "");
+  if (rawContent.trim().length > 0) {
+    await ingestKnowledgeSourceContent(supabase, companyId, sourceId, rawContent, sourceType);
+  }
+
+  revalidateAdminCompanyPaths(companyId);
+}
+
+export async function adminReingestKnowledgeSourceAction(
+  companyId: string,
+  formData: FormData,
+): Promise<void> {
+  const supabase = await requireSuperAdminClient();
+  const sourceId = str(formData, "source_id");
+  if (!sourceId) throw new Error("Source is required");
+  const sourceType = str(formData, "source_type") ?? "faq";
+
+  // Editing always attempts a real ingestion, even for empty/whitespace-only
+  // content -- ingest_knowledge_source's own last-known-good rule (migration
+  // 34) is what keeps an already-'ready' source's prior chunks fully intact
+  // and the source still 'ready' if this attempt is rejected.
+  const rawContent = String(formData.get("content") ?? "");
+  await ingestKnowledgeSourceContent(supabase, companyId, sourceId, rawContent, sourceType);
+
   revalidateAdminCompanyPaths(companyId);
 }
 

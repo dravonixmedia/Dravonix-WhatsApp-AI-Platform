@@ -107,3 +107,29 @@ export function chunkText(text: string, options: ChunkOptions = {}): string[] {
 
   return chunks;
 }
+
+/**
+ * Composes the validate -> clean -> chunk pipeline into the one call the
+ * ingestion write path actually needs (P2 knowledge ingestion). The size
+ * check uses the real UTF-8 byte length (`TextEncoder`), not JS string
+ * `.length` -- a JS string's `.length` counts UTF-16 code units, which
+ * undercounts multi-byte scripts (Malayalam, Arabic, emoji, etc.) relative
+ * to the actual bytes a database/storage layer would need to hold, so
+ * checking `.length` against a byte limit would let multilingual content
+ * silently bypass it.
+ *
+ * Throws FileTooLargeError (never silently truncates) when oversized;
+ * otherwise returns a deterministically-ordered array of non-empty chunk
+ * strings, which may legitimately be empty if the input was empty or
+ * entirely whitespace after cleaning -- the caller (the ingestion RPC) is
+ * responsible for treating an empty result as a failure, not this function.
+ * No embeddings, no chunk overlap, no network I/O -- this stays a pure,
+ * synchronous function.
+ */
+export function prepareKnowledgeChunks(raw: string, options: ChunkOptions = {}): string[] {
+  const byteLength = new TextEncoder().encode(raw).length;
+  validateFileSize(byteLength);
+
+  const cleaned = cleanText(raw);
+  return chunkText(cleaned, options).filter((chunk) => chunk.trim().length > 0);
+}
