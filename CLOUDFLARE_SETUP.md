@@ -148,24 +148,24 @@ other Worker in this repo — a staging deploy cannot collide with production.
 
 ### Required environment variables
 
-| Variable                                                                                         | Where it's set                                                                                                          | Browser-exposed? |
-| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`                                                                       | **Build-time only** — the CI job's own `env:` (see below)                                                               | Yes (by design)  |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY`                                                                  | **Build-time only** — the CI job's own `env:` (see below)                                                               | Yes (by design)  |
-| `SUPABASE_URL`                                                                                   | `wrangler secret put SUPABASE_URL --env <env>`                                                                          | No               |
-| `SUPABASE_ANON_KEY`                                                                              | `wrangler secret put SUPABASE_ANON_KEY --env <env>`                                                                     | No               |
-| `SUPABASE_SERVICE_ROLE_KEY`                                                                      | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`                                                             | **Never**        |
-| `META_ACCESS_TOKEN`                                                                              | `wrangler secret put META_ACCESS_TOKEN --env <env>`                                                                     | No               |
-| `META_GRAPH_API_VERSION` (optional, defaults to `v21.0`)                                         | `wrangler.jsonc` `vars` if overriding the default                                                                       | No               |
-| `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION` (Batch 3 Slice A -- not yet provisioned)              | `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION --env <env>` -- see "Embedded Signup token encryption key" below | No               |
-| `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` (Batch 3 Slice A -- not yet provisioned)                       | `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 --env <env>` -- see "Embedded Signup token encryption key" below  | **Never**        |
-| `APP_ENV`                                                                                        | `wrangler.jsonc` `vars` (already set: `staging` / `production`)                                                         | No               |
-| `APP_URL`                                                                                        | `wrangler.jsonc` `vars` (already set for staging; **production not yet set** -- see below)                              | No               |
-| `ZEPTOMAIL_API_TOKEN` (Zoho ZeptoMail Send Mail token -- required for invitation email delivery) | `wrangler secret put ZEPTOMAIL_API_TOKEN --env <env>`                                                                   | No               |
-| `EMAIL_API_KEY` (transitional alias for `ZEPTOMAIL_API_TOKEN` -- see below)                      | `wrangler secret put EMAIL_API_KEY --env <env>` -- **staging already has this secret set, holding the ZeptoMail token** | No               |
-| `EMAIL_FROM_ADDRESS` (must be on a domain verified with ZeptoMail)                               | `wrangler secret put EMAIL_FROM_ADDRESS --env <env>` -- `admin@dravonixmedia.com`                                       | No               |
-| `EMAIL_FROM_NAME` (optional, defaults to `DRAIVA by Dravonix Media`)                             | `wrangler.jsonc` `vars` if overriding the default                                                                       | No               |
-| `PLATFORM_*` (branding, optional)                                                                | `wrangler.jsonc` `vars` if overriding the default brand                                                                 | No               |
+| Variable                                                                                         | Where it's set                                                                                                                  | Browser-exposed? |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`                                                                       | **Build-time only** — the CI job's own `env:` (see below)                                                                       | Yes (by design)  |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY`                                                                  | **Build-time only** — the CI job's own `env:` (see below)                                                                       | Yes (by design)  |
+| `SUPABASE_URL`                                                                                   | `wrangler secret put SUPABASE_URL --env <env>`                                                                                  | No               |
+| `SUPABASE_ANON_KEY`                                                                              | `wrangler secret put SUPABASE_ANON_KEY --env <env>`                                                                             | No               |
+| `SUPABASE_SERVICE_ROLE_KEY`                                                                      | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`                                                                     | **Never**        |
+| `META_ACCESS_TOKEN`                                                                              | `wrangler secret put META_ACCESS_TOKEN --env <env>`                                                                             | No               |
+| `META_GRAPH_API_VERSION` (optional, defaults to `v21.0`)                                         | `wrangler.jsonc` `vars` if overriding the default                                                                               | No               |
+| `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION` (Batch 3 Slice A -- not yet provisioned)             | `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION --env <env>` -- see "Embedded Signup token encryption key" below | No               |
+| `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` (Batch 3 Slice A -- not yet provisioned)                      | `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 --env <env>` -- see "Embedded Signup token encryption key" below          | **Never**        |
+| `APP_ENV`                                                                                        | `wrangler.jsonc` `vars` (already set: `staging` / `production`)                                                                 | No               |
+| `APP_URL`                                                                                        | `wrangler.jsonc` `vars` (already set for staging; **production not yet set** -- see below)                                      | No               |
+| `ZEPTOMAIL_API_TOKEN` (Zoho ZeptoMail Send Mail token -- required for invitation email delivery) | `wrangler secret put ZEPTOMAIL_API_TOKEN --env <env>`                                                                           | No               |
+| `EMAIL_API_KEY` (transitional alias for `ZEPTOMAIL_API_TOKEN` -- see below)                      | `wrangler secret put EMAIL_API_KEY --env <env>` -- **staging already has this secret set, holding the ZeptoMail token**         | No               |
+| `EMAIL_FROM_ADDRESS` (must be on a domain verified with ZeptoMail)                               | `wrangler secret put EMAIL_FROM_ADDRESS --env <env>` -- `admin@dravonixmedia.com`                                               | No               |
+| `EMAIL_FROM_NAME` (optional, defaults to `DRAIVA by Dravonix Media`)                             | `wrangler.jsonc` `vars` if overriding the default                                                                               | No               |
+| `PLATFORM_*` (branding, optional)                                                                | `wrangler.jsonc` `vars` if overriding the default brand                                                                         | No               |
 
 **Embedded Signup token encryption key (Batch 3 Slice A).** `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1`
 encrypts `whatsapp_accounts.encrypted_access_token` at rest (`packages/core/src/tokenEncryption.ts`,
@@ -182,7 +182,7 @@ into the outbound send paths.
   ```
 - `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION` is a plain integer string (`1`
   for the first key ever provisioned) -- it tells the app which key version to
-  *encrypt new data with*; `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` is that version's
+  _encrypt new data with_; `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` is that version's
   actual key material.
 - **Staging and production must each get an independently generated key** --
   never reuse the same random value across environments, and never derive one

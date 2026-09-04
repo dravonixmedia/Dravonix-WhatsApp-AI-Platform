@@ -69,7 +69,11 @@ describe("encryptWhatsAppAccessToken / decryptWhatsAppAccessToken", () => {
     // exists to prevent: a ciphertext copied onto a different row's
     // whatsapp_account_id must not decrypt there.
     const key = randomKey();
-    const envelopeForAccountOne = await encryptWhatsAppAccessToken("account-one-token", ACCOUNT_ID, key);
+    const envelopeForAccountOne = await encryptWhatsAppAccessToken(
+      "account-one-token",
+      ACCOUNT_ID,
+      key,
+    );
     await expect(
       decryptWhatsAppAccessToken(envelopeForAccountOne, OTHER_ACCOUNT_ID, resolverFor(key)),
     ).rejects.toBeInstanceOf(CredentialDecryptionError);
@@ -81,7 +85,10 @@ describe("encryptWhatsAppAccessToken / decryptWhatsAppAccessToken", () => {
     // Flip the envelope's last base64url character of ct -- corrupts the
     // trailing byte, which is part of the GCM authentication tag Web Crypto
     // appends to its own AES-GCM output.
-    const tampered = { ...envelope, ct: envelope.ct.slice(0, -1) + (envelope.ct.at(-1) === "A" ? "B" : "A") };
+    const tampered = {
+      ...envelope,
+      ct: envelope.ct.slice(0, -1) + (envelope.ct.at(-1) === "A" ? "B" : "A"),
+    };
     await expect(
       decryptWhatsAppAccessToken(JSON.stringify(tampered), ACCOUNT_ID, resolverFor(key)),
     ).rejects.toBeInstanceOf(CredentialDecryptionError);
@@ -90,7 +97,10 @@ describe("encryptWhatsAppAccessToken / decryptWhatsAppAccessToken", () => {
   it("fails to decrypt a tampered IV", async () => {
     const key = randomKey();
     const envelope = JSON.parse(await encryptWhatsAppAccessToken("token", ACCOUNT_ID, key));
-    const tampered = { ...envelope, iv: envelope.iv.slice(0, -1) + (envelope.iv.at(-1) === "A" ? "B" : "A") };
+    const tampered = {
+      ...envelope,
+      iv: envelope.iv.slice(0, -1) + (envelope.iv.at(-1) === "A" ? "B" : "A"),
+    };
     await expect(
       decryptWhatsAppAccessToken(JSON.stringify(tampered), ACCOUNT_ID, resolverFor(key)),
     ).rejects.toBeInstanceOf(CredentialDecryptionError);
@@ -103,7 +113,12 @@ describe("encryptWhatsAppAccessToken / decryptWhatsAppAccessToken", () => {
   });
 
   it("fails to decrypt malformed base64url in iv/ct", async () => {
-    const envelope = JSON.stringify({ v: 1, kv: 1, iv: "not-valid-base64url!!!", ct: "also-not-valid!!!" });
+    const envelope = JSON.stringify({
+      v: 1,
+      kv: 1,
+      iv: "not-valid-base64url!!!",
+      ct: "also-not-valid!!!",
+    });
     await expect(
       decryptWhatsAppAccessToken(envelope, ACCOUNT_ID, () => "irrelevant"),
     ).rejects.toBeInstanceOf(CredentialDecryptionError);
@@ -140,9 +155,9 @@ describe("encryptWhatsAppAccessToken / decryptWhatsAppAccessToken", () => {
 
   it("rejects an invalid key length at encrypt time", async () => {
     const shortKey: WhatsAppTokenEncryptionKey = { version: 1, keyBase64: btoa("too-short") };
-    await expect(
-      encryptWhatsAppAccessToken("token", ACCOUNT_ID, shortKey),
-    ).rejects.toBeInstanceOf(CredentialEncryptionError);
+    await expect(encryptWhatsAppAccessToken("token", ACCOUNT_ID, shortKey)).rejects.toBeInstanceOf(
+      CredentialEncryptionError,
+    );
   });
 
   it("rejects an invalid key length at decrypt time (via the resolver)", async () => {
