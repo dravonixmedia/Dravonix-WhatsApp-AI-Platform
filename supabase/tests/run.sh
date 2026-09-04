@@ -135,6 +135,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_conn
 echo "Running Meta/WhatsApp Batch 2 service-window/template foundation (migration 36) RLS/RPC regression assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_service_window.sql"
 
+echo "Running Meta/WhatsApp Batch 3 Slice A Embedded Signup credential/state-machine (migration 37) RLS/RPC regression assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_embedded_signup.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
