@@ -13,8 +13,9 @@
  */
 
 import { revalidatePath } from "next/cache";
-import { FileTooLargeError, prepareKnowledgeChunks } from "@dravonix/knowledge";
+import { FILE_TOO_LARGE_CODE, prepareKnowledgeChunks } from "@dravonix/knowledge";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isDomainError } from "../domainError.js";
 import { logServerError } from "../serverLogging.js";
 import { getPlatformSession } from "../session.js";
 import { createServerSupabaseClient } from "../supabase/server.js";
@@ -124,7 +125,7 @@ async function ingestKnowledgeSourceContent(
   try {
     chunks = prepareKnowledgeChunks(rawContent);
   } catch (error) {
-    if (error instanceof FileTooLargeError) {
+    if (isDomainError(error, FILE_TOO_LARGE_CODE)) {
       chunks = [];
       emptyError = "Content exceeds the allowed size.";
     } else {

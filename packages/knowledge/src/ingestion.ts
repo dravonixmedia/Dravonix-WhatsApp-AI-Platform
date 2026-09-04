@@ -16,7 +16,19 @@ export class UnsupportedFileTypeError extends Error {
   }
 }
 
+/**
+ * Stable, machine-readable identifier for FileTooLargeError -- exported
+ * separately (not just as the instance's own `code` field) so a caller
+ * across a Next.js/OpenNext Server Action boundary can identify it by
+ * `error.code` equality rather than `instanceof`, which is not reliable
+ * when that boundary's bundler compiles this class's source more than once
+ * (see apps/web/lib/domainError.ts for the full explanation).
+ */
+export const FILE_TOO_LARGE_CODE = "knowledge_file_too_large";
+
 export class FileTooLargeError extends Error {
+  readonly code = FILE_TOO_LARGE_CODE;
+
   constructor(sizeBytes: number, maxBytes: number) {
     super(`File is ${sizeBytes} bytes, exceeding the ${maxBytes} byte limit`);
     this.name = "FileTooLargeError";

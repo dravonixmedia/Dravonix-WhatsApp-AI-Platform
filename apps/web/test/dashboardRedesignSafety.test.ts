@@ -81,8 +81,15 @@ describe("dashboard UI redesign: tenant scoping preserved", () => {
   });
 
   it("the dashboard layout still redirects to the no-company-access page for NoCompanyAccessError and a null session", () => {
+    // Updated for the Batch 2 cross-bundle hardening pass: the layout now
+    // identifies NoCompanyAccessError by its stable NO_COMPANY_ACCESS_CODE
+    // rather than `instanceof`, since a Next.js/OpenNext rendering boundary
+    // can bundle this class's source more than once (confirmed directly
+    // against this app's own built OpenNext output) -- but the behavior
+    // this test guards (redirecting to the no-company-access page) is
+    // unchanged.
     const source = readSource("app/dashboard/layout.tsx");
-    expect(source).toContain("NoCompanyAccessError");
+    expect(source).toContain("NO_COMPANY_ACCESS_CODE");
     expect(source).toContain("<NoCompanyAccessPage />");
   });
 

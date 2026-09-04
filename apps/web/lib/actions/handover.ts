@@ -23,6 +23,7 @@ import {
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
+import { isDomainError } from "../domainError.js";
 import { SupabaseEntitlementRepository } from "../repositories/supabaseEntitlementRepository.js";
 import { getDashboardSession } from "../session.js";
 import { createServerOnlyServiceRoleClient } from "../supabase/serviceRole.js";
@@ -244,32 +245,6 @@ async function hasApprovedServiceWindowFallbackTemplate(
     .eq("id", templateId)
     .maybeSingle();
   return template?.status === "approved";
-}
-
-/**
- * Identifies one of our own domain errors by its stable `.code` string
- * rather than `instanceof`. Next.js/OpenNext can bundle a Server Action's
- * dependency graph -- this file's own `@dravonix/handover` import included
- * -- more than once (once for the ordinary RSC/webpack build, again inside
- * OpenNext's esbuild-bundled Cloudflare Worker entry point), so a
- * WhatsAppServiceWindowClosedError thrown by one bundled copy of
- * sendHumanReply is not guaranteed to satisfy `instanceof
- * WhatsAppServiceWindowClosedError` against the class reference this file's
- * OWN bundled copy holds, even though both come from the exact same source
- * file -- confirmed present in the deployed OpenNext output for this app,
- * where the compiled error classes appear as two independent definitions.
- * `instanceof Error` remains safe (a language intrinsic, not a
- * workspace-package class, so it is shared within one JS realm); `.code` is
- * a plain data property set identically by every bundled copy, so an exact
- * string match on it is unaffected by which copy constructed the object.
- */
-function isDomainError(error: unknown, code: string): error is Error & { code: string } {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof (error as { code?: unknown }).code === "string" &&
-    (error as { code: string }).code === code
-  );
 }
 
 export interface SendHumanReplyActionResult {
