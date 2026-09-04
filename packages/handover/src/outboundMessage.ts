@@ -4,7 +4,10 @@ import {
   WhatsAppProviderError,
   type WhatsAppProvider,
 } from "@dravonix/whatsapp";
-import { WhatsAppServiceWindowClosedError } from "./errors.js";
+import {
+  NoServiceWindowFallbackTemplateError,
+  WhatsAppServiceWindowClosedError,
+} from "./errors.js";
 import type { HandoverRepository, HandoverWorkerRepository } from "./repository.js";
 import type { MessageChannelType, OutboundDeliveryStatus, ServiceWindowState } from "./types.js";
 
@@ -156,18 +159,29 @@ export interface SendServiceWindowTemplateInput {
  * choose an arbitrary template. Reuses finalizeHumanOutboundMessage
  * (migration 12, unchanged) exactly like any other human-authored outbound
  * message. If no fallback is configured/approved, the RPC itself raises
- * `no_fallback_template_configured` -- propagated unchanged so the caller
- * can show a clear, specific message rather than a silent no-op.
+ * `no_fallback_template_configured` -- translated here into
+ * NoServiceWindowFallbackTemplateError (a typed, safe-to-display domain
+ * error) rather than left as the RPC's bare error string, so the caller can
+ * show a clear, specific message rather than a silent no-op or a leaked
+ * internal exception.
  */
 export async function sendServiceWindowReengagementTemplate(
   repo: HandoverRepository,
   whatsappProvider: WhatsAppProvider,
   input: SendServiceWindowTemplateInput,
 ): Promise<SendOutboundResult> {
-  const reservation = await repo.reserveHumanTemplateOutboundMessage(
-    input.conversationId,
-    input.idempotencyKey,
-  );
+  let reservation;
+  try {
+    reservation = await repo.reserveHumanTemplateOutboundMessage(
+      input.conversationId,
+      input.idempotencyKey,
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message === "no_fallback_template_configured") {
+      throw new NoServiceWindowFallbackTemplateError(input.conversationId);
+    }
+    throw error;
+  }
   if (!reservation.claimed) {
     return {
       messageId: reservation.id,
