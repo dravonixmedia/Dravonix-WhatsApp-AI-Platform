@@ -15,7 +15,10 @@ import {
   sendServiceWindowFallback,
   sendServiceWindowReengagementTemplate,
 } from "../src/outboundMessage.js";
-import { WhatsAppServiceWindowClosedError } from "../src/errors.js";
+import {
+  NoServiceWindowFallbackTemplateError,
+  WhatsAppServiceWindowClosedError,
+} from "../src/errors.js";
 import type { HandoverWorkerRepository } from "../src/repository.js";
 import type {
   MessageChannelType,
@@ -500,7 +503,13 @@ describe("sendServiceWindowReengagementTemplate (human-initiated, item 18/19 cov
     ]);
   });
 
-  it("propagates no_fallback_template_configured rather than silently sending nothing (item 17)", async () => {
+  it("throws a typed NoServiceWindowFallbackTemplateError rather than the RPC's bare error string or silently sending nothing (item 17)", async () => {
+    // Corrected during Batch 2 staging verification: the bare
+    // "no_fallback_template_configured" RPC string used to propagate
+    // unchanged, which apps/web's Server Action then let escape as an
+    // unhandled exception -- redacted by Next.js in production into a
+    // generic, undiagnosable digest error. It is now translated into this
+    // typed, safe-to-display domain error instead.
     const repo = makeRepoWithTemplate(null);
     const whatsappProvider = new ControllableWhatsAppProvider();
     await expect(
@@ -510,6 +519,7 @@ describe("sendServiceWindowReengagementTemplate (human-initiated, item 18/19 cov
         phoneNumberId: "phone-1",
         toWaId: "15551234567",
       }),
-    ).rejects.toThrow("no_fallback_template_configured");
+    ).rejects.toThrow(NoServiceWindowFallbackTemplateError);
+    expect(whatsappProvider.sentTemplate).toHaveLength(0);
   });
 });

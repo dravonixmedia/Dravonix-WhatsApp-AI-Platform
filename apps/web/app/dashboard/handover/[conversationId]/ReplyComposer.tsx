@@ -7,18 +7,6 @@ import {
 } from "../../../../lib/actions/handover.js";
 
 /**
- * Meta/WhatsApp Batch 2, Phase 8: the exact copy WhatsAppServiceWindowClosedError
- * throws (packages/handover/src/errors.ts) when the 24-hour free-form
- * service window has closed. Matched verbatim against OUR OWN
- * first-party error string (never Meta's) purely to decide whether to
- * offer the "Send re-engagement template" fallback action -- Server
- * Actions only cross the client boundary as a plain Error, losing the
- * original WhatsAppServiceWindowClosedError class identity.
- */
-const SERVICE_WINDOW_CLOSED_MESSAGE =
-  "The WhatsApp customer service window has expired. An approved template is required before free-form replies can resume.";
-
-/**
  * Client component only for the client-generated idempotency key (Human
  * Handover Inbox final plan section 11): generated once per compose action,
  * held in component state, rotated only after a confirmed send -- a retry of
@@ -50,11 +38,12 @@ export function ReplyComposer({
   const [isPending, startTransition] = useTransition();
   const [isSendingTemplate, startTemplateTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [windowClosed, setWindowClosed] = useState(false);
+  const [canSendReengagementTemplate, setCanSendReengagementTemplate] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [templateSent, setTemplateSent] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const isControlled = value !== undefined && onChange !== undefined;
-  const windowClosed = error === SERVICE_WINDOW_CLOSED_MESSAGE;
 
   return (
     <form
@@ -63,9 +52,16 @@ export function ReplyComposer({
         const body = String(formData.get("body") ?? "").trim();
         if (!body) return;
         setError(null);
+        setWindowClosed(false);
         startTransition(async () => {
           try {
-            await sendHumanReplyAction(conversationId, body, idempotencyKey);
+            const result = await sendHumanReplyAction(conversationId, body, idempotencyKey);
+            if (!result.success) {
+              setError(result.error ?? "Failed to send reply");
+              setWindowClosed(result.windowClosed === true);
+              setCanSendReengagementTemplate(result.canSendReengagementTemplate === true);
+              return;
+            }
             setIdempotencyKey(crypto.randomUUID());
             formRef.current?.reset();
             onChange?.("");
@@ -103,7 +99,7 @@ export function ReplyComposer({
           <p className="dvx-muted" style={{ fontSize: "0.78rem", marginTop: "0.35rem" }}>
             Re-engagement template sent. The customer's next reply will reopen free-form replies.
           </p>
-        ) : (
+        ) : canSendReengagementTemplate ? (
           <div style={{ marginTop: "0.35rem" }}>
             <button
               className="dvx-button dvx-button--secondary"
@@ -113,7 +109,14 @@ export function ReplyComposer({
                 setTemplateError(null);
                 startTemplateTransition(async () => {
                   try {
-                    await sendServiceWindowTemplateAction(conversationId, templateIdempotencyKey);
+                    const result = await sendServiceWindowTemplateAction(
+                      conversationId,
+                      templateIdempotencyKey,
+                    );
+                    if (!result.success) {
+                      setTemplateError(result.error ?? "Failed to send re-engagement template");
+                      return;
+                    }
                     setTemplateIdempotencyKey(crypto.randomUUID());
                     setTemplateSent(true);
                   } catch (err) {
@@ -132,6 +135,11 @@ export function ReplyComposer({
               </p>
             ) : null}
           </div>
+        ) : (
+          <p className="dvx-muted" style={{ fontSize: "0.78rem", marginTop: "0.35rem" }}>
+            No approved re-engagement template is configured for this WhatsApp number yet. An
+            administrator must configure one before free-form replies can resume.
+          </p>
         )
       ) : null}
     </form>

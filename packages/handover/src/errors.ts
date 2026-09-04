@@ -97,6 +97,24 @@ export class WhatsAppServiceWindowClosedError extends AppError {
 }
 
 /**
+ * Thrown by sendServiceWindowReengagementTemplate when
+ * reserve_human_template_outbound_message (migration 36) raises
+ * `no_fallback_template_configured` -- the conversation's WhatsApp Business
+ * Account has no currently-approved service-window fallback template set.
+ * Typed here (rather than left as the RPC's bare error string) so callers
+ * can safely show this exact message to the user without risking any other
+ * unexpected error being mistaken for it.
+ */
+export class NoServiceWindowFallbackTemplateError extends AppError {
+  constructor(public readonly conversationId: string) {
+    super(
+      "no_fallback_template_configured",
+      "No approved re-engagement template is configured for this WhatsApp number yet. An administrator must configure one before it can be sent.",
+    );
+  }
+}
+
+/**
  * Thrown by reconcileAiOutboundMessage (the trusted, server-only AI-message
  * reconciliation path) when the target message was not sent by the AI --
  * human-agent messages must go through the ordinary authenticated

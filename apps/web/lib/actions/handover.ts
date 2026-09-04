@@ -15,7 +15,9 @@ import {
   sendHumanReply,
   sendServiceWindowReengagementTemplate,
   startHumanConversation,
+  NoServiceWindowFallbackTemplateError,
   SupabaseHandoverRepository,
+  WhatsAppServiceWindowClosedError,
   type ConversationThreadMessage,
 } from "@dravonix/handover";
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
@@ -195,21 +197,89 @@ async function resolveConversationSendTarget(
 }
 
 /**
+ * Reads (service-role, bypassing RLS -- same trust boundary as
+ * resolveConversationSendTarget above) whether this conversation's WhatsApp
+ * Business Account currently has an approved service-window fallback
+ * template configured. Deliberately does NOT rely on the caller's own
+ * whatsapp.view grant: an agent only needs conversations.reply to send the
+ * re-engagement template (reserve_human_template_outbound_message,
+ * migration 36, is SECURITY DEFINER), so checking via the authenticated/RLS
+ * client here could wrongly hide the button from an agent who can use it.
+ * Sequential .from() calls, not an embedded select, for the same reason as
+ * SupabaseHandoverWorkerRepository.getServiceWindowState: whatsapp_templates
+ * has two distinct FK relationships to whatsapp_accounts, which a single
+ * embed cannot disambiguate.
+ */
+async function hasApprovedServiceWindowFallbackTemplate(
+  serviceRoleClient: SupabaseClient,
+  conversationId: string,
+): Promise<boolean> {
+  const { data: conversation } = await serviceRoleClient
+    .from("conversations")
+    .select("whatsapp_phone_number_id")
+    .eq("id", conversationId)
+    .maybeSingle();
+  const phoneNumberId = conversation?.whatsapp_phone_number_id as string | null | undefined;
+  if (!phoneNumberId) return false;
+
+  const { data: phoneNumber } = await serviceRoleClient
+    .from("whatsapp_phone_numbers")
+    .select("whatsapp_account_id")
+    .eq("id", phoneNumberId)
+    .maybeSingle();
+  const whatsappAccountId = phoneNumber?.whatsapp_account_id as string | null | undefined;
+  if (!whatsappAccountId) return false;
+
+  const { data: account } = await serviceRoleClient
+    .from("whatsapp_accounts")
+    .select("service_window_fallback_template_id")
+    .eq("id", whatsappAccountId)
+    .maybeSingle();
+  const templateId = account?.service_window_fallback_template_id as string | null | undefined;
+  if (!templateId) return false;
+
+  const { data: template } = await serviceRoleClient
+    .from("whatsapp_templates")
+    .select("status")
+    .eq("id", templateId)
+    .maybeSingle();
+  return template?.status === "approved";
+}
+
+export interface SendHumanReplyActionResult {
+  success: boolean;
+  /** Safe, user-facing message -- set whenever success is false. */
+  error?: string;
+  /** True specifically when the send was blocked by a closed service window (never a generic failure). */
+  windowClosed?: boolean;
+  /** Only meaningful when windowClosed is true. */
+  canSendReengagementTemplate?: boolean;
+}
+
+/**
  * Sends a human reply (Human Handover Inbox final plan section 11): looks up
  * the conversation's phone_number_id/contact wa_id, then delegates to
  * @dravonix/handover's sendHumanReply, which checks the WhatsApp 24-hour
  * customer service window (Meta/WhatsApp Batch 2), reserves the outbound
  * message, checks whatsapp_send entitlement, calls the real WhatsApp
  * provider, and finalizes/classifies the result -- all before this action
- * returns. Outside the window, sendHumanReply throws
- * WhatsAppServiceWindowClosedError before anything is reserved/sent; its
- * message is the exact copy shown to the agent.
+ * returns.
+ *
+ * Outside the window, sendHumanReply throws WhatsAppServiceWindowClosedError
+ * before anything is reserved/sent -- this is an expected, normal business
+ * outcome (a defect found during Batch 2 staging verification let it
+ * escape as a thrown Server Action exception, which Next.js's production
+ * build redacts into a generic, undiagnosable digest error). It is caught
+ * here specifically and returned as a typed, serializable result instead of
+ * being thrown, so the UI can render the exact intended copy. Any other
+ * error is rethrown unchanged -- deliberately not "fixed" here, since only
+ * this one expected domain outcome is safe to turn into a normal result.
  */
 export async function sendHumanReplyAction(
   conversationId: string,
   body: string,
   clientIdempotencyKey: string,
-): Promise<void> {
+): Promise<SendHumanReplyActionResult> {
   const session = await getDashboardSession();
   if (!session) throw new Error("Not authenticated");
 
@@ -231,24 +301,49 @@ export async function sendHumanReplyAction(
     throw new Error("META_ACCESS_TOKEN is not configured");
   }
 
-  await sendHumanReply(
-    repo,
-    new GraphApiWhatsAppProvider({
-      accessToken: env.META_ACCESS_TOKEN,
-      graphApiVersion: env.META_GRAPH_API_VERSION,
-    }),
-    new SupabaseEntitlementRepository(supabase),
-    {
-      companyId: session.activeCompanyId,
-      conversationId,
-      body,
-      idempotencyKey: clientIdempotencyKey,
-      phoneNumberId,
-      toWaId,
-    },
-  );
+  try {
+    await sendHumanReply(
+      repo,
+      new GraphApiWhatsAppProvider({
+        accessToken: env.META_ACCESS_TOKEN,
+        graphApiVersion: env.META_GRAPH_API_VERSION,
+      }),
+      new SupabaseEntitlementRepository(supabase),
+      {
+        companyId: session.activeCompanyId,
+        conversationId,
+        body,
+        idempotencyKey: clientIdempotencyKey,
+        phoneNumberId,
+        toWaId,
+      },
+    );
+  } catch (error) {
+    if (error instanceof WhatsAppServiceWindowClosedError) {
+      const canSendReengagementTemplate = await hasApprovedServiceWindowFallbackTemplate(
+        serviceRoleClient,
+        conversationId,
+      );
+      return {
+        success: false,
+        error: error.message,
+        windowClosed: true,
+        canSendReengagementTemplate,
+      };
+    }
+    throw error;
+  }
 
   revalidateHandoverPaths(conversationId);
+  return { success: true };
+}
+
+export interface SendServiceWindowTemplateActionResult {
+  success: boolean;
+  /** Safe, user-facing message -- set whenever success is false. */
+  error?: string;
+  /** True specifically when no approved fallback template is configured (never a generic failure). */
+  noFallbackConfigured?: boolean;
 }
 
 /**
@@ -257,14 +352,18 @@ export async function sendHumanReplyAction(
  * once the free-form service window has closed. Never accepts a template
  * id/name from the browser -- @dravonix/handover's
  * sendServiceWindowReengagementTemplate resolves and validates the ONE
- * account-configured, currently-approved fallback template itself. Throws
- * (surfacing "no_fallback_template_configured" verbatim) if none is
- * configured/approved for this conversation's WhatsApp Business Account.
+ * account-configured, currently-approved fallback template itself.
+ *
+ * NoServiceWindowFallbackTemplateError (no approved fallback configured) is
+ * an expected, normal business outcome -- caught here and returned as a
+ * typed result, for the same reason and by the same pattern as
+ * sendHumanReplyAction's WhatsAppServiceWindowClosedError handling above.
+ * Any other error is rethrown unchanged.
  */
 export async function sendServiceWindowTemplateAction(
   conversationId: string,
   clientIdempotencyKey: string,
-): Promise<void> {
+): Promise<SendServiceWindowTemplateActionResult> {
   const session = await getDashboardSession();
   if (!session) throw new Error("Not authenticated");
 
@@ -286,14 +385,22 @@ export async function sendServiceWindowTemplateAction(
     throw new Error("META_ACCESS_TOKEN is not configured");
   }
 
-  await sendServiceWindowReengagementTemplate(
-    repo,
-    new GraphApiWhatsAppProvider({
-      accessToken: env.META_ACCESS_TOKEN,
-      graphApiVersion: env.META_GRAPH_API_VERSION,
-    }),
-    { conversationId, idempotencyKey: clientIdempotencyKey, phoneNumberId, toWaId },
-  );
+  try {
+    await sendServiceWindowReengagementTemplate(
+      repo,
+      new GraphApiWhatsAppProvider({
+        accessToken: env.META_ACCESS_TOKEN,
+        graphApiVersion: env.META_GRAPH_API_VERSION,
+      }),
+      { conversationId, idempotencyKey: clientIdempotencyKey, phoneNumberId, toWaId },
+    );
+  } catch (error) {
+    if (error instanceof NoServiceWindowFallbackTemplateError) {
+      return { success: false, error: error.message, noFallbackConfigured: true };
+    }
+    throw error;
+  }
 
   revalidateHandoverPaths(conversationId);
+  return { success: true };
 }
