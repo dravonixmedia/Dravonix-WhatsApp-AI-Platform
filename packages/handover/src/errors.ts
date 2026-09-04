@@ -80,6 +80,27 @@ export class HandoverInvalidSourceTypeError extends AppError {
 }
 
 /**
+ * Stable, machine-readable identifiers for the two service-window domain
+ * outcomes below. Exported as plain string constants -- not just as each
+ * error class's private `code` field -- because a caller across a Server
+ * Action boundary (apps/web/lib/actions/handover.ts) must identify these by
+ * `error.code` equality rather than `instanceof`: Next.js/OpenNext can bundle
+ * a Server Action's dependency graph (this package included) more than
+ * once -- once as part of the ordinary RSC/webpack build, once again in
+ * OpenNext's own esbuild-bundled Cloudflare Worker entry -- so a class
+ * constructed by one bundled copy is not guaranteed to satisfy `instanceof`
+ * against the class reference from a different bundled copy, even though
+ * both originate from this exact same source file. A plain string equality
+ * check on `.code` (an ordinary data property, not a class identity) is
+ * unaffected by which copy constructed the object. `instanceof Error` stays
+ * safe to use on its own, since `Error` is a language intrinsic shared
+ * across bundles within one JS realm -- only `instanceof` against a
+ * workspace-package *subclass* crossing that boundary is unreliable.
+ */
+export const WHATSAPP_SERVICE_WINDOW_CLOSED_CODE = "whatsapp_service_window_closed";
+export const NO_SERVICE_WINDOW_FALLBACK_TEMPLATE_CODE = "no_fallback_template_configured";
+
+/**
  * Meta/WhatsApp Batch 2, Phase 8: thrown by sendHumanReply when the WhatsApp
  * 24-hour customer service window has closed for this conversation. A human
  * agent's ordinary free-form reply is never sent, and never falsely marked
@@ -90,7 +111,7 @@ export class HandoverInvalidSourceTypeError extends AppError {
 export class WhatsAppServiceWindowClosedError extends AppError {
   constructor(public readonly conversationId: string) {
     super(
-      "whatsapp_service_window_closed",
+      WHATSAPP_SERVICE_WINDOW_CLOSED_CODE,
       "The WhatsApp customer service window has expired. An approved template is required before free-form replies can resume.",
     );
   }
@@ -108,7 +129,7 @@ export class WhatsAppServiceWindowClosedError extends AppError {
 export class NoServiceWindowFallbackTemplateError extends AppError {
   constructor(public readonly conversationId: string) {
     super(
-      "no_fallback_template_configured",
+      NO_SERVICE_WINDOW_FALLBACK_TEMPLATE_CODE,
       "No approved re-engagement template is configured for this WhatsApp number yet. An administrator must configure one before it can be sent.",
     );
   }
