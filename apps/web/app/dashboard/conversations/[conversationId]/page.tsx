@@ -226,7 +226,10 @@ export default async function ConversationDetailPage({
               }}
             >
               {conversation.state === "human_active" && capabilities.canReplyToConversations ? (
-                <ConversationComposerWithAssistant conversationId={conversationId} />
+                <ConversationComposerWithAssistant
+                  key={conversationId}
+                  conversationId={conversationId}
+                />
               ) : conversation.state === "human_active" ? (
                 <p className="dvx-muted" style={{ fontSize: "0.85rem", margin: 0 }}>
                   Your role does not have permission to send replies.
