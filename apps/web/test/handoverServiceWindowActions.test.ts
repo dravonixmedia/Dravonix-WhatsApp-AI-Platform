@@ -23,6 +23,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * return a typed, serializable result instead -- everything else still
  * rethrows unchanged, so this fix never widens what counts as a "safe"
  * outcome.
+ *
+ * SECOND ROUND (real staging retest of the first fix still failed): the
+ * corrected code passed every test above yet the redirect/generic error
+ * still appeared live. Root cause, confirmed directly against the deployed
+ * OpenNext/Cloudflare build artifact (apps/web/.open-next/server-functions/
+ * default/apps/web/handler.mjs): packages/handover/src/errors.ts's classes
+ * are bundled TWICE in the single shipped worker -- once inlined directly
+ * into handler.mjs's own esbuild-bundled scope, once again inside a nested
+ * Next.js webpack chunk that OpenNext also embeds -- because Next.js
+ * compiles a Server Action's dependency graph once for the ordinary
+ * RSC/webpack build and again for OpenNext's standalone action-invocation
+ * entry point. `error instanceof WhatsAppServiceWindowClosedError` is not
+ * guaranteed to hold between an error thrown by one bundled copy and a
+ * class reference held by the other, even though both originate from this
+ * exact source file -- Vitest can never catch this, since it never
+ * duplicates a module's evaluation the way separate bundler passes do. The
+ * fix replaces `instanceof` against the workspace-package subclass with an
+ * exact `.code` string match (`isDomainError`, `WHATSAPP_SERVICE_WINDOW_
+ * CLOSED_CODE` / `NO_SERVICE_WINDOW_FALLBACK_TEMPLATE_CODE` exported
+ * alongside the error classes) -- a plain data property set identically by
+ * every bundled copy, so it is unaffected by which copy constructed the
+ * thrown object. `instanceof Error` on its own remains safe, since `Error`
+ * is a language intrinsic shared within one JS realm regardless of bundling.
+ * The tests below reproduce the exact failure mode directly: an error
+ * object built from an independently-defined "duplicate bundle" class,
+ * structurally identical but never `instanceof` the imported one, must
+ * still be recognized.
  */
 
 const getDashboardSession = vi.fn();
@@ -256,6 +283,101 @@ describe("sendServiceWindowTemplateAction", () => {
     >;
     expect(Object.keys(input).sort()).toEqual(
       ["conversationId", "idempotencyKey", "phoneNumberId", "toWaId"].sort(),
+    );
+  });
+});
+
+describe("cross-bundle domain-error identification (production Server Action boundary, item 13/14)", () => {
+  /**
+   * Stands in for "the same error class, but constructed by a different
+   * bundled copy of packages/handover/src/errors.ts" -- exactly what the
+   * deployed OpenNext build actually contains (confirmed by inspecting
+   * apps/web/.open-next/server-functions/default/apps/web/handler.mjs,
+   * which bundles WhatsAppServiceWindowClosedError/
+   * NoServiceWindowFallbackTemplateError as two independent class
+   * definitions). Deliberately NOT imported from @dravonix/handover, and
+   * deliberately not extending its real classes, so it can never satisfy
+   * `instanceof` against them -- only structural equality (`.code`) can
+   * recognize it, which is exactly the property the fix relies on.
+   */
+  class DuplicateBundleAppError extends Error {
+    constructor(
+      public readonly code: string,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+
+  it("control: the duplicate-bundle stand-in is never `instanceof` the real error classes -- this is the exact mechanism that broke the first fix", async () => {
+    const { WhatsAppServiceWindowClosedError, NoServiceWindowFallbackTemplateError } =
+      await import("@dravonix/handover");
+    const duplicateWindowClosed = new DuplicateBundleAppError(
+      "whatsapp_service_window_closed",
+      "The WhatsApp customer service window has expired. An approved template is required before free-form replies can resume.",
+    );
+    const duplicateNoFallback = new DuplicateBundleAppError(
+      "no_fallback_template_configured",
+      "No approved re-engagement template is configured for this WhatsApp number yet. An administrator must configure one before it can be sent.",
+    );
+    expect(duplicateWindowClosed).not.toBeInstanceOf(WhatsAppServiceWindowClosedError);
+    expect(duplicateNoFallback).not.toBeInstanceOf(NoServiceWindowFallbackTemplateError);
+    // ...but both are still ordinary Errors, and both still carry the stable code.
+    expect(duplicateWindowClosed).toBeInstanceOf(Error);
+    expect(duplicateWindowClosed.code).toBe("whatsapp_service_window_closed");
+  });
+
+  it("sendHumanReplyAction still recognizes a closed-window error from a structurally-identical but non-instanceof duplicate class", async () => {
+    sendHumanReply.mockRejectedValue(
+      new DuplicateBundleAppError(
+        "whatsapp_service_window_closed",
+        "The WhatsApp customer service window has expired. An approved template is required before free-form replies can resume.",
+      ),
+    );
+
+    const result = await sendHumanReplyAction("conv-1", "hi", "key-1");
+
+    expect(result).toEqual({
+      success: false,
+      error:
+        "The WhatsApp customer service window has expired. An approved template is required before free-form replies can resume.",
+      windowClosed: true,
+      canSendReengagementTemplate: true,
+    });
+  });
+
+  it("sendServiceWindowTemplateAction still recognizes a no-fallback error from a structurally-identical but non-instanceof duplicate class", async () => {
+    sendServiceWindowReengagementTemplate.mockRejectedValue(
+      new DuplicateBundleAppError(
+        "no_fallback_template_configured",
+        "No approved re-engagement template is configured for this WhatsApp number yet. An administrator must configure one before it can be sent.",
+      ),
+    );
+
+    const result = await sendServiceWindowTemplateAction("conv-1", "key-1");
+
+    expect(result).toEqual({
+      success: false,
+      error:
+        "No approved re-engagement template is configured for this WhatsApp number yet. An administrator must configure one before it can be sent.",
+      noFallbackConfigured: true,
+    });
+  });
+
+  it("a duplicate-class error with an unrelated code is still rethrown unchanged, never misclassified as service-window closure (item 6 of Phase F)", async () => {
+    const unrelated = new DuplicateBundleAppError("permission_denied", "permission_denied");
+    sendHumanReply.mockRejectedValue(unrelated);
+    await expect(sendHumanReplyAction("conv-1", "hi", "key-1")).rejects.toBe(unrelated);
+  });
+
+  it("apps/web/lib/actions/handover.ts no longer identifies these domain errors via instanceof against the workspace-package classes", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const actionsSource = readFileSync(join(here, "..", "lib/actions/handover.ts"), "utf8");
+    expect(actionsSource).not.toMatch(/instanceof WhatsAppServiceWindowClosedError/);
+    expect(actionsSource).not.toMatch(/instanceof NoServiceWindowFallbackTemplateError/);
+    expect(actionsSource).toMatch(/isDomainError\(error, WHATSAPP_SERVICE_WINDOW_CLOSED_CODE\)/);
+    expect(actionsSource).toMatch(
+      /isDomainError\(error, NO_SERVICE_WINDOW_FALLBACK_TEMPLATE_CODE\)/,
     );
   });
 });

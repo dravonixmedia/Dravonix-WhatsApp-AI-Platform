@@ -41,8 +41,21 @@ export interface DashboardSession {
   accessToken: string;
 }
 
+/**
+ * Stable, machine-readable identifier for NoCompanyAccessError -- exported
+ * separately (not just as the instance's own `code` field) so a caller
+ * across a Next.js/OpenNext rendering boundary can identify it by
+ * `error.code` equality rather than `instanceof`, which is not reliable
+ * when that boundary's bundler compiles this class's source more than once
+ * (see apps/web/lib/domainError.ts for the full explanation; confirmed for
+ * this exact class in this app's own built OpenNext output).
+ */
+export const NO_COMPANY_ACCESS_CODE = "no_company_access";
+
 /** Thrown when a signed-in user has zero active company memberships. */
 export class NoCompanyAccessError extends Error {
+  readonly code = NO_COMPANY_ACCESS_CODE;
+
   constructor() {
     super("This account has no active company membership.");
     this.name = "NoCompanyAccessError";

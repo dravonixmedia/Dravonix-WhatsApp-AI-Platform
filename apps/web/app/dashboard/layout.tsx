@@ -1,5 +1,6 @@
 import { handoverItemNeedsAttention, SupabaseHandoverRepository } from "@dravonix/handover";
 import { companyRoleLabel } from "../../lib/companyRoles.js";
+import { isDomainError } from "../../lib/domainError.js";
 import { getDashboardCapabilities } from "../../lib/permissions.js";
 import { logoutAction } from "../../lib/actions/auth.js";
 import { switchCompanyAction } from "../../lib/actions/company.js";
@@ -7,7 +8,7 @@ import { resolveMemberIdentity } from "../../lib/memberIdentity.js";
 import { RealtimeRefreshBoundary } from "../../lib/realtime/RealtimeRefreshBoundary.js";
 import { DASHBOARD_SHELL_WATCHES } from "../../lib/realtime/watchConfigs.js";
 import { loadNotificationSummary } from "../../lib/repositories/notificationsRepository.js";
-import { getDashboardSession, NoCompanyAccessError } from "../../lib/session.js";
+import { getDashboardSession, NO_COMPANY_ACCESS_CODE } from "../../lib/session.js";
 import { createServerSupabaseClient } from "../../lib/supabase/server.js";
 import { BrandIcon, BrandLogo } from "../BrandLogo.js";
 import { Avatar } from "./Avatar.js";
@@ -224,7 +225,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   try {
     session = await getDashboardSession();
   } catch (error) {
-    if (error instanceof NoCompanyAccessError) {
+    if (isDomainError(error, NO_COMPANY_ACCESS_CODE)) {
       return <NoCompanyAccessPage />;
     }
     throw error;

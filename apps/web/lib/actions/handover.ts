@@ -9,20 +9,21 @@ import {
   getConversationThreadForDashboard,
   markAsQueued,
   markConversationRead,
+  NO_SERVICE_WINDOW_FALLBACK_TEMPLATE_CODE,
   pauseAi,
   reconcileOutboundMessage,
   resumeAi,
   sendHumanReply,
   sendServiceWindowReengagementTemplate,
   startHumanConversation,
-  NoServiceWindowFallbackTemplateError,
   SupabaseHandoverRepository,
-  WhatsAppServiceWindowClosedError,
+  WHATSAPP_SERVICE_WINDOW_CLOSED_CODE,
   type ConversationThreadMessage,
 } from "@dravonix/handover";
 import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
+import { isDomainError } from "../domainError.js";
 import { SupabaseEntitlementRepository } from "../repositories/supabaseEntitlementRepository.js";
 import { getDashboardSession } from "../session.js";
 import { createServerOnlyServiceRoleClient } from "../supabase/serviceRole.js";
@@ -319,7 +320,7 @@ export async function sendHumanReplyAction(
       },
     );
   } catch (error) {
-    if (error instanceof WhatsAppServiceWindowClosedError) {
+    if (isDomainError(error, WHATSAPP_SERVICE_WINDOW_CLOSED_CODE)) {
       const canSendReengagementTemplate = await hasApprovedServiceWindowFallbackTemplate(
         serviceRoleClient,
         conversationId,
@@ -395,7 +396,7 @@ export async function sendServiceWindowTemplateAction(
       { conversationId, idempotencyKey: clientIdempotencyKey, phoneNumberId, toWaId },
     );
   } catch (error) {
-    if (error instanceof NoServiceWindowFallbackTemplateError) {
+    if (isDomainError(error, NO_SERVICE_WINDOW_FALLBACK_TEMPLATE_CODE)) {
       return { success: false, error: error.message, noFallbackConfigured: true };
     }
     throw error;
