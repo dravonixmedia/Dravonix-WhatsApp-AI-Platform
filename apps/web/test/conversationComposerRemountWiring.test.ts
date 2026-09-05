@@ -114,4 +114,11 @@ describe("ConversationComposerWithAssistant remount-by-conversationId wiring", (
       expect(source).not.toMatch(/ChatAgentPanel/);
     }
   });
+
+  it("both pages explicitly force dynamic rendering, matching the DRAIVA page's existing declaration", () => {
+    for (const path of [conversationsPagePath, handoverPagePath, draivaPagePath]) {
+      const source = readFileSync(path, "utf8");
+      expect(source).toMatch(/export const dynamic = "force-dynamic";/);
+    }
+  });
 });
