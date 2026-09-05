@@ -203,7 +203,10 @@ export default async function ConversationDetailPage({
               }}
             >
               {conversation.state === "human_active" ? (
-                <ConversationComposerWithAssistant conversationId={conversationId} />
+                <ConversationComposerWithAssistant
+                  key={conversationId}
+                  conversationId={conversationId}
+                />
               ) : (
                 <p className="dvx-muted" style={{ fontSize: "0.85rem", margin: 0 }}>
                   A human reply requires the conversation to be in human_active (start human
