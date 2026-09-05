@@ -53,6 +53,18 @@ const rawEnvSchema = z.object({
   META_TEST_PHONE_NUMBER_ID: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default("v21.0"),
 
+  // Meta/WhatsApp Batch 3, Slice A: encrypts whatsapp_accounts.encrypted_access_token
+  // (packages/core/src/tokenEncryption.ts) for Embedded-Signup-connected
+  // (connection_source = 'embedded_signup') tenants only -- never used by the
+  // existing manual_admin/global META_ACCESS_TOKEN path above. Deliberately
+  // only a single current key version for now (no V2/V3 pre-declared); adding
+  // a new key version is its own separately reviewed configuration change,
+  // not something this schema anticipates today. Staging and production must
+  // each have an independently generated WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 --
+  // see CLOUDFLARE_SETUP.md.
+  WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION: z.string().optional(),
+  WHATSAPP_TOKEN_ENCRYPTION_KEY_V1: z.string().optional(),
+
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-5"),
   // 1024 was tuned against English-only structured responses. Non-Latin/
