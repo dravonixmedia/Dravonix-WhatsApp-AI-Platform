@@ -30,6 +30,14 @@ import {
   type ConversationsListSearchParams,
 } from "../conversationsListData.js";
 
+// getDashboardSession() already calls next/headers' cookies(), which opts
+// this route into fully dynamic, per-request rendering on its own -- this
+// export makes that invariant explicit rather than incidental, matching
+// apps/web/app/dashboard/draiva/[conversationId]/page.tsx's existing same
+// declaration, so a future refactor of getDashboardSession/session.ts can
+// never silently make this dynamic-segment route eligible for caching.
+export const dynamic = "force-dynamic";
+
 function ActionButton({ children }: { children: React.ReactNode }) {
   return (
     <button className="dvx-button" type="submit" style={{ fontSize: "0.8rem" }}>
@@ -226,7 +234,10 @@ export default async function ConversationDetailPage({
               }}
             >
               {conversation.state === "human_active" && capabilities.canReplyToConversations ? (
-                <ConversationComposerWithAssistant conversationId={conversationId} />
+                <ConversationComposerWithAssistant
+                  key={conversationId}
+                  conversationId={conversationId}
+                />
               ) : conversation.state === "human_active" ? (
                 <p className="dvx-muted" style={{ fontSize: "0.85rem", margin: 0 }}>
                   Your role does not have permission to send replies.
