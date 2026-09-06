@@ -148,61 +148,97 @@ other Worker in this repo — a staging deploy cannot collide with production.
 
 ### Required environment variables
 
-| Variable                                                                                         | Where it's set                                                                                                                  | Browser-exposed? |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`                                                                       | **Build-time only** — the CI job's own `env:` (see below)                                                                       | Yes (by design)  |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY`                                                                  | **Build-time only** — the CI job's own `env:` (see below)                                                                       | Yes (by design)  |
-| `SUPABASE_URL`                                                                                   | `wrangler secret put SUPABASE_URL --env <env>`                                                                                  | No               |
-| `SUPABASE_ANON_KEY`                                                                              | `wrangler secret put SUPABASE_ANON_KEY --env <env>`                                                                             | No               |
-| `SUPABASE_SERVICE_ROLE_KEY`                                                                      | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`                                                                     | **Never**        |
-| `META_ACCESS_TOKEN`                                                                              | `wrangler secret put META_ACCESS_TOKEN --env <env>`                                                                             | No               |
-| `META_GRAPH_API_VERSION` (optional, defaults to `v21.0`)                                         | `wrangler.jsonc` `vars` if overriding the default                                                                               | No               |
-| `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION` (Batch 3 Slice A -- not yet provisioned)             | `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION --env <env>` -- see "Embedded Signup token encryption key" below | No               |
-| `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` (Batch 3 Slice A -- not yet provisioned)                      | `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 --env <env>` -- see "Embedded Signup token encryption key" below          | **Never**        |
-| `APP_ENV`                                                                                        | `wrangler.jsonc` `vars` (already set: `staging` / `production`)                                                                 | No               |
-| `APP_URL`                                                                                        | `wrangler.jsonc` `vars` (already set for staging; **production not yet set** -- see below)                                      | No               |
-| `ZEPTOMAIL_API_TOKEN` (Zoho ZeptoMail Send Mail token -- required for invitation email delivery) | `wrangler secret put ZEPTOMAIL_API_TOKEN --env <env>`                                                                           | No               |
-| `EMAIL_API_KEY` (transitional alias for `ZEPTOMAIL_API_TOKEN` -- see below)                      | `wrangler secret put EMAIL_API_KEY --env <env>` -- **staging already has this secret set, holding the ZeptoMail token**         | No               |
-| `EMAIL_FROM_ADDRESS` (must be on a domain verified with ZeptoMail)                               | `wrangler secret put EMAIL_FROM_ADDRESS --env <env>` -- `admin@dravonixmedia.com`                                               | No               |
-| `EMAIL_FROM_NAME` (optional, defaults to `DRAIVA by Dravonix Media`)                             | `wrangler.jsonc` `vars` if overriding the default                                                                               | No               |
-| `PLATFORM_*` (branding, optional)                                                                | `wrangler.jsonc` `vars` if overriding the default brand                                                                         | No               |
+| Variable                                                                                                          | Where it's set                                                                                                          | Browser-exposed? |
+| ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`                                                                                        | **Build-time only** — the CI job's own `env:` (see below)                                                               | Yes (by design)  |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY`                                                                                   | **Build-time only** — the CI job's own `env:` (see below)                                                               | Yes (by design)  |
+| `SUPABASE_URL`                                                                                                    | `wrangler secret put SUPABASE_URL --env <env>`                                                                          | No               |
+| `SUPABASE_ANON_KEY`                                                                                               | `wrangler secret put SUPABASE_ANON_KEY --env <env>`                                                                     | No               |
+| `SUPABASE_SERVICE_ROLE_KEY`                                                                                       | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env <env>`                                                             | **Never**        |
+| `META_ACCESS_TOKEN`                                                                                               | `wrangler secret put META_ACCESS_TOKEN --env <env>`                                                                     | No               |
+| `META_GRAPH_API_VERSION` (optional, defaults to `v21.0`)                                                          | `wrangler.jsonc` `vars` if overriding the default                                                                       | No               |
+| `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION` (Batch 3 Slice A -- staging configured, production not yet activated) | `wrangler.jsonc`/`wrangler.toml` `[env.staging.vars]` (non-secret) -- see "Embedded Signup token encryption key" below  | No               |
+| `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` (Batch 3 Slice A -- not yet provisioned)                                       | `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 --env <env>` -- see "Embedded Signup token encryption key" below  | **Never**        |
+| `APP_ENV`                                                                                                         | `wrangler.jsonc` `vars` (already set: `staging` / `production`)                                                         | No               |
+| `APP_URL`                                                                                                         | `wrangler.jsonc` `vars` (already set for staging; **production not yet set** -- see below)                              | No               |
+| `ZEPTOMAIL_API_TOKEN` (Zoho ZeptoMail Send Mail token -- required for invitation email delivery)                  | `wrangler secret put ZEPTOMAIL_API_TOKEN --env <env>`                                                                   | No               |
+| `EMAIL_API_KEY` (transitional alias for `ZEPTOMAIL_API_TOKEN` -- see below)                                       | `wrangler secret put EMAIL_API_KEY --env <env>` -- **staging already has this secret set, holding the ZeptoMail token** | No               |
+| `EMAIL_FROM_ADDRESS` (must be on a domain verified with ZeptoMail)                                                | `wrangler secret put EMAIL_FROM_ADDRESS --env <env>` -- `admin@dravonixmedia.com`                                       | No               |
+| `EMAIL_FROM_NAME` (optional, defaults to `DRAIVA by Dravonix Media`)                                              | `wrangler.jsonc` `vars` if overriding the default                                                                       | No               |
+| `PLATFORM_*` (branding, optional)                                                                                 | `wrangler.jsonc` `vars` if overriding the default brand                                                                 | No               |
 
 **Embedded Signup token encryption key (Batch 3 Slice A).** `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1`
 encrypts `whatsapp_accounts.encrypted_access_token` at rest (`packages/core/src/tokenEncryption.ts`,
 AES-256-GCM) for Meta Embedded-Signup-connected tenants (`connection_source = 'embedded_signup'`)
 only -- it has no effect on, and is never used by, the existing manually-connected
 (`connection_source = 'manual_admin'`) tenants, which continue to send via the
-global `META_ACCESS_TOKEN` above unchanged. **Not yet provisioned anywhere as of
-Slice A** -- this section documents the requirement for when Slice C/E wires it
-into the outbound send paths.
+global `META_ACCESS_TOKEN` above unchanged. The key itself is **not yet
+provisioned anywhere** -- this section documents the requirement for when
+Slice C/E wires it into the outbound send paths.
 
-- Generate a fresh, random 256-bit key and base64-encode it:
-  ```bash
-  openssl rand -base64 32
-  ```
-- `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION` is a plain integer string (`1`
-  for the first key ever provisioned) -- it tells the app which key version to
-  _encrypt new data with_; `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` is that version's
-  actual key material.
-- **Staging and production must each get an independently generated key** --
-  never reuse the same random value across environments, and never derive one
-  from the other.
+Two distinct kinds of configuration are involved here, and they are set two
+different ways:
+
+- **`WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION` is a NON-SECRET Worker
+  variable** -- a plain integer string (`1` for the first key ever
+  provisioned) naming which key version to _encrypt new data with_. It is
+  committed as a normal `vars` entry in `wrangler.jsonc`/`wrangler.toml`
+  (`[env.staging.vars]` / `[env.production.vars]`), exactly like `APP_ENV` --
+  never as a `wrangler secret put`. It is already configured for staging in
+  `apps/web/wrangler.jsonc`, `apps/workers/message-consumer/wrangler.toml`,
+  and `apps/workers/voice-consumer/wrangler.toml`.
+- **`WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` is a SECRET** -- the actual key
+  material. It is set only via `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_KEY_V1
+--env <env>`, never committed, never placed in a `vars` block.
+
+**Least privilege.** Only the Workers that send or will send an
+Embedded-Signup-connected tenant's messages ever need the key:
+`apps/web` (human-reply/template sends from the dashboard), `apps/workers/message-consumer`
+(AI text-reply sends), and `apps/workers/voice-consumer` (AI voice-reply
+sends). `apps/api` (webhook ingest only), `apps/workers/outbound-reconciler`
+(delivery-status reconciliation only -- not a WhatsApp provider at all), and
+`apps/workers/billing-scheduler` (billing/subscription lifecycle only) must
+**never** be provisioned with `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` or any future
+key version -- they have no code path that uses it.
+
+**Staging provisioning order** (when Slice C/E is ready to wire this in):
+
+1. `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION = "1"` is configured as a
+   normal `vars` entry (already done, staging only -- see above).
+2. Generate one fresh, random 256-bit staging key and base64-encode it:
+   ```bash
+   openssl rand -base64 32
+   ```
+3. Provision that same staging key independently to each of the three
+   required Workers: `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_KEY_V1
+--env staging`, run once per Worker (`apps/web`, `apps/workers/message-consumer`,
+   `apps/workers/voice-consumer`).
+4. Verify only that the secret NAME is present for each Worker (e.g. via
+   `wrangler secret list --env staging`) -- never re-print or re-derive the
+   value itself.
+5. Deploy (or redeploy) the three required Workers so the new secret is live.
+6. Perform regression verification (existing manual-connection sends still
+   work unaffected) before treating staging as ready for Slice C/E.
+
+**Production is provisioned separately, later, under its own authorization.**
+Production must get an **entirely different**, independently generated key --
+never copy or derive it from the staging value -- and production activation
+(configuring `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION` for
+`[env.production.vars]` and provisioning the production secret) requires its
+own separate authorization; it is explicitly out of scope for the staging
+configuration work described above.
+
 - **Never commit a real key value anywhere** in this repository, including
   `.env.example` (which only ever contains a blank placeholder) or any test
   fixture -- tests use their own locally-generated throwaway keys.
 - **Rotation is a separate, deliberately reviewed change, not something to
-  pre-provision now.** When a new key version is actually needed, add
+  pre-provision now.** When a new key version is actually needed: add
   `WHATSAPP_TOKEN_ENCRYPTION_KEY_V2` as its own `wrangler secret put` per
-  environment and bump `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION`, while
-  `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1` stays provisioned (unrotated rows still
-  need it to decrypt) -- do not pre-declare `_V2`/`_V3`/etc. before that day
-  arrives.
-- Every Worker that will eventually need to decrypt a tenant token (`apps/web`,
-  `apps/workers/message-consumer`, `apps/workers/voice-consumer`) gets its own
-  `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 --env <env>` call, per
-  environment, exactly like every other secret in this table -- there is no
-  shared secret store to accidentally cross-wire between Workers or between
-  staging and production.
+  environment, then bump the `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION`
+  `vars` entry to `"2"` for that environment. `WHATSAPP_TOKEN_ENCRYPTION_KEY_V1`
+  must stay provisioned and must **never be deleted** while any row still
+  holds V1-encrypted ciphertext -- do not pre-declare `_V2`/`_V3`/etc. before
+  that day arrives.
 
 **Invitation email delivery uses Zoho ZeptoMail** (`packages/email`'s
 `ZeptoMailEmailProvider`, calling ZeptoMail's HTTPS Send Mail API directly --
