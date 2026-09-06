@@ -7,3 +7,4 @@ export * from "./serviceWindow.js";
 export * from "./provider.js";
 export * from "./providers/graphApiProvider.js";
 export * from "./providers/mockProvider.js";
+export * from "./providers/embeddedSignupProvider.js";
