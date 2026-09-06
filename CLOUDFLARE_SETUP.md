@@ -205,19 +205,31 @@ key version -- they have no code path that uses it.
 
 1. `WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION = "1"` is configured as a
    normal `vars` entry (already done, staging only -- see above).
-2. Generate one fresh, random 256-bit staging key and base64-encode it:
-   ```bash
-   openssl rand -base64 32
-   ```
-3. Provision that same staging key independently to each of the three
-   required Workers: `wrangler secret put WHATSAPP_TOKEN_ENCRYPTION_KEY_V1
---env staging`, run once per Worker (`apps/web`, `apps/workers/message-consumer`,
-   `apps/workers/voice-consumer`).
-4. Verify only that the secret NAME is present for each Worker (e.g. via
-   `wrangler secret list --env staging`) -- never re-print or re-derive the
-   value itself.
-5. Deploy (or redeploy) the three required Workers so the new secret is live.
-6. Perform regression verification (existing manual-connection sends still
+2. Generate the V1 staging key and provision it to all three required
+   Workers via `.github/workflows/provision-staging-whatsapp-encryption-key.yml`
+   (`workflow_dispatch` only, requires an `expected_sha` input matching the
+   exact `ops/platform-integration` commit being provisioned) -- **not** by
+   hand. The key is generated inside that workflow's GitHub Actions runner
+   with `openssl rand -base64 32`, piped directly into `wrangler secret put`
+   over stdin, and provisioned identically to `apps/web`,
+   `apps/workers/message-consumer`, and `apps/workers/voice-consumer`. The
+   operator never sees, types, or copies the key value at any point. The
+   workflow runs under a dedicated `staging-secrets` GitHub Environment
+   (separate from the `staging` Environment `deploy.yml` uses), restricted
+   to the `ops/platform-integration` branch, holding its own independently
+   provisioned `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` scoped only to
+   these three Workers -- **this workflow is temporary and V1-only**; remove
+   or disable it once Slice A's staging key is confirmed live. A future key
+   version (V2+) will use a separately designed procedure, not a
+   parameterized version of this one.
+3. The workflow itself verifies only the secret NAME is present on each of
+   the three Workers before and after provisioning (via
+   `wrangler secret list --env staging`) -- it never re-prints or re-derives
+   the value, and refuses to run at all if the three Workers are in a mixed
+   present/missing state (see the workflow file for why).
+4. Redeploy the three required Workers (via the normal `deploy.yml` staging
+   run) so any code that reads the new secret picks it up.
+5. Perform regression verification (existing manual-connection sends still
    work unaffected) before treating staging as ready for Slice C/E.
 
 **Production is provisioned separately, later, under its own authorization.**

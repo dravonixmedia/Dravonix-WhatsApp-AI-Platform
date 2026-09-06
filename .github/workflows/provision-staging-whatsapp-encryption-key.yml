@@ -1,0 +1,220 @@
+name: Provision staging WhatsApp encryption key (V1, temporary)
+
+# TEMPORARY, Slice-A-only, V1-only workflow. See CLOUDFLARE_SETUP.md's
+# "Embedded Signup token encryption key" section for the full procedure this
+# implements and for the removal note once Slice A's staging key is live.
+#
+# workflow_dispatch ONLY -- no push/pull_request/pull_request_target/schedule,
+# and no environment-selection input: the job below is hardcoded to the
+# `staging-secrets` GitHub Environment, so there is structurally no way to
+# target production from this workflow. `staging-secrets` is a dedicated
+# Environment (separate from the `staging` Environment deploy.yml uses),
+# holding its own independently-provisioned CLOUDFLARE_API_TOKEN/
+# CLOUDFLARE_ACCOUNT_ID scoped only as broadly as these three staging
+# Workers need -- see CLOUDFLARE_SETUP.md. That Environment's own
+# "Deployment branches and tags" restriction (configured in GitHub's UI, not
+# here) is the actual credential boundary; the ref/SHA guard below is a
+# second, independent check, not a substitute for it.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: >-
+          The exact ops/platform-integration commit SHA this run must match.
+          The workflow refuses to proceed if the SHA that was actually
+          checked out differs, so a reviewer approving the `staging-secrets`
+          Environment gate has a concrete commit to verify beforehand.
+        type: string
+        required: true
+
+concurrency:
+  # Sequential only -- never let two dispatches race through the "check
+  # existing state, then generate" window below and each decide it's safe to
+  # generate a fresh key. See the "Preflight" step for why two different
+  # keys landing across the three Workers must never happen.
+  group: provision-staging-whatsapp-encryption-key
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    name: Provision WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 (staging only)
+    runs-on: ubuntu-latest
+    environment: staging-secrets
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Deliberately no WRANGLER_LOG here (unlike deploy.yml) -- this
+      # workflow handles key material and should stay as quiet as possible.
+      # WRANGLER_LOG_SANITIZE=true is Wrangler's own default; set explicitly
+      # so that's never accidentally relying on an unstated default.
+      WRANGLER_LOG_SANITIZE: "true"
+      FORCE_COLOR: "0"
+    steps:
+      - name: Verify exact canonical ref and SHA
+        # Runs before checkout and before any Cloudflare credential is
+        # touched. github.ref/github.sha come from GitHub's own event
+        # payload for this dispatch (not attacker-controlled free text);
+        # expected_sha is operator-typed input, so it's passed through env:
+        # rather than interpolated into the script, to avoid any command-
+        # injection surface from the `run:` block.
+        env:
+          ACTUAL_REF: ${{ github.ref }}
+          ACTUAL_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTUAL_REF" != "refs/heads/ops/platform-integration" ]; then
+            echo "::error::This workflow may only be dispatched against refs/heads/ops/platform-integration (got: $ACTUAL_REF). Refusing to proceed."
+            exit 1
+          fi
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::github.sha ($ACTUAL_SHA) does not match the expected_sha input ($EXPECTED_SHA). Refusing to proceed."
+            exit 1
+          fi
+          echo "Verified: dispatched from refs/heads/ops/platform-integration at exactly $ACTUAL_SHA."
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches deploy.yml: apps/web's wrangler (^4.118.0) requires Node
+          # >=22; apps/workers/* pin wrangler ^3.99.0, which only requires
+          # Node >=16.17.0, so Node 22 satisfies both.
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Preflight -- check existing WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 state (name only)
+        id: preflight
+        # Read-only: `wrangler secret list` returns only {name, type, ...}
+        # metadata -- Cloudflare's secret storage is write-only for the
+        # value itself, so this can never leak the key even if one already
+        # exists. This also doubles as the first real Cloudflare
+        # authentication/permission check for this token.
+        run: |
+          set -euo pipefail
+          SECRET_NAME="WHATSAPP_TOKEN_ENCRYPTION_KEY_V1"
+          WORKER_DIRS=("apps/web" "apps/workers/message-consumer" "apps/workers/voice-consumer")
+          declare -A PRESENT
+          PRESENT_COUNT=0
+
+          for dir in "${WORKER_DIRS[@]}"; do
+            echo "Checking $dir ..."
+            json="$(cd "$dir" && pnpm exec wrangler secret list --env staging --format json)"
+            if echo "$json" | jq -e --arg name "$SECRET_NAME" 'any(.[]; .name == $name)' >/dev/null; then
+              echo "  $dir: $SECRET_NAME present"
+              PRESENT["$dir"]=1
+              PRESENT_COUNT=$((PRESENT_COUNT + 1))
+            else
+              echo "  $dir: $SECRET_NAME missing"
+              PRESENT["$dir"]=0
+            fi
+          done
+
+          TOTAL=${#WORKER_DIRS[@]}
+          if [ "$PRESENT_COUNT" -eq 0 ]; then
+            STATE="NONE"
+          elif [ "$PRESENT_COUNT" -eq "$TOTAL" ]; then
+            STATE="ALL"
+          else
+            STATE="MIXED"
+          fi
+          echo "state=$STATE" >> "$GITHUB_OUTPUT"
+
+          if [ "$STATE" = "MIXED" ]; then
+            echo "::error::$SECRET_NAME exists on some staging Workers but not all. Refusing to generate a new key -- doing so would give the Workers that already have it a DIFFERENT key than the ones about to be provisioned, breaking the shared-key invariant. Status:"
+            for dir in "${WORKER_DIRS[@]}"; do
+              if [ "${PRESENT[$dir]}" -eq 1 ]; then
+                echo "::error::  $dir: PRESENT"
+              else
+                echo "::error::  $dir: MISSING"
+              fi
+            done
+            echo "::error::Manually remove $SECRET_NAME from the Worker(s) marked PRESENT (wrangler secret delete $SECRET_NAME --env staging, run from that Worker's directory -- this is value-blind and safe) to reach a clean slate, then re-run this workflow."
+            exit 1
+          fi
+
+          echo "Preflight state: $STATE"
+
+      - name: Already provisioned -- nothing to do
+        if: steps.preflight.outputs.state == 'ALL'
+        run: |
+          echo "WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 is already present on all three staging Workers. Exiting without generating or provisioning anything."
+
+      - name: Generate and provision WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 (staging)
+        if: steps.preflight.outputs.state == 'NONE'
+        # Generation and all three provisioning calls happen in this ONE
+        # step so the key only ever lives in this step's own process
+        # memory -- never written to $GITHUB_ENV, $GITHUB_OUTPUT, a file, or
+        # any other channel that would persist it beyond this step. Shell
+        # tracing (`set -x`) is never enabled anywhere in this workflow.
+        run: |
+          set -euo pipefail
+          SECRET_NAME="WHATSAPP_TOKEN_ENCRYPTION_KEY_V1"
+          WORKER_DIRS=("apps/web" "apps/workers/message-consumer" "apps/workers/voice-consumer")
+
+          KEY="$(openssl rand -base64 32)"
+          echo "::add-mask::$KEY"
+
+          DECODED_LEN="$(printf '%s' "$KEY" | base64 -d 2>/dev/null | wc -c)"
+          if [ "$DECODED_LEN" -ne 32 ]; then
+            echo "::error::Generated key did not decode to exactly 32 bytes (got $DECODED_LEN bytes). Aborting without provisioning anything."
+            unset KEY
+            exit 1
+          fi
+          echo "Generated exactly one 32-byte CSPRNG key (standard base64), validated by decoded length only -- value never printed."
+
+          for dir in "${WORKER_DIRS[@]}"; do
+            echo "Provisioning $SECRET_NAME to $dir ..."
+            attempt=1
+            max_attempts=3
+            until printf '%s' "$KEY" | (cd "$dir" && pnpm exec wrangler secret put "$SECRET_NAME" --env staging); do
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "::error::Failed to provision $SECRET_NAME to $dir after $max_attempts attempts using the SAME generated key. Not regenerating -- a repeat run will detect this as a MIXED partial state and refuse to proceed automatically."
+                unset KEY
+                exit 1
+              fi
+              echo "::warning::Attempt $attempt for $dir failed; retrying with the same key ..."
+              attempt=$((attempt + 1))
+            done
+            echo "  $dir: provisioned"
+          done
+
+          unset KEY
+          echo "All three staging Workers provisioned with the same $SECRET_NAME value."
+
+      - name: Final presence verification (name only)
+        if: steps.preflight.outputs.state == 'NONE' || steps.preflight.outputs.state == 'ALL'
+        run: |
+          set -euo pipefail
+          SECRET_NAME="WHATSAPP_TOKEN_ENCRYPTION_KEY_V1"
+          WORKER_DIRS=("apps/web" "apps/workers/message-consumer" "apps/workers/voice-consumer")
+          MISSING=()
+
+          for dir in "${WORKER_DIRS[@]}"; do
+            json="$(cd "$dir" && pnpm exec wrangler secret list --env staging --format json)"
+            if echo "$json" | jq -e --arg name "$SECRET_NAME" 'any(.[]; .name == $name)' >/dev/null; then
+              echo "  $dir: $SECRET_NAME present"
+            else
+              echo "  $dir: $SECRET_NAME MISSING"
+              MISSING+=("$dir")
+            fi
+          done
+
+          if [ "${#MISSING[@]}" -ne 0 ]; then
+            echo "::error::$SECRET_NAME is missing on: ${MISSING[*]}. Not attempting automatic rotation or replacement -- investigate manually."
+            exit 1
+          fi
+
+          echo "Confirmed: $SECRET_NAME is present on all three staging Workers."
