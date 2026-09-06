@@ -48,6 +48,18 @@
         // (lib/actions/invitations.ts) and password-reset redirects. Real,
         // already-deployed staging Worker URL, not invented.
         "APP_URL": "https://dravonix-dashboard-staging.muddy-smoke-afe4.workers.dev",
+        // Batch 3 Slice A (Embedded Signup credential encryption): which
+        // WHATSAPP_TOKEN_ENCRYPTION_KEY_V<n> secret to encrypt NEW tenant
+        // tokens with -- a plain, non-sensitive integer, safe as a
+        // committed var (see CLOUDFLARE_SETUP.md's "Embedded Signup token
+        // encryption key" section). The actual key material
+        // (WHATSAPP_TOKEN_ENCRYPTION_KEY_V1) is never set here -- it is a
+        // `wrangler secret put` value, provisioned independently, and is
+        // NOT YET provisioned for this Worker as of this config change.
+        // This Worker only decrypts an embedded_signup row's own token
+        // when one exists; it has no effect on the existing manual_admin
+        // META_ACCESS_TOKEN path.
+        "WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION": "1",
       },
       // P1 dashboard hygiene batch (voice playback): read-only access into
       // the SAME R2 bucket apps/workers/voice-consumer already writes
