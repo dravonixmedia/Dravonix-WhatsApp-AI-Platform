@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@dravonix/core": "workspace:*",
+    "@supabase/supabase-js": "^2.47.10",
     "zod": "^3.24.1"
   },
   "devDependencies": {

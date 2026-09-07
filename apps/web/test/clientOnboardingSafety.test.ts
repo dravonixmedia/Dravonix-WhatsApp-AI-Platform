@@ -23,15 +23,37 @@ function readSource(relativePath: string): string {
   return readFileSync(join(webRoot, relativePath), "utf8");
 }
 
-describe("WhatsApp connection: client dashboard stays read-only; Super Admin gained real (non-Embedded-Signup) connection management (Meta/WhatsApp Batch 1)", () => {
-  // Superseded by whatsappConnectionPage.test.ts's own dedicated assertions
-  // ("still does not render any connect/disconnect/edit action", "no longer
-  // claims Meta App Review is in progress") now that App Review is approved
-  // -- this test only re-confirms the client page still has no live connect
-  // control of any kind, disabled or otherwise.
-  it("the dashboard WhatsApp settings page renders no Connect button at all -- connection setup is Dravonix-managed, not client-initiated", () => {
+describe("WhatsApp connection: client dashboard gained real, permission-gated Embedded Signup (Meta/WhatsApp Batch 3, Slice C); Super Admin's separate manual connection management is untouched (Meta/WhatsApp Batch 1)", () => {
+  // Batch 3 Slice C deliberately supersedes the earlier "renders no Connect
+  // button at all" assertion this test used to make (Batch 1/2 era, before
+  // Meta Embedded Signup was verified against DRAIVA's own live
+  // configuration -- see packages/whatsapp/src/embeddedSignupFlow.ts). The
+  // client dashboard now legitimately renders a real Connect/Reconnect
+  // control -- but ONLY when the viewer's role holds whatsapp.manage, and
+  // the control itself lives in the dedicated EmbeddedSignupButton.js
+  // component, never inline in this page. Full behavioral/credential-safety
+  // coverage of that component lives in embeddedSignupClientFlow.test.ts;
+  // this test only re-confirms the gating and delegation shape.
+  it("the dashboard WhatsApp settings page renders the Connect/Reconnect control only behind capabilities.canManageWhatsapp, delegated to EmbeddedSignupButton", () => {
     const source = readSource("app/dashboard/settings/whatsapp/page.tsx");
+    expect(source).toContain('import { EmbeddedSignupButton } from "./EmbeddedSignupButton.js"');
     expect(source).not.toMatch(/<button[\s\S]*?Connect WhatsApp/);
+    const emptyStateGate = source.slice(
+      source.indexOf("WhatsApp connection not yet set up"),
+      source.indexOf("Business account"),
+    );
+    expect(emptyStateGate).toMatch(/capabilities\.canManageWhatsapp[\s\S]*?<EmbeddedSignupButton/);
+    const connectedStateGate = source.slice(source.indexOf("Business account"));
+    expect(connectedStateGate).toMatch(
+      /capabilities\.canManageWhatsapp[\s\S]*?<EmbeddedSignupButton/,
+    );
+  });
+
+  it("the dashboard WhatsApp settings page never selects or renders the encrypted access token, regardless of the new connect control", () => {
+    const source = readSource("app/dashboard/settings/whatsapp/page.tsx")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(source).not.toContain("encrypted_access_token");
   });
 
   // The Super Admin company detail page's WhatsApp section is no longer a
@@ -49,7 +71,6 @@ describe("WhatsApp connection: client dashboard stays read-only; Super Admin gai
 
 describe("No Meta/Embedded Signup API is called anywhere in the new client onboarding surface", () => {
   const surfaceFiles = [
-    "app/dashboard/settings/whatsapp/page.tsx",
     "app/dashboard/onboarding/page.tsx",
     "app/dashboard/team/page.tsx",
     "app/dashboard/team/InviteMemberForm.tsx",
@@ -68,6 +89,19 @@ describe("No Meta/Embedded Signup API is called anywhere in the new client onboa
   // this one cannot distinguish from real usage. Its own comment-stripped,
   // dedicated coverage lives in adminWhatsappConnectionUiWiring.test.ts's
   // "does not introduce Meta Embedded Signup / OAuth in this batch".
+  //
+  // app/dashboard/settings/whatsapp/page.tsx and its EmbeddedSignupButton.js
+  // component are ALSO deliberately NOT in this list as of Meta/WhatsApp
+  // Batch 3, Slice C: that surface is now the real, intentional home of
+  // client-initiated Meta Embedded Signup (verified against DRAIVA's own
+  // live configuration -- see packages/whatsapp/src/embeddedSignupFlow.ts),
+  // gated behind whatsapp.manage. A naive substring ban here would just
+  // fail permanently on legitimate code, exactly like the admin-page
+  // carve-out above. Its own dedicated safety coverage (no token ever
+  // reaches the browser, the code is never exchanged client-side, the
+  // access token never appears in this component, requests only ever go to
+  // this app's own authenticated backend route) lives in
+  // embeddedSignupClientFlow.test.ts.
 
   // Secret-exposure banned terms (encrypted_access_token, META_ACCESS_TOKEN)
   // are covered separately, with comment-stripping, by

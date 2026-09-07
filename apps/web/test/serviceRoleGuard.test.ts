@@ -6,14 +6,21 @@ import { describe, expect, it } from "vitest";
 /**
  * Guards the narrow, audited uses of a service_role Supabase client in this
  * app (apps/web/lib/supabase/serviceRole.ts, consumed only by
- * apps/web/lib/actions/reconcileAiOutboundMessage.ts and
- * apps/web/lib/actions/handover.ts's sendHumanReplyAction -- the latter
- * added during the Phase 3A security correction as the server-only
- * replacement for a get_conversation_send_target RPC that had been
- * callable, and exploitable, directly from the browser). These tests exist
- * so that a future accidental import from client-reachable code, or a
- * widening of the service-role surface to ordinary dashboard reads/writes,
- * fails a test immediately instead of only being caught by manual review.
+ * apps/web/lib/actions/reconcileAiOutboundMessage.ts, apps/web/lib/actions/
+ * handover.ts's sendHumanReplyAction -- added during the Phase 3A security
+ * correction as the server-only replacement for a
+ * get_conversation_send_target RPC that had been callable, and exploitable,
+ * directly from the browser -- and, as of Meta/WhatsApp Batch 3 Slice C,
+ * apps/web/lib/whatsappSignupAuth.ts's requireWhatsappManageContext, the
+ * shared authorization gate for every Embedded Signup connect/disconnect
+ * route/action: it re-derives the caller's whatsapp.manage permission via
+ * the service-role client, then hands that same client to its callers
+ * (lib/actions/whatsappSignup.ts, lib/actions/whatsappTestMessage.ts, and
+ * the app/api/integrations/meta/whatsapp/signup/** routes) so they never
+ * import serviceRole.ts a second time). These tests exist so that a future
+ * accidental import from client-reachable code, or a widening of the
+ * service-role surface to ordinary dashboard reads/writes, fails a test
+ * immediately instead of only being caught by manual review.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -72,7 +79,7 @@ describe("service-role client guard", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("only the two audited Server Actions import the service-role client", () => {
+  it("only the three audited surfaces import the service-role client", () => {
     const allSourceFiles = [
       ...listSourceFiles(join(webRoot, "app")),
       ...listSourceFiles(join(webRoot, "lib")),
@@ -88,7 +95,21 @@ describe("service-role client guard", () => {
     expect(importers).toEqual([
       "lib/actions/handover.ts",
       "lib/actions/reconcileAiOutboundMessage.ts",
+      "lib/whatsappSignupAuth.ts",
     ]);
+  });
+
+  it("the WhatsApp signup actions/routes obtain their service-role client from requireWhatsappManageContext, never a second direct import", () => {
+    for (const file of [
+      "lib/actions/whatsappSignup.ts",
+      "lib/actions/whatsappTestMessage.ts",
+      "app/api/integrations/meta/whatsapp/signup/initiate/route.ts",
+      "app/api/integrations/meta/whatsapp/signup/complete/route.ts",
+    ]) {
+      const source = readFileSync(join(webRoot, file), "utf8");
+      expect(source).not.toMatch(/from\s+["'].*supabase\/serviceRole(\.js)?["']/);
+      expect(source).toContain("requireWhatsappManageContext");
+    }
   });
 
   it("the AI-outbound-reconciliation Server Action never accepts a client-supplied company/tenant id", () => {

@@ -164,7 +164,7 @@ describe("getDashboardCapabilities", () => {
     expect(capabilities.canViewBilling).toBe(false);
   });
 
-  it("company_owner and company_admin can view the team, settings, and billing, edit display names, and (Phase 2) manage the team again -- but still hold no *.manage capability for settings/AI/knowledge/WhatsApp/billing", () => {
+  it("company_owner and company_admin can view the team, settings, and billing, edit display names, and (Phase 2) manage the team again -- but still hold no *.manage capability for settings/AI/knowledge/billing", () => {
     for (const role of ["company_owner", "company_admin"] as const) {
       const capabilities = getDashboardCapabilities(role);
       expect(capabilities.canViewTeam).toBe(true);
@@ -180,9 +180,6 @@ describe("getDashboardCapabilities", () => {
         "canManageSettings",
       );
       expect(capabilities as unknown as Record<string, unknown>).not.toHaveProperty(
-        "canManageWhatsapp",
-      );
-      expect(capabilities as unknown as Record<string, unknown>).not.toHaveProperty(
         "canManageAiSettings",
       );
       expect(capabilities as unknown as Record<string, unknown>).not.toHaveProperty(
@@ -192,6 +189,25 @@ describe("getDashboardCapabilities", () => {
         "canManageBilling",
       );
     }
+  });
+
+  it("Meta/WhatsApp Batch 3 Slice C: company_owner and company_admin hold canManageWhatsapp -- migration 38's deliberate, narrow re-grant of whatsapp.manage for self-service Embedded Signup (see that migration's own header comment for why this is not a re-opening of migration 22's revocation)", () => {
+    for (const role of ["company_owner", "company_admin"] as const) {
+      expect(getDashboardCapabilities(role).canManageWhatsapp).toBe(true);
+    }
+    for (const role of [
+      "manager",
+      "team_leader",
+      "sales_person",
+      "company_accounts",
+      "agent",
+      "knowledge_editor",
+      "billing_viewer",
+      "viewer",
+    ] as const) {
+      expect(getDashboardCapabilities(role).canManageWhatsapp).toBe(false);
+    }
+    expect(getDashboardCapabilities(null).canManageWhatsapp).toBe(false);
   });
 
   it("Phase 2: manager can view the team and close conversations but cannot manage the team", () => {

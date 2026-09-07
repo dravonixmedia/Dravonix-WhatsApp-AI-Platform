@@ -8,3 +8,6 @@ export * from "./provider.js";
 export * from "./providers/graphApiProvider.js";
 export * from "./providers/mockProvider.js";
 export * from "./providers/embeddedSignupProvider.js";
+export * from "./embeddedSignupFlow.js";
+export * from "./supabaseSignupAttemptRepository.js";
+export * from "./outboundCredentialResolution.js";
