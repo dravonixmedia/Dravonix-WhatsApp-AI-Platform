@@ -207,10 +207,20 @@ jobs:
         # on already-built client JavaScript. Configure these as this
         # workflow's own environment-scoped secrets (Settings → Environments
         # → staging/production), never committed.
+        #
+        # NEXT_PUBLIC_META_APP_ID/NEXT_PUBLIC_META_WHATSAPP_CONFIG_ID (Meta/
+        # WhatsApp Batch 3 Slice C): identify this Meta app and its Facebook
+        # Login for Business configuration to the client-side Embedded
+        # Signup button (EmbeddedSignupButton.tsx) -- both are non-secret by
+        # Meta's own design (the app id and config id are meant to be
+        # embedded in client-side FB.login calls), same category as the
+        # Supabase pair above, never the app secret or an access token.
         working-directory: apps/web
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_META_APP_ID: ${{ secrets.NEXT_PUBLIC_META_APP_ID }}
+          NEXT_PUBLIC_META_WHATSAPP_CONFIG_ID: ${{ secrets.NEXT_PUBLIC_META_WHATSAPP_CONFIG_ID }}
         run: pnpm exec opennextjs-cloudflare build
 
       - name: Deploy apps/web
