@@ -24,20 +24,29 @@ import { WhatsAppProviderError } from "./graphApiProvider.js";
  * long-stable, versioned Graph API surface (these shapes have not changed
  * across API versions for years -- only the version number in the URL
  * changes) and are cross-checked against multiple independent, current
- * sources. Two things could NOT be independently re-verified against Meta's
- * own primary documentation in this session (network egress to
- * developers.facebook.com is blocked in this sandbox) and are called out
- * explicitly in the functions below rather than assumed:
- *   1. Whether the embedded-signup code exchange requires a `redirect_uri`
- *      parameter (the JS SDK flow has no real redirect, so this
- *      implementation omits it, matching the documented no-redirect
- *      Embedded Signup pattern -- but this should be confirmed against
- *      current Meta docs before Slice C goes live).
- *   2. The exact PIN requirement for a phone number's /register call in the
- *      specific Embedded-Signup-provisioned context (see registerPhoneNumber's
- *      own doc comment) -- `pin` is optional here, never a fabricated
- *      default, and Meta's own response/error governs behavior rather than
- *      an assumption baked into this code.
+ * sources.
+ *
+ * `exchangeEmbeddedSignupCode`'s exact request shape (POST, JSON body,
+ * `grant_type: "authorization_code"`, required `redirect_uri`) was verified
+ * directly against Meta's own live Embedded Signup Builder for this app's
+ * actual configuration -- app "Dravonix Bot", Facebook Login for Business
+ * configuration "DRAIVA WhatsApp Signup" (config_id 2509972019488744),
+ * Embedded Signup v4, Session Info Version 3, System User access token --
+ * whose generated "Exchange Token" example explicitly showed this POST/JSON
+ * contract. This is scoped specifically to *this* Embedded Signup v4
+ * configuration's documented exchange step, not a general claim about every
+ * Meta OAuth flow -- a different config/version could show a different
+ * example, and this should be re-checked if the app's Embedded Signup
+ * configuration is ever recreated or migrated to a newer version.
+ *
+ * One thing remains genuinely unresolved and is called out explicitly
+ * below rather than assumed: the exact PIN requirement for a phone
+ * number's /register call in the specific Embedded-Signup-provisioned
+ * context (see registerPhoneNumber's own doc comment) -- Meta's builder has
+ * not yet exposed the actual registration request because no sandbox
+ * signup has been completed. `pin` remains optional here, never a
+ * fabricated default, and Meta's own response/error governs behavior
+ * rather than an assumption baked into this code.
  */
 
 /** Credentials for the Meta App itself (not a specific WABA/user token) -- needed only for the OAuth code exchange and token inspection, per Meta's documented "app access token" model. */
@@ -58,35 +67,55 @@ export interface ExchangeEmbeddedSignupCodeResult {
 }
 
 /**
+ * Input for `exchangeEmbeddedSignupCode`. `redirectUri` is required (not
+ * optional) -- Meta's live Embedded Signup Builder for this app's actual
+ * "DRAIVA WhatsApp Signup" (v4) configuration shows it as a required field
+ * of the exchange request body, taken from the app's own Facebook Login
+ * settings. This module never hardcodes a redirect URI (staging or
+ * otherwise) and never reads one from an environment variable -- the
+ * caller must supply the exact value configured for this app.
+ */
+export interface ExchangeEmbeddedSignupCodeInput extends MetaAppCredentials {
+  code: string;
+  redirectUri: string;
+}
+
+/**
  * Exchanges a WhatsApp Embedded Signup authorization code for an access
- * token via Meta's OAuth token endpoint (`GET /oauth/access_token`).
+ * token via Meta's OAuth token endpoint.
  *
- * Deliberately omits `redirect_uri`: the Embedded Signup JS SDK flow
- * delivers the code via a postMessage callback, not a server-side redirect,
- * and Meta's documented Embedded Signup code-exchange pattern is the
- * no-redirect variant. This has not been independently re-verified against
- * Meta's own primary documentation in this session (see module doc
- * comment) -- confirm before this is wired into a live signup flow.
+ * Request shape (`POST /oauth/access_token`, `Content-Type: application/json`,
+ * body `{client_id, client_secret, grant_type: "authorization_code",
+ * redirect_uri, code}`) was verified directly against Meta's own live
+ * Embedded Signup Builder for this app's actual "DRAIVA WhatsApp Signup"
+ * (Embedded Signup v4) configuration -- see this module's own doc comment
+ * for the exact app/config identifiers checked. This is NOT a generic claim
+ * about every Meta OAuth flow; it is scoped to this specific configuration's
+ * documented exchange step.
  *
- * `code` and `appSecret` are sent only as this request's own query
- * parameters (exactly as Meta's endpoint requires) and never appear in any
- * thrown error -- a failure throws a WhatsAppProviderError with a static,
- * redacted message naming only the operation, never the request URL.
+ * `code`, `appSecret`, and `redirectUri` are sent only in this request's own
+ * JSON body and never appear in any thrown error -- a failure throws a
+ * WhatsAppProviderError with a static, redacted message naming only the
+ * operation, never the request body.
  */
 export async function exchangeEmbeddedSignupCode(
-  credentials: MetaAppCredentials,
-  code: string,
+  input: ExchangeEmbeddedSignupCodeInput,
 ): Promise<ExchangeEmbeddedSignupCodeResult> {
-  const baseUrl =
-    credentials.baseUrl ?? `https://graph.facebook.com/${credentials.graphApiVersion}`;
-  const url = new URL(`${baseUrl}/oauth/access_token`);
-  url.searchParams.set("client_id", credentials.appId);
-  url.searchParams.set("client_secret", credentials.appSecret);
-  url.searchParams.set("code", code);
+  const baseUrl = input.baseUrl ?? `https://graph.facebook.com/${input.graphApiVersion}`;
 
   let response: Response;
   try {
-    response = await fetch(url.toString(), { method: "GET" });
+    response = await fetch(`${baseUrl}/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: input.appId,
+        client_secret: input.appSecret,
+        grant_type: "authorization_code",
+        redirect_uri: input.redirectUri,
+        code: input.code,
+      }),
+    });
   } catch {
     throw new WhatsAppProviderError("Meta embedded signup code exchange request failed", 502);
   }

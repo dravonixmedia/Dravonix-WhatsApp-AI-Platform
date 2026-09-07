@@ -7,6 +7,8 @@ import {
 import { WhatsAppProviderError } from "../src/providers/graphApiProvider.js";
 
 const APP_CREDS = { appId: "APP123", appSecret: "SUPER_SECRET_VALUE", graphApiVersion: "v21.0" };
+const REDIRECT_URI =
+  "https://dravonix-dashboard-staging.example.test/whatsapp/embedded-signup/callback";
 
 function mockFetchOnce(response: { ok: boolean; status?: number; json: () => Promise<unknown> }) {
   const fetchMock = vi.fn().mockResolvedValue(response);
@@ -27,7 +29,11 @@ describe("exchangeEmbeddedSignupCode", () => {
       }),
     });
 
-    const result = await exchangeEmbeddedSignupCode(APP_CREDS, "AQD_valid_code");
+    const result = await exchangeEmbeddedSignupCode({
+      ...APP_CREDS,
+      code: "AQD_valid_code",
+      redirectUri: REDIRECT_URI,
+    });
 
     expect(result).toEqual({
       accessToken: "EAAG...REAL",
@@ -39,13 +45,55 @@ describe("exchangeEmbeddedSignupCode", () => {
   it("success: never fabricates expiresInSeconds/tokenType when Meta's response omits them", async () => {
     mockFetchOnce({ ok: true, json: async () => ({ access_token: "EAAG...NOEXP" }) });
 
-    const result = await exchangeEmbeddedSignupCode(APP_CREDS, "AQD_valid_code");
+    const result = await exchangeEmbeddedSignupCode({
+      ...APP_CREDS,
+      code: "AQD_valid_code",
+      redirectUri: REDIRECT_URI,
+    });
 
     expect(result).toEqual({
       accessToken: "EAAG...NOEXP",
       expiresInSeconds: null,
       tokenType: null,
     });
+  });
+
+  it("uses POST with a JSON body containing grant_type=authorization_code and the caller-supplied redirect_uri", async () => {
+    const fetchMock = mockFetchOnce({ ok: true, json: async () => ({ access_token: "EAAG..." }) });
+
+    await exchangeEmbeddedSignupCode({
+      ...APP_CREDS,
+      code: "AQD_code",
+      redirectUri: REDIRECT_URI,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://graph.facebook.com/v21.0/oauth/access_token");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({
+      client_id: "APP123",
+      client_secret: "SUPER_SECRET_VALUE",
+      grant_type: "authorization_code",
+      redirect_uri: REDIRECT_URI,
+      code: "AQD_code",
+    });
+  });
+
+  it("redirect_uri in the outbound request always equals the caller-supplied value, never a hardcoded default", async () => {
+    const fetchMock = mockFetchOnce({ ok: true, json: async () => ({ access_token: "EAAG..." }) });
+    const customRedirectUri = "https://a-different-app-origin.example.test/callback";
+
+    await exchangeEmbeddedSignupCode({
+      ...APP_CREDS,
+      code: "AQD_code",
+      redirectUri: customRedirectUri,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).redirect_uri).toBe(customRedirectUri);
   });
 
   it("invalid/expired code: surfaces Meta's error code/subcode via WhatsAppProviderError", async () => {
@@ -61,7 +109,13 @@ describe("exchangeEmbeddedSignupCode", () => {
       }),
     });
 
-    await expect(exchangeEmbeddedSignupCode(APP_CREDS, "AQD_expired_code")).rejects.toMatchObject({
+    await expect(
+      exchangeEmbeddedSignupCode({
+        ...APP_CREDS,
+        code: "AQD_expired_code",
+        redirectUri: REDIRECT_URI,
+      }),
+    ).rejects.toMatchObject({
       name: "WhatsAppProviderError",
       status: 400,
       errorCode: "100",
@@ -75,7 +129,9 @@ describe("exchangeEmbeddedSignupCode", () => {
       vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND graph.facebook.com")),
     );
 
-    await expect(exchangeEmbeddedSignupCode(APP_CREDS, "AQD_code")).rejects.toMatchObject({
+    await expect(
+      exchangeEmbeddedSignupCode({ ...APP_CREDS, code: "AQD_code", redirectUri: REDIRECT_URI }),
+    ).rejects.toMatchObject({
       name: "WhatsAppProviderError",
       status: 502,
     });
@@ -84,12 +140,12 @@ describe("exchangeEmbeddedSignupCode", () => {
   it("malformed success response: throws when access_token is missing from a 2xx response", async () => {
     mockFetchOnce({ ok: true, json: async () => ({ token_type: "bearer" }) });
 
-    await expect(exchangeEmbeddedSignupCode(APP_CREDS, "AQD_code")).rejects.toThrow(
-      WhatsAppProviderError,
-    );
+    await expect(
+      exchangeEmbeddedSignupCode({ ...APP_CREDS, code: "AQD_code", redirectUri: REDIRECT_URI }),
+    ).rejects.toThrow(WhatsAppProviderError);
   });
 
-  it("secret-safe error handling: the code and app secret never appear in a thrown error's message", async () => {
+  it("secret-safe error handling: the code, app secret, and redirect_uri never appear in a thrown error's message", async () => {
     mockFetchOnce({
       ok: false,
       status: 400,
@@ -97,7 +153,11 @@ describe("exchangeEmbeddedSignupCode", () => {
     });
 
     try {
-      await exchangeEmbeddedSignupCode(APP_CREDS, "AQD_TOP_SECRET_CODE_VALUE");
+      await exchangeEmbeddedSignupCode({
+        ...APP_CREDS,
+        code: "AQD_TOP_SECRET_CODE_VALUE",
+        redirectUri: REDIRECT_URI,
+      });
       throw new Error("expected exchangeEmbeddedSignupCode to throw");
     } catch (err) {
       const serialized = JSON.stringify(
@@ -105,10 +165,11 @@ describe("exchangeEmbeddedSignupCode", () => {
       );
       expect(serialized).not.toContain("AQD_TOP_SECRET_CODE_VALUE");
       expect(serialized).not.toContain(APP_CREDS.appSecret);
+      expect(serialized).not.toContain(REDIRECT_URI);
     }
   });
 
-  it("never includes the code or app secret in the constructed request path used for error messages", async () => {
+  it("never includes the code, app secret, or full request body in a thrown error's message", async () => {
     mockFetchOnce({
       ok: false,
       status: 400,
@@ -116,23 +177,17 @@ describe("exchangeEmbeddedSignupCode", () => {
     });
 
     try {
-      await exchangeEmbeddedSignupCode(APP_CREDS, "AQD_TOP_SECRET_CODE_VALUE");
+      await exchangeEmbeddedSignupCode({
+        ...APP_CREDS,
+        code: "AQD_TOP_SECRET_CODE_VALUE",
+        redirectUri: REDIRECT_URI,
+      });
     } catch (err) {
       expect((err as Error).message).not.toContain("AQD_TOP_SECRET_CODE_VALUE");
       expect((err as Error).message).not.toContain(APP_CREDS.appSecret);
+      expect((err as Error).message).not.toContain(REDIRECT_URI);
       expect((err as Error).message).toBe("Meta embedded signup code exchange failed");
     }
-  });
-
-  it("omits redirect_uri from the request (Embedded Signup's documented no-redirect exchange pattern)", async () => {
-    const fetchMock = mockFetchOnce({ ok: true, json: async () => ({ access_token: "EAAG..." }) });
-
-    await exchangeEmbeddedSignupCode(APP_CREDS, "AQD_code");
-
-    const [url] = fetchMock.mock.calls[0] as [string];
-    expect(new URL(url).searchParams.has("redirect_uri")).toBe(false);
-    expect(new URL(url).searchParams.get("client_id")).toBe("APP123");
-    expect(new URL(url).searchParams.get("code")).toBe("AQD_code");
   });
 });
 
