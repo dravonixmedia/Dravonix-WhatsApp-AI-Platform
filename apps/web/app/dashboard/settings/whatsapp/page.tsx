@@ -1,10 +1,13 @@
 import { maskPhoneNumber } from "@dravonix/handover";
 import Link from "next/link";
+import { disconnectWhatsappAccountAction } from "../../../../lib/actions/whatsappSignup.js";
 import { getDashboardCapabilities } from "../../../../lib/permissions.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { EmptyState } from "../../EmptyState.js";
 import { WhatsAppIcon } from "../../Icons.js";
+import { EmbeddedSignupButton } from "./EmbeddedSignupButton.js";
+import { SendTestMessageForm } from "./SendTestMessageForm.js";
 
 export const dynamic = "force-dynamic";
 
@@ -61,12 +64,14 @@ export default async function WhatsAppConnectionPage() {
     await Promise.all([
       supabase
         .from("whatsapp_accounts")
-        .select("waba_id, business_name, status, is_test_account, last_error")
+        .select(
+          "id, waba_id, business_name, status, is_test_account, last_error, connection_source",
+        )
         .eq("company_id", companyId)
         .maybeSingle(),
       supabase
         .from("whatsapp_phone_numbers")
-        .select("phone_number_id, display_phone_number, status, webhook_health_checked_at")
+        .select("id, phone_number_id, display_phone_number, status, webhook_health_checked_at")
         .eq("company_id", companyId),
       supabase
         .from("messages")
@@ -102,8 +107,17 @@ export default async function WhatsAppConnectionPage() {
           <EmptyState
             icon={<WhatsAppIcon size={28} />}
             title="WhatsApp connection not yet set up"
-            description="WhatsApp connection setup is managed by Dravonix during onboarding. Contact your Dravonix representative to connect your WhatsApp Business Account."
+            description={
+              capabilities.canManageWhatsapp
+                ? "Connect your own WhatsApp Business Account, or contact your Dravonix representative for assisted onboarding."
+                : "WhatsApp connection setup is managed by Dravonix during onboarding, or by a company owner/admin. Contact your Dravonix representative to connect your WhatsApp Business Account."
+            }
           />
+          {capabilities.canManageWhatsapp ? (
+            <div style={{ marginTop: "1rem" }}>
+              <EmbeddedSignupButton hasExistingConnection={false} />
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="dvx-card-grid dvx-card-grid--wide" style={{ marginTop: "1.5rem" }}>
@@ -122,6 +136,35 @@ export default async function WhatsAppConnectionPage() {
               <ConnectionRow label="Last connection error" value={account.last_error} />
             ) : null}
           </div>
+
+          {capabilities.canManageWhatsapp ? (
+            <div className="dvx-card">
+              <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>
+                Manage connection
+              </div>
+              <p className="dvx-muted" style={{ fontSize: "0.8rem", marginTop: 0 }}>
+                Reconnecting updates this same connection -- it never creates a duplicate, and your
+                conversation history is preserved.
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "flex-start",
+                  flexWrap: "wrap",
+                }}
+              >
+                <EmbeddedSignupButton hasExistingConnection={true} />
+                {account.connection_source === "embedded_signup" ? (
+                  <form action={disconnectWhatsappAccountAction.bind(null, account.id)}>
+                    <button type="submit" className="dvx-button dvx-button--secondary">
+                      Disconnect
+                    </button>
+                  </form>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           <div className="dvx-card">
             <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.5rem" }}>
@@ -165,6 +208,9 @@ export default async function WhatsAppConnectionPage() {
                     : null
                 }
               />
+              {capabilities.canManageWhatsapp && phone.status === "connected" ? (
+                <SendTestMessageForm phoneNumberRowId={phone.id} />
+              ) : null}
             </div>
           ))}
         </div>

@@ -31,6 +31,7 @@ export type PermissionKey =
   | "team.manage"
   | "team.view"
   | "usage.view"
+  | "whatsapp.manage"
   | "whatsapp.view";
 
 /**
@@ -80,6 +81,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "team.manage",
     "team.view",
     "usage.view",
+    "whatsapp.manage",
     "whatsapp.view",
   ]),
   company_admin: new Set([
@@ -103,6 +105,7 @@ const ROLE_PERMISSIONS: Record<CompanyRole, ReadonlySet<PermissionKey>> = {
     "team.manage",
     "team.view",
     "usage.view",
+    "whatsapp.manage",
     "whatsapp.view",
   ]),
   manager: new Set([
@@ -197,6 +200,8 @@ export interface DashboardCapabilities {
   canManageDisplayNames: boolean;
   canViewSettings: boolean;
   canViewWhatsapp: boolean;
+  /** whatsapp.manage: connect (Embedded Signup), disconnect, or reconnect this company's own WhatsApp Business Account. Never sufficient on its own -- every mutating route/RPC re-derives and re-checks this server-side; see apps/web/app/api/integrations/meta/whatsapp/**. */
+  canManageWhatsapp: boolean;
   canViewAiSettings: boolean;
   canViewKnowledge: boolean;
   canViewBilling: boolean;
@@ -245,6 +250,7 @@ export function getDashboardCapabilities(role: CompanyRole | null): DashboardCap
     canManageDisplayNames: hasPermission(role, "team.display_name.manage"),
     canViewSettings: hasPermission(role, "settings.view"),
     canViewWhatsapp: hasPermission(role, "whatsapp.view"),
+    canManageWhatsapp: hasPermission(role, "whatsapp.manage"),
     canViewAiSettings: hasPermission(role, "ai_settings.view"),
     canViewKnowledge: hasPermission(role, "knowledge.view"),
     canViewBilling: hasPermission(role, "billing.view"),

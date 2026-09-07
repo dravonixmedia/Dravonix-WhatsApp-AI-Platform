@@ -138,6 +138,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_serv
 echo "Running Meta/WhatsApp Batch 3 Slice A Embedded Signup credential/state-machine (migration 37) RLS/RPC regression assertions..."
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_embedded_signup.sql"
 
+echo "Running Meta/WhatsApp Batch 3 Slice C client-initiated disconnect (migration 38) RLS/RPC regression assertions..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/supabase/tests/rls_whatsapp_client_disconnect.sql"
+
 echo "All RLS tests passed."
 
 # ---------------------------------------------------------------------------
