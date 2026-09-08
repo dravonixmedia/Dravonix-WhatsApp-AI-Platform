@@ -1,4 +1,5 @@
 import { encryptWhatsAppAccessToken, type WhatsAppTokenEncryptionKey } from "@dravonix/core";
+import { WhatsAppProviderError } from "./providers/graphApiProvider.js";
 import {
   exchangeEmbeddedSignupCode,
   inspectAccessToken,
@@ -77,17 +78,42 @@ export type EmbeddedSignupFlowErrorCode =
   | "persistence_failed";
 
 /**
+ * Sanitized, non-secret diagnostic detail for an `exchange_failed` error,
+ * captured ONLY from `WhatsAppProviderError`'s own already-sanitized fields
+ * (packages/whatsapp/src/providers/graphApiProvider.ts -- that class is
+ * documented to never carry a raw request/response body, so there is
+ * nothing here to redact further). Never includes the authorization code,
+ * the exchanged access token, the app secret, or any Meta response body --
+ * this module never had access to those at the point this is populated
+ * (WhatsAppProviderError itself never captures them either). Optional
+ * because not every EmbeddedSignupFlowError code has (or needs) provider
+ * diagnostics -- currently populated only for `exchange_failed`.
+ */
+export interface EmbeddedSignupFlowErrorDiagnostics {
+  /** HTTP status of the failed Meta request, or the synthetic 502 WhatsAppProviderError uses for a transport-level (fetch threw) or malformed-response failure. */
+  providerStatus?: number;
+  /** Meta's own `error.code` from the response body, when Meta returned one. */
+  providerErrorCode?: string;
+  /** Meta's own `error.error_subcode` from the response body, when Meta returned one. */
+  providerErrorSubcode?: string;
+  /** The thrown error's class name (e.g. "WhatsAppProviderError") -- a safe classification, same convention as apps/web/lib/serverLogging.ts's safeErrorDetails. */
+  providerErrorType: string;
+}
+
+/**
  * Every failure this module can throw collapses into one of a small,
  * sanitized set of codes -- never a raw Graph/exception message, never a
  * token, never an authorization code (mirrors
  * whatsapp_accounts.credential_error_code's own controlled vocabulary,
  * migration 37). Safe to show a generic message derived from `code` directly
- * to the browser.
+ * to the browser. `diagnostics`, when present, is equally safe to log/audit
+ * (never to the browser) -- see EmbeddedSignupFlowErrorDiagnostics.
  */
 export class EmbeddedSignupFlowError extends Error {
   constructor(
     message: string,
     readonly code: EmbeddedSignupFlowErrorCode,
+    readonly diagnostics?: EmbeddedSignupFlowErrorDiagnostics,
   ) {
     super(message);
     this.name = "EmbeddedSignupFlowError";
@@ -231,8 +257,26 @@ export async function completeEmbeddedSignup(
     });
     accessToken = exchanged.accessToken;
     expiresInSeconds = exchanged.expiresInSeconds;
-  } catch {
-    throw new EmbeddedSignupFlowError("Meta code exchange failed", "exchange_failed");
+  } catch (error) {
+    // Diagnostics captured ONLY from WhatsAppProviderError's own already-
+    // sanitized fields (status/errorCode/errorSubcode/name) -- never the
+    // error's `message`, and never anything from a non-WhatsAppProviderError
+    // (e.g. a raw fetch/TypeError), so this can never surface the
+    // authorization code, the access token, the app secret, or a raw
+    // response body. See EmbeddedSignupFlowErrorDiagnostics's own doc
+    // comment. This does not change what's thrown to the caller (still the
+    // same generic "exchange_failed" code) -- only what a caller MAY choose
+    // to log/audit alongside it.
+    const diagnostics: EmbeddedSignupFlowErrorDiagnostics | undefined =
+      error instanceof WhatsAppProviderError
+        ? {
+            providerStatus: error.status,
+            providerErrorCode: error.errorCode,
+            providerErrorSubcode: error.errorSubcode,
+            providerErrorType: error.name,
+          }
+        : undefined;
+    throw new EmbeddedSignupFlowError("Meta code exchange failed", "exchange_failed", diagnostics);
   }
 
   let debugTokenExpiresAt: number | null;
