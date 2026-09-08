@@ -1,6 +1,36 @@
 import { WhatsAppProviderError } from "./graphApiProvider.js";
 
 /**
+ * Every Graph API call this module makes throws this subclass instead of
+ * the bare `WhatsAppProviderError` -- it carries two additional fields Meta's
+ * standard error envelope provides (`error.type`, `error.error_data.details`)
+ * that a bare `WhatsAppProviderError` cannot express. Deliberately declared
+ * here, not on the shared `WhatsAppProviderError` class itself (used by the
+ * separate send-path provider and the AI outbound pipeline) -- this keeps
+ * the additional fields scoped to Embedded Signup's own diagnostics, with
+ * zero change to that unrelated call surface. `.name` is left as
+ * "WhatsAppProviderError" (not this subclass's own name) so the existing
+ * `providerErrorType` diagnostic field -- already shipped as a stable
+ * classification value -- is unaffected; `metaErrorType`/`errorDetail` are
+ * new, separate fields for the two new pieces of information.
+ */
+export class MetaGraphApiError extends WhatsAppProviderError {
+  constructor(
+    message: string,
+    status: number,
+    errorCode: string | undefined,
+    errorSubcode: string | undefined,
+    /** Meta's own `error.type` (e.g. "OAuthException", "GraphMethodException"), when present. */
+    public readonly metaErrorType?: string,
+    /** Meta's own `error.error_data.details` -- a short, Meta-authored clarification string, when present. */
+    public readonly errorDetail?: string,
+  ) {
+    super(message, status, errorCode, errorSubcode);
+    this.name = "WhatsAppProviderError";
+  }
+}
+
+/**
  * Meta Graph API primitives for WhatsApp Embedded Signup (Batch 3, Slice B).
  *
  * This module is deliberately narrow: it exposes typed, individually testable
@@ -51,14 +81,22 @@ import { WhatsAppProviderError } from "./graphApiProvider.js";
  * flow elsewhere in the project (if any is ever added) would still need its
  * own matching `redirect_uri`, independent of this decision.
  *
- * One thing remains genuinely unresolved and is called out explicitly
- * below rather than assumed: the exact PIN requirement for a phone
- * number's /register call in the specific Embedded-Signup-provisioned
- * context (see registerPhoneNumber's own doc comment) -- Meta's builder has
- * not yet exposed the actual registration request because no sandbox
- * signup has been completed. `pin` remains optional here, never a
- * fabricated default, and Meta's own response/error governs behavior
- * rather than an assumption baked into this code.
+ * One thing remains genuinely unresolved and is called out explicitly here
+ * rather than assumed: the exact PIN requirement for a phone number's
+ * /register call in the specific Embedded-Signup-provisioned context (see
+ * registerPhoneNumber's own doc comment). A real staging attempt against the
+ * Meta Sandbox WhatsApp Business Account (Embedded Signup, no PIN supplied)
+ * reached this call and failed with `error.code=100` and no `error_subcode`
+ * -- the generic invalid-parameter family, but Meta's response did not carry
+ * enough detail (no subcode; `error.type`/`error_data.details` were not
+ * captured by this module at the time of that attempt) to confirm whether a
+ * PIN is the missing piece or something else entirely is invalid for this
+ * specific sandbox/Embedded-Signup-provisioned number. This module now also
+ * captures `error.type` and `error_data.details` (see `MetaGraphApiError`
+ * and `extractErrorCode` below) specifically so the next real attempt's
+ * diagnostics can resolve this without another guess. `pin` remains
+ * optional here, never a fabricated default, and Meta's own response/error
+ * governs behavior rather than an assumption baked into this code.
  */
 
 /** Credentials for the Meta App itself (not a specific WABA/user token) -- needed only for the OAuth code exchange and token inspection, per Meta's documented "app access token" model. */
@@ -130,11 +168,13 @@ export async function exchangeEmbeddedSignupCode(
 
   if (!response.ok) {
     const errorCode = await extractErrorCode(response);
-    throw new WhatsAppProviderError(
+    throw new MetaGraphApiError(
       "Meta embedded signup code exchange failed",
       response.status,
       errorCode.code,
       errorCode.subcode,
+      errorCode.type,
+      errorCode.detail,
     );
   }
 
@@ -201,11 +241,13 @@ export async function inspectAccessToken(
 
   if (!response.ok) {
     const errorCode = await extractErrorCode(response);
-    throw new WhatsAppProviderError(
+    throw new MetaGraphApiError(
       "Meta access token inspection failed",
       response.status,
       errorCode.code,
       errorCode.subcode,
+      errorCode.type,
+      errorCode.detail,
     );
   }
 
@@ -304,11 +346,13 @@ export class MetaGraphManagementClient {
 
     if (!response.ok) {
       const errorCode = await extractErrorCode(response);
-      throw new WhatsAppProviderError(
+      throw new MetaGraphApiError(
         `Meta Graph API request to ${path} failed with status ${response.status}`,
         response.status,
         errorCode.code,
         errorCode.subcode,
+        errorCode.type,
+        errorCode.detail,
       );
     }
 
@@ -453,15 +497,37 @@ export class MetaGraphManagementClient {
   }
 }
 
-/** Extracts Meta's {error.code, error.error_subcode} from a failed response body, exactly like GraphApiWhatsAppProvider's own error handling -- never returns or logs the rest of the body. */
-async function extractErrorCode(
-  response: Response,
-): Promise<{ code: string | undefined; subcode: string | undefined }> {
+/**
+ * Extracts Meta's {error.code, error.error_subcode, error.type,
+ * error.error_data.details} from a failed response body -- the same four
+ * fields Meta's Graph API error envelope has carried for years across every
+ * product (this shape itself is long-stable and well-documented; it is not
+ * specific to Embedded Signup). Never returns or logs anything else from the
+ * body -- no `error.message` (can echo request specifics), no
+ * `error.fbtrace_id`, no raw body.
+ */
+async function extractErrorCode(response: Response): Promise<{
+  code: string | undefined;
+  subcode: string | undefined;
+  type: string | undefined;
+  detail: string | undefined;
+}> {
   const body = await response.json().catch(() => ({}));
-  const apiError = (body as { error?: { code?: string | number; error_subcode?: string | number } })
-    ?.error;
+  const apiError = (
+    body as {
+      error?: {
+        code?: string | number;
+        error_subcode?: string | number;
+        type?: string;
+        error_data?: { details?: string };
+      };
+    }
+  )?.error;
   return {
     code: apiError?.code !== undefined ? String(apiError.code) : undefined,
     subcode: apiError?.error_subcode !== undefined ? String(apiError.error_subcode) : undefined,
+    type: typeof apiError?.type === "string" ? apiError.type : undefined,
+    detail:
+      typeof apiError?.error_data?.details === "string" ? apiError.error_data.details : undefined,
   };
 }

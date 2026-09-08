@@ -3,6 +3,7 @@ import { WhatsAppProviderError } from "./providers/graphApiProvider.js";
 import {
   exchangeEmbeddedSignupCode,
   inspectAccessToken,
+  MetaGraphApiError,
   type MetaAppCredentials,
   type MetaGraphManagementClient,
 } from "./providers/embeddedSignupProvider.js";
@@ -78,21 +79,25 @@ export type EmbeddedSignupFlowErrorCode =
   | "persistence_failed";
 
 /**
- * Sanitized, non-secret diagnostic detail for an `exchange_failed` or
- * `registration_failed` error, captured ONLY from `WhatsAppProviderError`'s
- * own already-sanitized fields
- * (packages/whatsapp/src/providers/graphApiProvider.ts -- that class is
+ * Sanitized, non-secret diagnostic detail for any of the Meta-Graph-API-
+ * calling failure codes below, captured ONLY from `WhatsAppProviderError`'s
+ * (or its `MetaGraphApiError` subclass's, packages/whatsapp/src/providers/
+ * embeddedSignupProvider.ts) own already-sanitized fields -- that class is
  * documented to never carry a raw request/response body, so there is
- * nothing here to redact further). Never includes the authorization code,
+ * nothing here to redact further. Never includes the authorization code,
  * the exchanged access token, the app secret, a PIN, an Authorization
  * header, or any raw Meta response body -- this module never had access to
  * those at the point this is populated (WhatsAppProviderError itself never
- * captures them either). Optional because not every EmbeddedSignupFlowError
- * code has (or needs) provider diagnostics -- currently populated only for
- * `exchange_failed` and `registration_failed` (the two steps that have
- * actually surfaced an undiagnosable real-world staging failure so far;
- * `registered.success === false` -- a 2xx response with no error body --
- * has nothing to capture either way).
+ * captures them either). Populated for every EmbeddedSignupFlowError code
+ * that originates from a caught Graph API exception (`exchange_failed`,
+ * `token_verification_failed`, `graph_verification_failed`,
+ * `registration_failed`, `subscription_failed`) via the shared
+ * `captureProviderDiagnostics` helper below. `attempt_not_claimable` and
+ * `phone_ownership_mismatch` never get diagnostics -- neither originates
+ * from a caught provider exception (the former is a repository-layer
+ * rejection, the latter an explicit boolean check on a successful
+ * response) -- and `registered.success === false` (a 2xx response with no
+ * error body) has nothing to capture either.
  */
 export interface EmbeddedSignupFlowErrorDiagnostics {
   /** HTTP status of the failed Meta request, or the synthetic 502 WhatsAppProviderError uses for a transport-level (fetch threw) or malformed-response failure. */
@@ -103,6 +108,33 @@ export interface EmbeddedSignupFlowErrorDiagnostics {
   providerErrorSubcode?: string;
   /** The thrown error's class name (e.g. "WhatsAppProviderError") -- a safe classification, same convention as apps/web/lib/serverLogging.ts's safeErrorDetails. */
   providerErrorType: string;
+  /** Meta's own `error.type` (e.g. "OAuthException", "GraphMethodException"), when present -- distinct from `providerErrorType` above, which is this project's own wrapper class name, not Meta's. */
+  metaErrorType?: string;
+  /** Meta's own `error.error_data.details` -- a short, Meta-authored clarification string, when present. This is the field Meta itself documents as the one to read to disambiguate a generic error.code=100. */
+  providerErrorDetail?: string;
+}
+
+/**
+ * Shared diagnostics-capture logic for every catch block below that wraps a
+ * Graph API call: returns sanitized diagnostics when (and only when) the
+ * caught value is a real `WhatsAppProviderError` (or its `MetaGraphApiError`
+ * subclass) -- `undefined` for anything else (a plain thrown `Error`, a
+ * already-classified `EmbeddedSignupFlowError` from a nested call, etc.),
+ * since there is nothing safe to report in that case.
+ */
+function captureProviderDiagnostics(
+  error: unknown,
+): EmbeddedSignupFlowErrorDiagnostics | undefined {
+  if (!(error instanceof WhatsAppProviderError)) return undefined;
+  return {
+    providerStatus: error.status,
+    providerErrorCode: error.errorCode,
+    providerErrorSubcode: error.errorSubcode,
+    providerErrorType: error.name,
+    ...(error instanceof MetaGraphApiError
+      ? { metaErrorType: error.metaErrorType, providerErrorDetail: error.errorDetail }
+      : {}),
+  };
 }
 
 /**
@@ -260,25 +292,16 @@ export async function completeEmbeddedSignup(
     accessToken = exchanged.accessToken;
     expiresInSeconds = exchanged.expiresInSeconds;
   } catch (error) {
-    // Diagnostics captured ONLY from WhatsAppProviderError's own already-
-    // sanitized fields (status/errorCode/errorSubcode/name) -- never the
-    // error's `message`, and never anything from a non-WhatsAppProviderError
-    // (e.g. a raw fetch/TypeError), so this can never surface the
-    // authorization code, the access token, the app secret, or a raw
-    // response body. See EmbeddedSignupFlowErrorDiagnostics's own doc
-    // comment. This does not change what's thrown to the caller (still the
-    // same generic "exchange_failed" code) -- only what a caller MAY choose
-    // to log/audit alongside it.
-    const diagnostics: EmbeddedSignupFlowErrorDiagnostics | undefined =
-      error instanceof WhatsAppProviderError
-        ? {
-            providerStatus: error.status,
-            providerErrorCode: error.errorCode,
-            providerErrorSubcode: error.errorSubcode,
-            providerErrorType: error.name,
-          }
-        : undefined;
-    throw new EmbeddedSignupFlowError("Meta code exchange failed", "exchange_failed", diagnostics);
+    // Diagnostics captured via the shared helper above -- see
+    // EmbeddedSignupFlowErrorDiagnostics's own doc comment for exactly what
+    // it can and cannot contain. This does not change what's thrown to the
+    // caller (still the same generic "exchange_failed" code) -- only what a
+    // caller MAY choose to log/audit alongside it.
+    throw new EmbeddedSignupFlowError(
+      "Meta code exchange failed",
+      "exchange_failed",
+      captureProviderDiagnostics(error),
+    );
   }
 
   let debugTokenExpiresAt: number | null;
@@ -296,6 +319,7 @@ export async function completeEmbeddedSignup(
     throw new EmbeddedSignupFlowError(
       "Access token inspection failed",
       "token_verification_failed",
+      captureProviderDiagnostics(error),
     );
   }
 
@@ -305,10 +329,11 @@ export async function completeEmbeddedSignup(
   try {
     const account = await graphClient.getWhatsAppBusinessAccount(wabaId);
     businessName = account.name;
-  } catch {
+  } catch (error) {
     throw new EmbeddedSignupFlowError(
       "WABA is not accessible with the exchanged token",
       "graph_verification_failed",
+      captureProviderDiagnostics(error),
     );
   }
 
@@ -329,6 +354,7 @@ export async function completeEmbeddedSignup(
     throw new EmbeddedSignupFlowError(
       "Phone ownership verification failed",
       "graph_verification_failed",
+      captureProviderDiagnostics(error),
     );
   }
 
@@ -342,26 +368,16 @@ export async function completeEmbeddedSignup(
     }
   } catch (error) {
     if (error instanceof EmbeddedSignupFlowError) throw error;
-    // Diagnostics captured ONLY from WhatsAppProviderError's own already-
-    // sanitized fields -- same mechanism and same guarantees as the
-    // exchange_failed catch block above (see EmbeddedSignupFlowErrorDiagnostics's
-    // own doc comment): never the access token, PIN, Authorization header, or
-    // a raw Graph response body. Does not change what's thrown to the caller
+    // Diagnostics captured via the shared helper above -- same mechanism and
+    // same guarantees as every other Graph-call catch block in this
+    // function: never the access token, PIN, Authorization header, or a raw
+    // Graph response body. Does not change what's thrown to the caller
     // (still the same generic "registration_failed" code) -- only what a
     // caller MAY choose to log/audit alongside it.
-    const diagnostics: EmbeddedSignupFlowErrorDiagnostics | undefined =
-      error instanceof WhatsAppProviderError
-        ? {
-            providerStatus: error.status,
-            providerErrorCode: error.errorCode,
-            providerErrorSubcode: error.errorSubcode,
-            providerErrorType: error.name,
-          }
-        : undefined;
     throw new EmbeddedSignupFlowError(
       "Phone number registration failed",
       "registration_failed",
-      diagnostics,
+      captureProviderDiagnostics(error),
     );
   }
 
@@ -372,7 +388,11 @@ export async function completeEmbeddedSignup(
     }
   } catch (error) {
     if (error instanceof EmbeddedSignupFlowError) throw error;
-    throw new EmbeddedSignupFlowError("Webhook subscription failed", "subscription_failed");
+    throw new EmbeddedSignupFlowError(
+      "Webhook subscription failed",
+      "subscription_failed",
+      captureProviderDiagnostics(error),
+    );
   }
 
   // AAD-bound to the WABA id, not the (not-yet-known-at-encryption-time, for

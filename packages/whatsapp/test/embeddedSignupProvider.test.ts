@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MetaGraphApiError,
   MetaGraphManagementClient,
   exchangeEmbeddedSignupCode,
   inspectAccessToken,
@@ -143,6 +144,40 @@ describe("exchangeEmbeddedSignupCode", () => {
       errorCode: "100",
       errorSubcode: "36008",
     });
+  });
+
+  it("also captures Meta's error.type and error.error_data.details (via MetaGraphApiError) -- the fields needed to disambiguate a bare error.code=100 with no subcode", async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: {
+          message: "Invalid parameter",
+          type: "OAuthException",
+          code: 100,
+          error_data: {
+            details: "A two-step verification PIN is required to register this phone number.",
+          },
+        },
+      }),
+    });
+
+    let caught: MetaGraphApiError | undefined;
+    try {
+      await exchangeEmbeddedSignupCode({ ...APP_CREDS, code: "AQD_code" });
+    } catch (error) {
+      caught = error as MetaGraphApiError;
+    }
+
+    expect(caught).toBeInstanceOf(MetaGraphApiError);
+    expect(caught?.name).toBe("WhatsAppProviderError");
+    expect(caught?.status).toBe(400);
+    expect(caught?.errorCode).toBe("100");
+    expect(caught?.errorSubcode).toBeUndefined();
+    expect(caught?.metaErrorType).toBe("OAuthException");
+    expect(caught?.errorDetail).toBe(
+      "A two-step verification PIN is required to register this phone number.",
+    );
   });
 
   it("Meta API failure (network error): throws a generic 502 WhatsAppProviderError, never leaking the underlying cause", async () => {
@@ -465,6 +500,40 @@ describe("MetaGraphManagementClient", () => {
       } catch (err) {
         expect((err as Error).message).not.toContain("999999");
       }
+    });
+
+    it("captures Meta's error.type and error.error_data.details as MetaGraphApiError fields -- the detail needed to disambiguate a bare code=100 (e.g. whether a PIN is actually required)", async () => {
+      mockFetchOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: {
+            message: "Invalid parameter",
+            type: "OAuthException",
+            code: 100,
+            error_data: {
+              messaging_product: "whatsapp",
+              details: "A two-step verification PIN is required to register this phone number.",
+            },
+          },
+        }),
+      });
+
+      let caught: MetaGraphApiError | undefined;
+      try {
+        await client().registerPhoneNumber("PHONE1");
+      } catch (error) {
+        caught = error as MetaGraphApiError;
+      }
+
+      expect(caught).toBeInstanceOf(MetaGraphApiError);
+      expect(caught?.errorCode).toBe("100");
+      expect(caught?.metaErrorType).toBe("OAuthException");
+      expect(caught?.errorDetail).toBe(
+        "A two-step verification PIN is required to register this phone number.",
+      );
+      // Only `details` is read out of error_data -- no other sub-field is captured or logged.
+      expect(Object.keys(caught ?? {})).not.toContain("messaging_product");
     });
   });
 
