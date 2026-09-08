@@ -266,7 +266,11 @@ describe("POST /api/integrations/meta/whatsapp/signup/complete", () => {
       providerErrorType: "WhatsAppProviderError",
     };
     completeEmbeddedSignup.mockRejectedValue(
-      new FakeEmbeddedSignupFlowError("Meta's raw internal detail, never shown to the user", "exchange_failed", diagnostics),
+      new FakeEmbeddedSignupFlowError(
+        "Meta's raw internal detail, never shown to the user",
+        "exchange_failed",
+        diagnostics,
+      ),
     );
 
     const response = await callRoute(VALID_BODY);
@@ -298,7 +302,10 @@ describe("POST /api/integrations/meta/whatsapp/signup/complete", () => {
 
   it("exchange_failed without provider diagnostics (e.g. a plain network failure): never calls logServerError for it, and audits failureCode only", async () => {
     completeEmbeddedSignup.mockRejectedValue(
-      new FakeEmbeddedSignupFlowError("Meta's raw internal detail, never shown to the user", "exchange_failed"),
+      new FakeEmbeddedSignupFlowError(
+        "Meta's raw internal detail, never shown to the user",
+        "exchange_failed",
+      ),
     );
 
     await callRoute(VALID_BODY);

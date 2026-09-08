@@ -215,12 +215,7 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
 
   it("exchange_failed: when Meta rejects the code with a WhatsAppProviderError, the sanitized status/error code/subcode are captured as diagnostics", async () => {
     vi.spyOn(embeddedSignupProvider, "exchangeEmbeddedSignupCode").mockRejectedValue(
-      new WhatsAppProviderError(
-        "Meta embedded signup code exchange failed",
-        400,
-        "190",
-        "463",
-      ),
+      new WhatsAppProviderError("Meta embedded signup code exchange failed", 400, "190", "463"),
     );
     const repo = makeRepo();
     const graphClient = makeGraphClient();
@@ -254,12 +249,7 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
 
   it("exchange_failed: diagnostics never leak the authorization code, app secret, or any raw response text", async () => {
     vi.spyOn(embeddedSignupProvider, "exchangeEmbeddedSignupCode").mockRejectedValue(
-      new WhatsAppProviderError(
-        "Meta embedded signup code exchange failed",
-        400,
-        "190",
-        "463",
-      ),
+      new WhatsAppProviderError("Meta embedded signup code exchange failed", 400, "190", "463"),
     );
     const repo = makeRepo();
     const graphClient = makeGraphClient();
