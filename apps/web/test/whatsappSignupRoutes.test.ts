@@ -18,6 +18,7 @@ class FakeEmbeddedSignupFlowError extends Error {
   constructor(
     message: string,
     readonly code: string,
+    readonly diagnostics?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -256,6 +257,61 @@ describe("POST /api/integrations/meta/whatsapp/signup/complete", () => {
       );
     },
   );
+
+  it("exchange_failed with provider diagnostics: audits and logs the sanitized detail, but never sends it to the browser", async () => {
+    const diagnostics = {
+      providerStatus: 400,
+      providerErrorCode: "190",
+      providerErrorSubcode: "463",
+      providerErrorType: "WhatsAppProviderError",
+    };
+    completeEmbeddedSignup.mockRejectedValue(
+      new FakeEmbeddedSignupFlowError("Meta's raw internal detail, never shown to the user", "exchange_failed", diagnostics),
+    );
+
+    const response = await callRoute(VALID_BODY);
+    const responseText = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(responseText).not.toContain("Meta's raw internal detail");
+    expect(responseText).not.toContain("providerErrorCode");
+    expect(responseText).not.toContain("190");
+
+    expect(logServerError).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Error),
+      { companyId: "company-a" },
+      expect.objectContaining({
+        operation: "whatsapp_signup_complete.exchange_failed",
+        ...diagnostics,
+      }),
+    );
+
+    expect(recordAuditLog).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "whatsapp.connect_failed",
+        metadata: { failureCode: "exchange_failed", ...diagnostics },
+      }),
+    );
+  });
+
+  it("exchange_failed without provider diagnostics (e.g. a plain network failure): never calls logServerError for it, and audits failureCode only", async () => {
+    completeEmbeddedSignup.mockRejectedValue(
+      new FakeEmbeddedSignupFlowError("Meta's raw internal detail, never shown to the user", "exchange_failed"),
+    );
+
+    await callRoute(VALID_BODY);
+
+    expect(logServerError).not.toHaveBeenCalled();
+    expect(recordAuditLog).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "whatsapp.connect_failed",
+        metadata: { failureCode: "exchange_failed" },
+      }),
+    );
+  });
 
   it("an unexpected (non-flow) error is logged and returns a generic 500, never the raw exception text", async () => {
     completeEmbeddedSignup.mockRejectedValue(new Error("unexpected database explosion"));

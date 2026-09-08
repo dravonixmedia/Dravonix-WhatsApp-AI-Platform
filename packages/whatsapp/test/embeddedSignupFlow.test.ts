@@ -6,6 +6,7 @@ import {
   type SignupAttemptRepository,
 } from "../src/embeddedSignupFlow.js";
 import * as embeddedSignupProvider from "../src/providers/embeddedSignupProvider.js";
+import { WhatsAppProviderError } from "../src/providers/graphApiProvider.js";
 
 /**
  * Batch 3, Slice C: unit tests for the orchestration function that composes
@@ -210,6 +211,111 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
     ).rejects.toMatchObject({ code: "exchange_failed" });
 
     expect(repo.completeAttempt).not.toHaveBeenCalled();
+  });
+
+  it("exchange_failed: when Meta rejects the code with a WhatsAppProviderError, the sanitized status/error code/subcode are captured as diagnostics", async () => {
+    vi.spyOn(embeddedSignupProvider, "exchangeEmbeddedSignupCode").mockRejectedValue(
+      new WhatsAppProviderError(
+        "Meta embedded signup code exchange failed",
+        400,
+        "190",
+        "463",
+      ),
+    );
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          redirectUri: "https://example.test/callback",
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("exchange_failed");
+    // Exactly the sanitized fields WhatsAppProviderError exposes -- nothing else.
+    expect(caught?.diagnostics).toEqual({
+      providerStatus: 400,
+      providerErrorCode: "190",
+      providerErrorSubcode: "463",
+      providerErrorType: "WhatsAppProviderError",
+    });
+    expect(repo.completeAttempt).not.toHaveBeenCalled();
+  });
+
+  it("exchange_failed: diagnostics never leak the authorization code, app secret, or any raw response text", async () => {
+    vi.spyOn(embeddedSignupProvider, "exchangeEmbeddedSignupCode").mockRejectedValue(
+      new WhatsAppProviderError(
+        "Meta embedded signup code exchange failed",
+        400,
+        "190",
+        "463",
+      ),
+    );
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          redirectUri: "https://example.test/callback",
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    const serialized = JSON.stringify(caught?.diagnostics ?? {});
+    expect(serialized).not.toContain(BASE_INPUT.code);
+    expect(serialized).not.toContain(CREDS.appSecret);
+    expect(Object.keys(caught?.diagnostics ?? {}).sort()).toEqual([
+      "providerErrorCode",
+      "providerErrorSubcode",
+      "providerErrorType",
+      "providerStatus",
+    ]);
+  });
+
+  it("exchange_failed: a non-WhatsAppProviderError (e.g. a raw fetch/TypeError) never produces diagnostics", async () => {
+    vi.spyOn(embeddedSignupProvider, "exchangeEmbeddedSignupCode").mockRejectedValue(
+      new TypeError("fetch failed: getaddrinfo ENOTFOUND graph.facebook.com"),
+    );
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          redirectUri: "https://example.test/callback",
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("exchange_failed");
+    expect(caught?.diagnostics).toBeUndefined();
   });
 
   it("token_verification_failed: a token issued to a DIFFERENT Meta app is rejected", async () => {
