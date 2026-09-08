@@ -6,6 +6,7 @@ import {
   type SignupAttemptRepository,
 } from "../src/embeddedSignupFlow.js";
 import * as embeddedSignupProvider from "../src/providers/embeddedSignupProvider.js";
+import { MetaGraphApiError } from "../src/providers/embeddedSignupProvider.js";
 import { WhatsAppProviderError } from "../src/providers/graphApiProvider.js";
 
 /**
@@ -591,5 +592,279 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
         BASE_INPUT,
       ),
     ).rejects.toMatchObject({ code: "persistence_failed" });
+  });
+});
+
+describe("completeEmbeddedSignup: provider diagnostics are captured for every Graph-call failure stage, not just exchange_failed/registration_failed", () => {
+  it("token_verification_failed: a WhatsAppProviderError from inspectAccessToken itself is captured as diagnostics", async () => {
+    vi.spyOn(embeddedSignupProvider, "inspectAccessToken").mockRejectedValue(
+      new MetaGraphApiError(
+        "Meta access token inspection failed",
+        400,
+        "100",
+        undefined,
+        "OAuthException",
+      ),
+    );
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("token_verification_failed");
+    expect(caught?.diagnostics).toEqual({
+      providerStatus: 400,
+      providerErrorCode: "100",
+      providerErrorSubcode: undefined,
+      providerErrorType: "WhatsAppProviderError",
+      metaErrorType: "OAuthException",
+      providerErrorDetail: undefined,
+    });
+  });
+
+  it("token_verification_failed: an explicit app-id mismatch (not a caught provider exception) gets no diagnostics -- nothing to capture", async () => {
+    vi.spyOn(embeddedSignupProvider, "inspectAccessToken").mockResolvedValue({
+      isValid: true,
+      appId: "SOME-OTHER-APP-ID",
+      expiresAt: 0,
+      scopes: [],
+    });
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("token_verification_failed");
+    expect(caught?.diagnostics).toBeUndefined();
+  });
+
+  it("graph_verification_failed (WABA reachability): a WhatsAppProviderError from getWhatsAppBusinessAccount is captured as diagnostics", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      getWhatsAppBusinessAccount: vi
+        .fn()
+        .mockRejectedValue(new WhatsAppProviderError("Forbidden", 403, "200")),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("graph_verification_failed");
+    expect(caught?.diagnostics).toEqual({
+      providerStatus: 403,
+      providerErrorCode: "200",
+      providerErrorSubcode: undefined,
+      providerErrorType: "WhatsAppProviderError",
+    });
+  });
+
+  it("graph_verification_failed (phone ownership): a WhatsAppProviderError from getPhoneNumbersForWaba is captured as diagnostics", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      getPhoneNumbersForWaba: vi
+        .fn()
+        .mockRejectedValue(new WhatsAppProviderError("Not found", 404, "100")),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("graph_verification_failed");
+    expect(caught?.diagnostics).toEqual({
+      providerStatus: 404,
+      providerErrorCode: "100",
+      providerErrorSubcode: undefined,
+      providerErrorType: "WhatsAppProviderError",
+    });
+  });
+
+  it("phone_ownership_mismatch: the explicit belongs===false branch (not a caught provider exception) gets no diagnostics", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      verifyPhoneBelongsToWaba: vi.fn().mockResolvedValue(false),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        { ...BASE_INPUT, phoneNumberId: "someone-elses-phone-number-id" },
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("phone_ownership_mismatch");
+    expect(caught?.diagnostics).toBeUndefined();
+  });
+
+  it("subscription_failed: a WhatsAppProviderError from subscribeAppToWaba is captured as diagnostics, including Meta's error.type/error_data.details when present", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      subscribeAppToWaba: vi
+        .fn()
+        .mockRejectedValue(
+          new MetaGraphApiError(
+            "Forbidden",
+            403,
+            "200",
+            undefined,
+            "OAuthException",
+            "Application does not have permission for this action",
+          ),
+        ),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("subscription_failed");
+    expect(caught?.diagnostics).toEqual({
+      providerStatus: 403,
+      providerErrorCode: "200",
+      providerErrorSubcode: undefined,
+      providerErrorType: "WhatsAppProviderError",
+      metaErrorType: "OAuthException",
+      providerErrorDetail: "Application does not have permission for this action",
+    });
+  });
+
+  it("subscription_failed: Meta returns success: false (not a caught exception) gets no diagnostics -- nothing to capture", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      subscribeAppToWaba: vi.fn().mockResolvedValue({ success: false }),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("subscription_failed");
+    expect(caught?.diagnostics).toBeUndefined();
+  });
+
+  it("none of the new diagnostics fields ever leak the access token, app secret, or a PIN, across every hardened step", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      subscribeAppToWaba: vi
+        .fn()
+        .mockRejectedValue(
+          new MetaGraphApiError(
+            "Forbidden",
+            403,
+            "200",
+            undefined,
+            "OAuthException",
+            "generic detail",
+          ),
+        ),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    const serialized = JSON.stringify(caught?.diagnostics ?? {});
+    expect(serialized).not.toContain("exchanged-token-value");
+    expect(serialized).not.toContain(CREDS.appSecret);
+    expect(Object.keys(caught?.diagnostics ?? {}).sort()).toEqual(
+      [
+        "metaErrorType",
+        "providerErrorCode",
+        "providerErrorDetail",
+        "providerErrorSubcode",
+        "providerErrorType",
+        "providerStatus",
+      ].sort(),
+    );
   });
 });
