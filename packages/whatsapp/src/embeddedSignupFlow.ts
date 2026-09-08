@@ -78,16 +78,21 @@ export type EmbeddedSignupFlowErrorCode =
   | "persistence_failed";
 
 /**
- * Sanitized, non-secret diagnostic detail for an `exchange_failed` error,
- * captured ONLY from `WhatsAppProviderError`'s own already-sanitized fields
+ * Sanitized, non-secret diagnostic detail for an `exchange_failed` or
+ * `registration_failed` error, captured ONLY from `WhatsAppProviderError`'s
+ * own already-sanitized fields
  * (packages/whatsapp/src/providers/graphApiProvider.ts -- that class is
  * documented to never carry a raw request/response body, so there is
  * nothing here to redact further). Never includes the authorization code,
- * the exchanged access token, the app secret, or any Meta response body --
- * this module never had access to those at the point this is populated
- * (WhatsAppProviderError itself never captures them either). Optional
- * because not every EmbeddedSignupFlowError code has (or needs) provider
- * diagnostics -- currently populated only for `exchange_failed`.
+ * the exchanged access token, the app secret, a PIN, an Authorization
+ * header, or any raw Meta response body -- this module never had access to
+ * those at the point this is populated (WhatsAppProviderError itself never
+ * captures them either). Optional because not every EmbeddedSignupFlowError
+ * code has (or needs) provider diagnostics -- currently populated only for
+ * `exchange_failed` and `registration_failed` (the two steps that have
+ * actually surfaced an undiagnosable real-world staging failure so far;
+ * `registered.success === false` -- a 2xx response with no error body --
+ * has nothing to capture either way).
  */
 export interface EmbeddedSignupFlowErrorDiagnostics {
   /** HTTP status of the failed Meta request, or the synthetic 502 WhatsAppProviderError uses for a transport-level (fetch threw) or malformed-response failure. */
@@ -337,7 +342,27 @@ export async function completeEmbeddedSignup(
     }
   } catch (error) {
     if (error instanceof EmbeddedSignupFlowError) throw error;
-    throw new EmbeddedSignupFlowError("Phone number registration failed", "registration_failed");
+    // Diagnostics captured ONLY from WhatsAppProviderError's own already-
+    // sanitized fields -- same mechanism and same guarantees as the
+    // exchange_failed catch block above (see EmbeddedSignupFlowErrorDiagnostics's
+    // own doc comment): never the access token, PIN, Authorization header, or
+    // a raw Graph response body. Does not change what's thrown to the caller
+    // (still the same generic "registration_failed" code) -- only what a
+    // caller MAY choose to log/audit alongside it.
+    const diagnostics: EmbeddedSignupFlowErrorDiagnostics | undefined =
+      error instanceof WhatsAppProviderError
+        ? {
+            providerStatus: error.status,
+            providerErrorCode: error.errorCode,
+            providerErrorSubcode: error.errorSubcode,
+            providerErrorType: error.name,
+          }
+        : undefined;
+    throw new EmbeddedSignupFlowError(
+      "Phone number registration failed",
+      "registration_failed",
+      diagnostics,
+    );
   }
 
   try {
