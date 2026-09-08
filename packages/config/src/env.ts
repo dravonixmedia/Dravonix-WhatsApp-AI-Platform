@@ -65,21 +65,6 @@ const rawEnvSchema = z.object({
   WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION: z.string().optional(),
   WHATSAPP_TOKEN_ENCRYPTION_KEY_V1: z.string().optional(),
 
-  // Meta/WhatsApp Batch 3, Slice C: the redirect_uri apps/web's server-side
-  // code-exchange route (POST /api/integrations/meta/whatsapp/signup/complete)
-  // sends to exchangeEmbeddedSignupCode -- must exactly match the redirect
-  // URI configured on this Meta app's "DRAIVA WhatsApp Signup" Facebook Login
-  // for Business configuration. Server-only; never sent to the browser (the
-  // browser-side FB.login call never uses a redirect at all -- it is a JS SDK
-  // popup flow -- but Meta's own token-exchange step still requires this
-  // value to match the app's configured setting). Distinct from the
-  // NEXT_PUBLIC_META_APP_ID/NEXT_PUBLIC_META_WHATSAPP_CONFIG_ID pair below,
-  // which apps/web reads directly via process.env (Next.js build-time
-  // inlining, same convention as NEXT_PUBLIC_SUPABASE_URL in
-  // apps/web/lib/supabase/client.ts) -- not through this schema, since they
-  // are intentionally public and never validated as "server secret config".
-  META_EMBEDDED_SIGNUP_REDIRECT_URI: z.string().url().optional(),
-
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-5"),
   // 1024 was tuned against English-only structured responses. Non-Latin/
