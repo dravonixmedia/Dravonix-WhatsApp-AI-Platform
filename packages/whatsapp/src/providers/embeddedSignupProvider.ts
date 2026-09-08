@@ -81,22 +81,21 @@ export class MetaGraphApiError extends WhatsAppProviderError {
  * flow elsewhere in the project (if any is ever added) would still need its
  * own matching `redirect_uri`, independent of this decision.
  *
- * One thing remains genuinely unresolved and is called out explicitly here
- * rather than assumed: the exact PIN requirement for a phone number's
- * /register call in the specific Embedded-Signup-provisioned context (see
- * registerPhoneNumber's own doc comment). A real staging attempt against the
- * Meta Sandbox WhatsApp Business Account (Embedded Signup, no PIN supplied)
- * reached this call and failed with `error.code=100` and no `error_subcode`
- * -- the generic invalid-parameter family, but Meta's response did not carry
- * enough detail (no subcode; `error.type`/`error_data.details` were not
- * captured by this module at the time of that attempt) to confirm whether a
- * PIN is the missing piece or something else entirely is invalid for this
- * specific sandbox/Embedded-Signup-provisioned number. This module now also
- * captures `error.type` and `error_data.details` (see `MetaGraphApiError`
- * and `extractErrorCode` below) specifically so the next real attempt's
- * diagnostics can resolve this without another guess. `pin` remains
- * optional here, never a fabricated default, and Meta's own response/error
- * governs behavior rather than an assumption baked into this code.
+ * RESOLVED (was previously called out here as unresolved): the phone
+ * registration PIN requirement. A real staging attempt against the Meta
+ * Sandbox WhatsApp Business Account (Embedded Signup, no PIN supplied)
+ * failed at `/register` with `error.code=100`, `error.type="OAuthException"`,
+ * no subcode, no `error_data.details` -- Meta's generic invalid-parameter
+ * signal, consistent with (though not itself proof of) a missing required
+ * parameter. Meta's documented WhatsApp Business Platform phone-registration
+ * contract requires `pin` (a 6-digit string) in this request body, alongside
+ * `messaging_product`, both to register the number and to set its two-step
+ * verification PIN. The caller (embeddedSignupFlow.ts's completeEmbeddedSignup)
+ * now generates a fresh, cryptographically random 6-digit PIN and supplies it
+ * on every registration call. `registerPhoneNumber` below still treats `pin`
+ * as an optional pass-through parameter and never invents its own default --
+ * generation is entirely the caller's responsibility -- so this module's own
+ * contract is unchanged; only its caller's behavior changed.
  */
 
 /** Credentials for the Meta App itself (not a specific WABA/user token) -- needed only for the OAuth code exchange and token inspection, per Meta's documented "app access token" model. */
@@ -431,16 +430,15 @@ export class MetaGraphManagementClient {
   }
 
   /**
-   * `POST /{phone-number-id}/register`. `pin` is optional and passed
-   * through verbatim when the caller supplies one -- this function never
-   * invents, defaults, or requires a PIN. Meta's own response/error code
-   * is the authoritative signal for whether a PIN was actually required for
-   * this specific number (see this module's own doc comment on why the
-   * exact policy for Embedded-Signup-provisioned numbers was not
-   * independently re-verified in this session). A non-2xx response
-   * (including a PIN-required rejection) surfaces as a WhatsAppProviderError
-   * with Meta's own error code/subcode intact for the caller to inspect --
-   * this function does not swallow or reinterpret that signal.
+   * `POST /{phone-number-id}/register`. `pin` is optional at this layer and
+   * passed through verbatim when the caller supplies one -- this function
+   * itself never invents, defaults, or requires a PIN; Meta's documented
+   * contract does require one, but generating it is the caller's job (see
+   * embeddedSignupFlow.ts's generateRegistrationPin and this module's own
+   * top-of-file doc comment). A non-2xx response (e.g. a rejected or missing
+   * PIN) surfaces as a WhatsAppProviderError/MetaGraphApiError with Meta's
+   * own error code/subcode/type intact for the caller to inspect -- this
+   * function does not swallow or reinterpret that signal.
    */
   async registerPhoneNumber(
     phoneNumberId: string,
