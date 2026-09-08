@@ -168,4 +168,114 @@ describe("GraphApiWhatsAppProvider", () => {
       }
     });
   });
+
+  describe("extended provider diagnostics (WhatsApp test-message send-path hardening)", () => {
+    it("captures Meta's error.type, error.error_data.details, and error.fbtrace_id alongside status/code/subcode", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: {
+            message: "Invalid parameter",
+            code: 100,
+            error_subcode: 33,
+            type: "OAuthException",
+            error_data: { details: "Recipient phone number not in allowed list" },
+            fbtrace_id: "Abc123TraceId",
+          },
+        }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const provider = new GraphApiWhatsAppProvider({
+        accessToken: "test-token",
+        graphApiVersion: "v21.0",
+      });
+
+      await expect(
+        provider.sendText({ phoneNumberId: "123", toWaId: "919999999999", body: "hi" }),
+      ).rejects.toMatchObject({
+        status: 400,
+        errorCode: "100",
+        errorSubcode: "33",
+        errorType: "OAuthException",
+        errorDetail: "Recipient phone number not in allowed list",
+        fbtraceId: "Abc123TraceId",
+      });
+    });
+
+    it("never captures Meta's raw top-level error.message into any diagnostic field", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: { message: "This message could echo request specifics", code: 100 },
+        }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const provider = new GraphApiWhatsAppProvider({
+        accessToken: "test-token",
+        graphApiVersion: "v21.0",
+      });
+
+      try {
+        await provider.sendText({ phoneNumberId: "123", toWaId: "919999999999", body: "hi" });
+        expect.unreachable("expected sendText to throw");
+      } catch (error) {
+        expect(JSON.stringify(error)).not.toContain("This message could echo request specifics");
+      }
+    });
+
+    it("bounds an unexpectedly large provider-controlled diagnostic string rather than retaining it in full", async () => {
+      const hugeDetail = "x".repeat(10_000);
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: { code: 100, error_data: { details: hugeDetail } },
+        }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const provider = new GraphApiWhatsAppProvider({
+        accessToken: "test-token",
+        graphApiVersion: "v21.0",
+      });
+
+      try {
+        await provider.sendText({ phoneNumberId: "123", toWaId: "919999999999", body: "hi" });
+        expect.unreachable("expected sendText to throw");
+      } catch (error) {
+        const detail = (error as WhatsAppProviderError).errorDetail;
+        expect(detail).toBeDefined();
+        expect(detail!.length).toBeLessThan(hugeDetail.length);
+        expect(detail!.length).toBeLessThanOrEqual(200);
+      }
+    });
+
+    it("leaves errorType/errorDetail/fbtraceId undefined when Meta's response omits them (backward compatible with existing code/subcode-only capture)", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { code: 131047, error_subcode: 2494055 } }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const provider = new GraphApiWhatsAppProvider({
+        accessToken: "test-token",
+        graphApiVersion: "v21.0",
+      });
+
+      await expect(
+        provider.sendText({ phoneNumberId: "123", toWaId: "919999999999", body: "hi" }),
+      ).rejects.toMatchObject({
+        errorCode: "131047",
+        errorSubcode: "2494055",
+        errorType: undefined,
+        errorDetail: undefined,
+        fbtraceId: undefined,
+      });
+    });
+  });
 });

@@ -7,6 +7,7 @@ import {
   GraphApiWhatsAppProvider,
   OutboundCredentialResolutionError,
   resolveOutboundAccessToken,
+  WhatsAppProviderError,
 } from "@dravonix/whatsapp";
 import { logServerError } from "../serverLogging.js";
 import { requireWhatsappManageContext } from "../whatsappSignupAuth.js";
@@ -14,6 +15,46 @@ import { requireWhatsappManageContext } from "../whatsappSignupAuth.js";
 export interface SendWhatsappTestMessageResult {
   success: boolean;
   error?: string;
+}
+
+/**
+ * Normalizes a user-entered recipient WhatsApp ID before it ever reaches
+ * Meta: trims whitespace and strips one optional leading "+" (the dashboard
+ * placeholder shows the digits-only form, but a caller pasting an E.164
+ * number with a "+" should not silently fail). Validates strictly against
+ * a sensible E.164 digit-length range (ITU-T E.164 caps a full international
+ * number at 15 digits; 8 is a practical floor for a real WhatsApp-registered
+ * MSISDN) -- anything else is rejected here, before any database lookup or
+ * Meta call, rather than sent through and left to Meta to reject blindly.
+ * This is scoped to this test-send action only; it does not touch the
+ * AI/outbound message pipeline's own recipient handling.
+ */
+function normalizeTestRecipient(raw: string): string | null {
+  const trimmed = raw.trim();
+  const withoutLeadingPlus = trimmed.startsWith("+") ? trimmed.slice(1) : trimmed;
+  return /^\d{8,15}$/.test(withoutLeadingPlus) ? withoutLeadingPlus : null;
+}
+
+/**
+ * Sanitized, non-secret diagnostic detail captured ONLY from
+ * WhatsAppProviderError's own already-sanitized fields (packages/whatsapp/
+ * src/providers/graphApiProvider.ts) -- never a raw response body, never the
+ * access token/Authorization header. Reuses the same "spread diagnostics
+ * into the log's extra fields" convention already established for Embedded
+ * Signup (see EmbeddedSignupFlowErrorDiagnostics and its use in
+ * apps/web/app/api/integrations/meta/whatsapp/signup/complete/route.ts)
+ * rather than inventing a second, incompatible shape.
+ */
+function captureProviderDiagnostics(error: unknown): Record<string, unknown> | undefined {
+  if (!(error instanceof WhatsAppProviderError)) return undefined;
+  return {
+    providerStatus: error.status,
+    providerErrorCode: error.errorCode,
+    providerErrorSubcode: error.errorSubcode,
+    providerErrorType: error.errorType,
+    providerErrorDetail: error.errorDetail,
+    providerFbtraceId: error.fbtraceId,
+  };
 }
 
 /**
@@ -34,6 +75,14 @@ export async function sendWhatsappTestMessageAction(
 
   if (!toWaId.trim() || !body.trim()) {
     return { success: false, error: "A recipient and message body are required." };
+  }
+
+  const normalizedRecipient = normalizeTestRecipient(toWaId);
+  if (!normalizedRecipient) {
+    return {
+      success: false,
+      error: "Enter a valid recipient number (digits only, with an optional leading +).",
+    };
   }
 
   const { data: phone, error: phoneError } = await serviceRoleClient
@@ -97,17 +146,22 @@ export async function sendWhatsappTestMessageAction(
   });
 
   try {
-    await provider.sendText({ phoneNumberId: phone.phone_number_id, toWaId, body });
+    await provider.sendText({
+      phoneNumberId: phone.phone_number_id,
+      toWaId: normalizedRecipient,
+      body,
+    });
   } catch (error) {
     logServerError(
       "Failed to send WhatsApp test message",
       error,
       { companyId: session.activeCompanyId },
-      { operation: "whatsapp_test_message.send" },
+      { operation: "whatsapp_test_message.send", ...(captureProviderDiagnostics(error) ?? {}) },
     );
     return {
       success: false,
-      error: "Meta rejected the test message. Please check the number and try again.",
+      error:
+        "Meta rejected the test message. Confirm that this number is an approved test recipient and try again.",
     };
   }
 

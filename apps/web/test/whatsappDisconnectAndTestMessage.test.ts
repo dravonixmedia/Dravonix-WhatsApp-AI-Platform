@@ -52,10 +52,25 @@ class FakeOutboundCredentialResolutionError extends Error {
     super(code);
   }
 }
+class FakeWhatsAppProviderError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly errorCode?: string,
+    readonly errorSubcode?: string,
+    readonly errorType?: string,
+    readonly errorDetail?: string,
+    readonly fbtraceId?: string,
+  ) {
+    super(message);
+    this.name = "WhatsAppProviderError";
+  }
+}
 vi.mock("@dravonix/whatsapp", () => ({
   GraphApiWhatsAppProvider: FakeGraphApiWhatsAppProvider,
   OutboundCredentialResolutionError: FakeOutboundCredentialResolutionError,
   resolveOutboundAccessToken: (...args: unknown[]) => resolveOutboundAccessToken(...args),
+  WhatsAppProviderError: FakeWhatsAppProviderError,
 }));
 
 vi.mock("@dravonix/config", () => ({
@@ -290,5 +305,185 @@ describe("sendWhatsappTestMessageAction", () => {
     const result = await callAction("phone-row-1", "  ", "");
 
     expect(result.success).toBe(false);
+  });
+
+  describe("recipient normalization (diagnostics hardening)", () => {
+    function mockConnectedPhoneAndAccount() {
+      return mockFrom({
+        whatsapp_phone_numbers: {
+          data: {
+            id: "phone-row-1",
+            phone_number_id: "PHONE1",
+            status: "connected",
+            whatsapp_account_id: "acc-1",
+          },
+          error: null,
+        },
+        whatsapp_accounts: {
+          data: {
+            waba_id: "WABA1",
+            connection_source: "embedded_signup",
+            encrypted_access_token: "{}",
+            encryption_key_version: 1,
+          },
+          error: null,
+        },
+      });
+    }
+
+    it("accepts an optional leading + and sends Meta digits-only", async () => {
+      resolveOutboundAccessToken.mockResolvedValue("resolved-token");
+      sendText.mockResolvedValue({ providerMessageId: "wamid.1" });
+      requireWhatsappManageContext.mockResolvedValue({
+        session: SESSION,
+        serviceRoleClient: makeSupabaseClient({ from: mockConnectedPhoneAndAccount() }),
+      });
+
+      const result = await callAction("phone-row-1", "+918086552536", "hi");
+
+      expect(result.success).toBe(true);
+      expect(sendText).toHaveBeenCalledWith({
+        phoneNumberId: "PHONE1",
+        toWaId: "918086552536",
+        body: "hi",
+      });
+    });
+
+    it("trims surrounding whitespace before normalizing", async () => {
+      resolveOutboundAccessToken.mockResolvedValue("resolved-token");
+      sendText.mockResolvedValue({ providerMessageId: "wamid.1" });
+      requireWhatsappManageContext.mockResolvedValue({
+        session: SESSION,
+        serviceRoleClient: makeSupabaseClient({ from: mockConnectedPhoneAndAccount() }),
+      });
+
+      const result = await callAction("phone-row-1", "  919999999999  ", "hi");
+
+      expect(result.success).toBe(true);
+      expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ toWaId: "919999999999" }));
+    });
+
+    it("rejects a malformed recipient (letters, too short, too long) before any database lookup or Meta call", async () => {
+      const from = vi.fn();
+      requireWhatsappManageContext.mockResolvedValue({
+        session: SESSION,
+        serviceRoleClient: makeSupabaseClient({ from }),
+      });
+
+      const result = await callAction("phone-row-1", "not-a-number", "hi");
+
+      expect(result.success).toBe(false);
+      expect(from).not.toHaveBeenCalled();
+      expect(resolveOutboundAccessToken).not.toHaveBeenCalled();
+      expect(sendText).not.toHaveBeenCalled();
+    });
+
+    it("rejects a recipient with too few digits", async () => {
+      requireWhatsappManageContext.mockResolvedValue({
+        session: SESSION,
+        serviceRoleClient: makeSupabaseClient({ from: vi.fn() }),
+      });
+
+      const result = await callAction("phone-row-1", "12345", "hi");
+
+      expect(result.success).toBe(false);
+      expect(sendText).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("provider failure diagnostics (never a success audit, sanitized fields logged)", () => {
+    it("logs sanitized WhatsAppProviderError diagnostics on a rejected send and never records a success audit", async () => {
+      resolveOutboundAccessToken.mockResolvedValue("resolved-token");
+      sendText.mockRejectedValue(
+        new FakeWhatsAppProviderError(
+          "WhatsApp Graph API request failed with status 400",
+          400,
+          "100",
+          "33",
+          "OAuthException",
+          "Recipient phone number not in allowed list",
+          "Abc123TraceId",
+        ),
+      );
+      requireWhatsappManageContext.mockResolvedValue({
+        session: SESSION,
+        serviceRoleClient: makeSupabaseClient({
+          from: mockFrom({
+            whatsapp_phone_numbers: {
+              data: {
+                id: "phone-row-1",
+                phone_number_id: "PHONE1",
+                status: "connected",
+                whatsapp_account_id: "acc-1",
+              },
+              error: null,
+            },
+            whatsapp_accounts: {
+              data: {
+                waba_id: "WABA1",
+                connection_source: "embedded_signup",
+                encrypted_access_token: "{}",
+                encryption_key_version: 1,
+              },
+              error: null,
+            },
+          }),
+        }),
+      });
+
+      const result = await callAction("phone-row-1", "918086552536", "hi");
+
+      expect(result.success).toBe(false);
+      expect(recordAuditLog).not.toHaveBeenCalled();
+      expect(logServerError).toHaveBeenCalledWith(
+        "Failed to send WhatsApp test message",
+        expect.anything(),
+        expect.objectContaining({ companyId: "company-a" }),
+        expect.objectContaining({
+          operation: "whatsapp_test_message.send",
+          providerStatus: 400,
+          providerErrorCode: "100",
+          providerErrorSubcode: "33",
+          providerErrorType: "OAuthException",
+          providerErrorDetail: "Recipient phone number not in allowed list",
+          providerFbtraceId: "Abc123TraceId",
+        }),
+      );
+    });
+
+    it("never logs a token, header, or raw body -- only the sanitized WhatsAppProviderError fields already on the caught error", async () => {
+      resolveOutboundAccessToken.mockResolvedValue("super-secret-resolved-token");
+      sendText.mockRejectedValue(new FakeWhatsAppProviderError("generic failure", 500));
+      requireWhatsappManageContext.mockResolvedValue({
+        session: SESSION,
+        serviceRoleClient: makeSupabaseClient({
+          from: mockFrom({
+            whatsapp_phone_numbers: {
+              data: {
+                id: "phone-row-1",
+                phone_number_id: "PHONE1",
+                status: "connected",
+                whatsapp_account_id: "acc-1",
+              },
+              error: null,
+            },
+            whatsapp_accounts: {
+              data: {
+                waba_id: "WABA1",
+                connection_source: "embedded_signup",
+                encrypted_access_token: "{}",
+                encryption_key_version: 1,
+              },
+              error: null,
+            },
+          }),
+        }),
+      });
+
+      await callAction("phone-row-1", "918086552536", "hi");
+
+      const loggedExtra = logServerError.mock.calls[0]?.[3];
+      expect(JSON.stringify(loggedExtra)).not.toContain("super-secret-resolved-token");
+    });
   });
 });

@@ -22,8 +22,15 @@ export class MetaGraphApiError extends WhatsAppProviderError {
     errorSubcode: string | undefined,
     /** Meta's own `error.type` (e.g. "OAuthException", "GraphMethodException"), when present. */
     public readonly metaErrorType?: string,
-    /** Meta's own `error.error_data.details` -- a short, Meta-authored clarification string, when present. */
-    public readonly errorDetail?: string,
+    /**
+     * Meta's own `error.error_data.details` -- a short, Meta-authored
+     * clarification string, when present. `override` required (no behavior
+     * change): the base `WhatsAppProviderError` now separately declares its
+     * own same-named `errorDetail` field for the send-path's own diagnostics
+     * hardening -- this subclass's own constructor parameter still shadows
+     * it exactly as before.
+     */
+    public override readonly errorDetail?: string,
   ) {
     super(message, status, errorCode, errorSubcode);
     this.name = "WhatsAppProviderError";
