@@ -122,7 +122,10 @@ describe("completeEmbeddedSignup: happy path", () => {
       nonceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(graphClient.verifyPhoneBelongsToWaba).toHaveBeenCalledWith("waba-1", "phone-real-1");
-    expect(graphClient.registerPhoneNumber).toHaveBeenCalledWith("phone-real-1");
+    expect(graphClient.registerPhoneNumber).toHaveBeenCalledWith(
+      "phone-real-1",
+      expect.stringMatching(/^\d{6}$/),
+    );
     expect(graphClient.subscribeAppToWaba).toHaveBeenCalledWith("waba-1");
 
     expect(repo.completeAttempt).toHaveBeenCalledTimes(1);
@@ -866,5 +869,166 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
         "providerStatus",
       ].sort(),
     );
+  });
+});
+
+describe("completeEmbeddedSignup: registration PIN (Meta's documented /register contract)", () => {
+  it("passes a 6-digit numeric pin as the second argument to registerPhoneNumber, alongside the unchanged phoneNumberId", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+      },
+      BASE_INPUT,
+    );
+
+    expect(graphClient.registerPhoneNumber).toHaveBeenCalledTimes(1);
+    const [calledPhoneNumberId, calledPin] = graphClient.registerPhoneNumber.mock.calls[0]!;
+    expect(calledPhoneNumberId).toBe("phone-real-1");
+    expect(calledPin).toEqual(expect.any(String));
+    expect(calledPin).toMatch(/^\d{6}$/);
+  });
+
+  it("never reuses the same pin deterministically across separate completions -- confirms the value is freshly generated, not hard-coded", async () => {
+    const pins = new Set<string>();
+    for (let i = 0; i < 20; i += 1) {
+      const repo = makeRepo();
+      const graphClient = makeGraphClient();
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+      const [, pin] = graphClient.registerPhoneNumber.mock.calls[0]!;
+      pins.add(pin as string);
+    }
+    // 20 independent 6-digit CSPRNG draws collapsing to a single repeated
+    // value has probability on the order of 1e-84 -- this is not a flake risk,
+    // it is a hard-coded-value detector.
+    expect(pins.size).toBeGreaterThan(1);
+  });
+
+  it("the generated pin never appears in EmbeddedSignupFlowErrorDiagnostics under normal Meta error shapes", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      registerPhoneNumber: vi
+        .fn()
+        .mockRejectedValue(
+          new MetaGraphApiError(
+            "Registration rejected",
+            400,
+            "100",
+            undefined,
+            "OAuthException",
+            "Invalid parameter",
+          ),
+        ),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_failed");
+    expect(Object.keys(caught?.diagnostics ?? {})).not.toContain("pin");
+    expect(caught?.diagnostics?.providerErrorDetail).toBe("Invalid parameter");
+  });
+
+  it("defends against Meta unexpectedly echoing the exact submitted pin back inside error_data.details -- it is redacted before providerErrorDetail is ever set", async () => {
+    const repo = makeRepo();
+    let observedPin: string | undefined;
+    const graphClient = makeGraphClient({
+      registerPhoneNumber: vi.fn().mockImplementation((_phoneNumberId: string, pin: string) => {
+        observedPin = pin;
+        return Promise.reject(
+          new MetaGraphApiError(
+            "Registration rejected",
+            400,
+            "100",
+            undefined,
+            "OAuthException",
+            `pin ${pin} was invalid`, // a hypothetical future Meta response shape that echoes the submitted pin
+          ),
+        );
+      }),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_failed");
+    expect(observedPin).toMatch(/^\d{6}$/);
+    expect(caught?.diagnostics?.providerErrorDetail).toBe("pin [redacted] was invalid");
+    expect(caught?.diagnostics?.providerErrorDetail).not.toContain(observedPin!);
+  });
+
+  it("does not persist the pin anywhere: the completeAttempt payload sent to the repository has no pin-shaped field", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+      },
+      BASE_INPUT,
+    );
+
+    const persisted = repo.completeAttempt.mock.calls[0]?.[0];
+    expect(Object.keys(persisted)).not.toContain("pin");
+    expect(Object.keys(persisted)).not.toContain("registrationPin");
+    expect(JSON.stringify(persisted)).not.toMatch(/"pin"/);
+  });
+
+  it("still proceeds to subscribeAppToWaba and persistence when registration (with the generated pin) succeeds", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+      },
+      BASE_INPUT,
+    );
+
+    expect(graphClient.subscribeAppToWaba).toHaveBeenCalledWith("waba-1");
+    expect(repo.completeAttempt).toHaveBeenCalledTimes(1);
   });
 });

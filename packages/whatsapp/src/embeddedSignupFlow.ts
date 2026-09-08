@@ -122,17 +122,35 @@ export interface EmbeddedSignupFlowErrorDiagnostics {
  * already-classified `EmbeddedSignupFlowError` from a nested call, etc.),
  * since there is nothing safe to report in that case.
  */
+/**
+ * `secretsToRedact` defends against a scenario Meta has never been observed
+ * to produce but that this module does not want to trust blindly: Meta's
+ * own `error.error_data.details` free-text string echoing back a value this
+ * module itself just sent (currently only ever used for the registration
+ * PIN -- see the registerPhoneNumber catch block below). Any exact-string
+ * match against one of these secrets is replaced with "[redacted]" before
+ * `providerErrorDetail` is ever set, so a captured diagnostics object is
+ * safe to log/audit even in that scenario.
+ */
 function captureProviderDiagnostics(
   error: unknown,
+  secretsToRedact: readonly string[] = [],
 ): EmbeddedSignupFlowErrorDiagnostics | undefined {
   if (!(error instanceof WhatsAppProviderError)) return undefined;
+  const redact = (value: string | undefined): string | undefined => {
+    if (value === undefined) return undefined;
+    return secretsToRedact.reduce(
+      (result, secret) => (secret ? result.split(secret).join("[redacted]") : result),
+      value,
+    );
+  };
   return {
     providerStatus: error.status,
     providerErrorCode: error.errorCode,
     providerErrorSubcode: error.errorSubcode,
     providerErrorType: error.name,
     ...(error instanceof MetaGraphApiError
-      ? { metaErrorType: error.metaErrorType, providerErrorDetail: error.errorDetail }
+      ? { metaErrorType: error.metaErrorType, providerErrorDetail: redact(error.errorDetail) }
       : {}),
   };
 }
@@ -169,6 +187,35 @@ function randomHex(byteLength: number): string {
   return Array.from(bytes)
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+// Largest multiple of 1_000_000 <= 2^32 -- rejecting draws at or above this
+// keeps every one of the 1,000,000 possible 6-digit outputs equally likely
+// (a plain `% 1_000_000` would bias the low ~967,296 values slightly higher).
+const PIN_REJECTION_THRESHOLD = 4_294_000_000;
+
+/**
+ * Generates a cryptographically secure random 6-digit numeric PIN for Meta's
+ * phone registration two-step-verification requirement (`POST
+ * /{phone-number-id}/register` -- see MetaGraphManagementClient.registerPhoneNumber).
+ * Rejection-sampled against a Uint32 draw so every 6-digit value (including
+ * ones with leading zeros) is equally likely; never derived from Math.random
+ * or any other non-CSPRNG source.
+ *
+ * Deliberately never persisted anywhere (see completeEmbeddedSignup's own
+ * comment on the registration step for why): the value returned here lives
+ * only in a local variable for the duration of one registerPhoneNumber call,
+ * is never logged, never included in EmbeddedSignupFlowErrorDiagnostics,
+ * never returned to the browser, and never written to any table.
+ */
+function generateRegistrationPin(): string {
+  const buffer = new Uint32Array(1);
+  let draw: number;
+  do {
+    globalThis.crypto.getRandomValues(buffer);
+    draw = buffer[0]!;
+  } while (draw >= PIN_REJECTION_THRESHOLD);
+  return (draw % 1_000_000).toString().padStart(6, "0");
 }
 
 // Bounded well under the DB's own hard 15-minute ceiling
@@ -242,7 +289,8 @@ export interface CompleteEmbeddedSignupDeps {
  * 5. Confirm phoneNumberId actually belongs to wabaId (Graph API, never the
  *    browser-reported pairing alone) -- this is what stops a forged
  *    (wabaId, phoneNumberId) pair from ever being trusted.
- * 6. Register the phone number.
+ * 6. Register the phone number (Meta requires a freshly generated 6-digit
+ *    PIN in this request -- see generateRegistrationPin).
  * 7. Subscribe this app to the WABA's webhooks.
  * 8. Encrypt the token and persist, atomically, via complete_whatsapp_signup.
  *
@@ -358,8 +406,16 @@ export async function completeEmbeddedSignup(
     );
   }
 
+  // Meta's documented registration contract requires a 6-digit `pin` in the
+  // /register request body to both register the number and set its
+  // two-step verification PIN. Generated fresh here, used once, and never
+  // persisted -- see generateRegistrationPin's own doc comment for why no
+  // historical PIN needs to be retained for a future re-registration.
+  // Declared outside the try block so the catch below can redact it out of
+  // providerErrorDetail if Meta's response were ever to echo it back.
+  const registrationPin = generateRegistrationPin();
   try {
-    const registered = await graphClient.registerPhoneNumber(phoneNumberId);
+    const registered = await graphClient.registerPhoneNumber(phoneNumberId, registrationPin);
     if (!registered.success) {
       throw new EmbeddedSignupFlowError(
         "Phone number registration was rejected",
@@ -371,13 +427,15 @@ export async function completeEmbeddedSignup(
     // Diagnostics captured via the shared helper above -- same mechanism and
     // same guarantees as every other Graph-call catch block in this
     // function: never the access token, PIN, Authorization header, or a raw
-    // Graph response body. Does not change what's thrown to the caller
-    // (still the same generic "registration_failed" code) -- only what a
-    // caller MAY choose to log/audit alongside it.
+    // Graph response body (the registrationPin redaction above is defense
+    // in depth on top of that, not a substitute for it). Does not change
+    // what's thrown to the caller (still the same generic
+    // "registration_failed" code) -- only what a caller MAY choose to
+    // log/audit alongside it.
     throw new EmbeddedSignupFlowError(
       "Phone number registration failed",
       "registration_failed",
-      captureProviderDiagnostics(error),
+      captureProviderDiagnostics(error, [registrationPin]),
     );
   }
 
