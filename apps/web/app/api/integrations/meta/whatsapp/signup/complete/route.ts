@@ -192,22 +192,33 @@ export async function POST(request: Request): Promise<Response> {
     });
   } catch (error) {
     if (error instanceof EmbeddedSignupFlowError) {
-      // `error.diagnostics` (currently populated for exchange_failed and
-      // registration_failed -- see EmbeddedSignupFlowErrorDiagnostics's own
-      // doc comment for why only those two) is already sanitized to a small
-      // set of non-secret fields, so it's safe to both audit (durable,
-      // queryable) and log (Cloudflare Worker console, same path as every
-      // other logServerError call site) here. Neither of these is ever sent
-      // to the browser: the response below is unchanged, still just the
-      // sanitized message + failure code. The log message/operation name
-      // are derived from `error.code` itself (not hardcoded to one step) so
-      // they accurately describe whichever step actually failed.
-      if (error.diagnostics) {
+      // `error.diagnostics` (see EmbeddedSignupFlowErrorDiagnostics's own
+      // doc comment for exactly which failure codes populate it) is already
+      // sanitized to a small set of non-secret fields, so it's safe to both
+      // audit (durable, queryable) and log (Cloudflare Worker console, same
+      // path as every other logServerError call site) here. Neither of
+      // these is ever sent to the browser: the response below is
+      // unchanged, still just the sanitized message + failure code. The
+      // log message/operation name are derived from `error.code` itself
+      // (not hardcoded to one step) so they accurately describe whichever
+      // step actually failed.
+      //
+      // registration_pin_reservation_failed/registration_pin_unavailable
+      // never carry `diagnostics` (they originate from a local
+      // encryption/persistence failure, not a Meta response -- see
+      // reserveOrReuseRegistrationPin's own doc comment) but are logged
+      // here regardless: a PIN that cannot be safely reserved/read is an
+      // operationally significant internal failure worth Worker-console
+      // visibility even without Meta-specific detail to attach.
+      const isPinReservationFailure =
+        error.code === "registration_pin_reservation_failed" ||
+        error.code === "registration_pin_unavailable";
+      if (error.diagnostics || isPinReservationFailure) {
         logServerError(
-          `WhatsApp Embedded Signup failed with provider diagnostics (${error.code})`,
+          `WhatsApp Embedded Signup failed (${error.code})`,
           error,
           { companyId: session.activeCompanyId },
-          { operation: `whatsapp_signup_complete.${error.code}`, ...error.diagnostics },
+          { operation: `whatsapp_signup_complete.${error.code}`, ...(error.diagnostics ?? {}) },
         );
       }
 

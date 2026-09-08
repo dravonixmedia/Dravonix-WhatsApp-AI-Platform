@@ -90,12 +90,18 @@ export class MetaGraphApiError extends WhatsAppProviderError {
  * parameter. Meta's documented WhatsApp Business Platform phone-registration
  * contract requires `pin` (a 6-digit string) in this request body, alongside
  * `messaging_product`, both to register the number and to set its two-step
- * verification PIN. The caller (embeddedSignupFlow.ts's completeEmbeddedSignup)
- * now generates a fresh, cryptographically random 6-digit PIN and supplies it
- * on every registration call. `registerPhoneNumber` below still treats `pin`
- * as an optional pass-through parameter and never invents its own default --
- * generation is entirely the caller's responsibility -- so this module's own
- * contract is unchanged; only its caller's behavior changed.
+ * verification PIN. CORRECTION #2: an initial "generate a fresh PIN on every
+ * call" design (PR #74) was itself proven wrong by a real staging attempt --
+ * Meta rejects re-registering an already-registered number with a different
+ * PIN than the one already set (error.code=133005, "Security PIN mismatch").
+ * The caller (embeddedSignupFlow.ts's completeEmbeddedSignup, via
+ * reserveOrReuseRegistrationPin) now durably persists a PIN BEFORE ever
+ * sending it here, and reuses that same persisted PIN on every subsequent
+ * call for the same phone number -- never regenerating one blindly.
+ * `registerPhoneNumber` below still treats `pin` as an optional pass-through
+ * parameter and never invents its own default -- generation/persistence is
+ * entirely the caller's responsibility -- so this module's own contract is
+ * unchanged; only its caller's behavior changed.
  */
 
 /** Credentials for the Meta App itself (not a specific WABA/user token) -- needed only for the OAuth code exchange and token inspection, per Meta's documented "app access token" model. */

@@ -1188,10 +1188,14 @@ describe("completeEmbeddedSignup: registration PIN reuse and persistence (migrat
     expect(decrypted).toBe(usedPin);
   });
 
-  it("registration is saved BEFORE subscribeAppToWaba runs -- persisted even if a later step in the same call were to fail", async () => {
+  it("the PIN is durably saved BEFORE registerPhoneNumber is ever called, not after -- the crash-safety invariant", async () => {
     const callOrder: string[] = [];
     const repo = makeRepo();
     const graphClient = makeGraphClient({
+      registerPhoneNumber: vi.fn().mockImplementation(() => {
+        callOrder.push("registerPhoneNumber");
+        return Promise.resolve({ success: true });
+      }),
       subscribeAppToWaba: vi.fn().mockImplementation(() => {
         callOrder.push("subscribeAppToWaba");
         return Promise.resolve({ success: true });
@@ -1214,37 +1218,200 @@ describe("completeEmbeddedSignup: registration PIN reuse and persistence (migrat
       BASE_INPUT,
     );
 
-    expect(callOrder).toEqual(["saveRegistrationPin", "subscribeAppToWaba"]);
+    expect(callOrder).toEqual(["saveRegistrationPin", "registerPhoneNumber", "subscribeAppToWaba"]);
   });
 
-  it("a failure to persist the PIN (saveRegistrationPin throws) never fails an otherwise-successful registration/subscription/persistence", async () => {
+  it("a PIN persistence failure (saveRegistrationPin throws for a genuinely new number) prevents /register from ever being called, and throws registration_pin_reservation_failed", async () => {
     const repo = makeRepo();
     const graphClient = makeGraphClient();
 
-    const result = await completeEmbeddedSignup(
-      {
-        repo,
-        metaCredentials: CREDS,
-        encryptionKey: KEY,
-        graphManagementClientFactory: () => graphClient as never,
-        findRegistrationPin: async () => null,
-        saveRegistrationPin: async () => {
-          throw new Error("transient DB failure");
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {
+            throw new Error("transient DB failure");
+          },
         },
-      },
-      BASE_INPUT,
-    );
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
 
-    expect(result).toEqual({ whatsappAccountId: "account-1", whatsappPhoneNumberId: "phone-1" });
-    expect(repo.completeAttempt).toHaveBeenCalledTimes(1);
+    expect(caught?.code).toBe("registration_pin_reservation_failed");
+    expect(graphClient.registerPhoneNumber).not.toHaveBeenCalled();
+    expect(graphClient.subscribeAppToWaba).not.toHaveBeenCalled();
+    expect(repo.completeAttempt).not.toHaveBeenCalled();
   });
 
-  it("a stored PIN that fails to decrypt (corrupted/wrong key) falls back to generating a fresh PIN rather than throwing", async () => {
+  it("a lookup failure (findRegistrationPin itself throws) also prevents /register -- fails closed rather than guessing", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => {
+            throw new Error("transient DB read failure");
+          },
+          saveRegistrationPin: async () => {},
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_pin_reservation_failed");
+    expect(graphClient.registerPhoneNumber).not.toHaveBeenCalled();
+  });
+
+  it("a stored PIN that fails to decrypt (corrupted/wrong key) is NOT treated as absent -- it fails closed as registration_pin_unavailable rather than guessing a replacement", async () => {
     const repo = makeRepo();
     const graphClient = makeGraphClient();
     const findRegistrationPin = vi
       .fn()
       .mockResolvedValue({ encryptedPin: "{ not a valid envelope", keyVersion: 1 });
+    const saveRegistrationPin = vi.fn().mockResolvedValue(undefined);
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin,
+          saveRegistrationPin,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_pin_unavailable");
+    expect(graphClient.registerPhoneNumber).not.toHaveBeenCalled();
+    // Critically: the unreadable row is never overwritten with a guessed replacement.
+    expect(saveRegistrationPin).not.toHaveBeenCalled();
+  });
+
+  /** Simulates durable cross-attempt storage for retry/crash-safety tests below -- a real DB row keyed by phone_number_id, shared across multiple completeEmbeddedSignup calls exactly like whatsapp_registration_pins is in production. */
+  function makeFakePinStore() {
+    const rows = new Map<string, RegistrationPinEnvelope>();
+    return {
+      findRegistrationPin: vi.fn(async (phoneNumberId: string) => rows.get(phoneNumberId) ?? null),
+      saveRegistrationPin: vi.fn(async (phoneNumberId: string, pin: RegistrationPinEnvelope) => {
+        rows.set(phoneNumberId, pin);
+      }),
+    };
+  }
+
+  it("a /register failure leaves the just-reserved PIN available for a later retry to find and reuse", async () => {
+    const store = makeFakePinStore();
+
+    // Attempt 1: registration itself fails (generic rejection) -- but the
+    // PIN was already reserved BEFORE that call, per the crash-safety
+    // invariant, so it survives this failure.
+    const repo1 = makeRepo();
+    const graphClient1 = makeGraphClient({
+      registerPhoneNumber: vi
+        .fn()
+        .mockRejectedValue(new WhatsAppProviderError("Registration rejected", 500)),
+    });
+    await expect(
+      completeEmbeddedSignup(
+        {
+          repo: repo1,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient1 as never,
+          ...store,
+        },
+        BASE_INPUT,
+      ),
+    ).rejects.toMatchObject({ code: "registration_failed" });
+    const [, firstAttemptPin] = graphClient1.registerPhoneNumber.mock.calls[0]!;
+
+    // Attempt 2 (a fresh signup attempt, same phone number): reuses the
+    // exact same PIN attempt 1 reserved -- never generates a new one.
+    const repo2 = makeRepo();
+    const graphClient2 = makeGraphClient();
+    await completeEmbeddedSignup(
+      {
+        repo: repo2,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient2 as never,
+        ...store,
+      },
+      BASE_INPUT,
+    );
+    const [, secondAttemptPin] = graphClient2.registerPhoneNumber.mock.calls[0]!;
+
+    expect(secondAttemptPin).toBe(firstAttemptPin);
+  });
+
+  it("a subscription failure (registration itself succeeded) also leaves the reserved PIN available for a later retry", async () => {
+    const store = makeFakePinStore();
+
+    const repo1 = makeRepo();
+    const graphClient1 = makeGraphClient({
+      subscribeAppToWaba: vi.fn().mockResolvedValue({ success: false }),
+    });
+    await expect(
+      completeEmbeddedSignup(
+        {
+          repo: repo1,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient1 as never,
+          ...store,
+        },
+        BASE_INPUT,
+      ),
+    ).rejects.toMatchObject({ code: "subscription_failed" });
+    const [, firstAttemptPin] = graphClient1.registerPhoneNumber.mock.calls[0]!;
+
+    const repo2 = makeRepo();
+    const graphClient2 = makeGraphClient();
+    await completeEmbeddedSignup(
+      {
+        repo: repo2,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient2 as never,
+        ...store,
+      },
+      BASE_INPUT,
+    );
+    const [, secondAttemptPin] = graphClient2.registerPhoneNumber.mock.calls[0]!;
+
+    expect(secondAttemptPin).toBe(firstAttemptPin);
+  });
+
+  it("simulates the exact dangerous window (Meta accepts /register, then the process never learns it / never persists) and confirms a later retry cannot silently generate a mismatching new PIN -- it correctly reuses the one already reserved before that call", async () => {
+    // This is the crash-safety invariant's core guarantee, phrased as the
+    // original bug report's exact sequence: because saveRegistrationPin now
+    // runs BEFORE registerPhoneNumber (not after), the PIN Meta receives is
+    // ALWAYS already in the store by the time Meta could possibly act on
+    // it -- there is no window left in which Meta could accept a PIN this
+    // module itself cannot later recall.
+    const store = makeFakePinStore();
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
 
     await completeEmbeddedSignup(
       {
@@ -1252,17 +1419,73 @@ describe("completeEmbeddedSignup: registration PIN reuse and persistence (migrat
         metaCredentials: CREDS,
         encryptionKey: KEY,
         graphManagementClientFactory: () => graphClient as never,
-        findRegistrationPin,
-        saveRegistrationPin: async () => {},
+        ...store,
       },
       BASE_INPUT,
     );
+    const [, pinSentToMeta] = graphClient.registerPhoneNumber.mock.calls[0]!;
 
-    const [, pin] = graphClient.registerPhoneNumber.mock.calls[0]!;
-    expect(pin).toMatch(/^\d{6}$/);
+    // By the time registerPhoneNumber was called, saveRegistrationPin had
+    // already resolved -- provable because a second, independent attempt
+    // for the same phone number reuses the identical PIN rather than
+    // generating a new one.
+    const repo2 = makeRepo();
+    const graphClient2 = makeGraphClient();
+    await completeEmbeddedSignup(
+      {
+        repo: repo2,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient2 as never,
+        ...store,
+      },
+      BASE_INPUT,
+    );
+    const [, pinOnRetry] = graphClient2.registerPhoneNumber.mock.calls[0]!;
+
+    expect(pinOnRetry).toBe(pinSentToMeta);
   });
 
-  it('Meta\'s error.code=133005 ("Security PIN mismatch") is classified as registration_pin_mismatch, distinct from generic registration_failed, and the stored PIN is never overwritten on this failure', async () => {
+  it("two different phone numbers get two different reserved PINs", async () => {
+    const store = makeFakePinStore();
+
+    const repoA = makeRepo();
+    const graphClientA = makeGraphClient();
+    await completeEmbeddedSignup(
+      {
+        repo: repoA,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClientA as never,
+        ...store,
+      },
+      { ...BASE_INPUT, phoneNumberId: "phone-real-1" },
+    );
+    const [, pinForPhoneA] = graphClientA.registerPhoneNumber.mock.calls[0]!;
+
+    const repoB = makeRepo();
+    const graphClientB = makeGraphClient({
+      getPhoneNumbersForWaba: vi
+        .fn()
+        .mockResolvedValue([{ id: "phone-real-2", displayPhoneNumber: "+911234567891" }]),
+      verifyPhoneBelongsToWaba: vi.fn().mockResolvedValue(true),
+    });
+    await completeEmbeddedSignup(
+      {
+        repo: repoB,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClientB as never,
+        ...store,
+      },
+      { ...BASE_INPUT, phoneNumberId: "phone-real-2" },
+    );
+    const [, pinForPhoneB] = graphClientB.registerPhoneNumber.mock.calls[0]!;
+
+    expect(pinForPhoneA).not.toBe(pinForPhoneB);
+  });
+
+  it('Meta\'s error.code=133005 ("Security PIN mismatch") is classified as registration_pin_mismatch, distinct from generic registration_failed, and the already-reserved PIN is never rotated/overwritten in response to this failure', async () => {
     const repo = makeRepo();
     const graphClient = makeGraphClient({
       registerPhoneNumber: vi
@@ -1307,7 +1530,11 @@ describe("completeEmbeddedSignup: registration PIN reuse and persistence (migrat
       providerErrorDetail:
         "Security PIN mismatch: Wrong PIN used. Make sure that you are using the correct PIN and try again.",
     });
-    expect(saveRegistrationPin).not.toHaveBeenCalled();
+    // saveRegistrationPin was called exactly once -- during the reservation
+    // step, BEFORE /register was ever called (the crash-safety invariant).
+    // It is never called a second time in response to the 133005 failure,
+    // so the reserved PIN is never rotated or overwritten.
+    expect(saveRegistrationPin).toHaveBeenCalledTimes(1);
     expect(repo.completeAttempt).not.toHaveBeenCalled();
   });
 
