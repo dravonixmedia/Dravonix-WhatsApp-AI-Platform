@@ -82,11 +82,16 @@ export default async function SettingsPage() {
           .eq("id", session.activeCompanyId)
           .single()
       : Promise.resolve({ data: null }),
+    // One-active-WABA-per-company (migration 39): a company may have
+    // historical/superseded rows (status = 'disabled'); this summary tile
+    // shows the one active connection, same filter as the main WhatsApp
+    // connection page.
     capabilities.canViewWhatsapp
       ? supabase
           .from("whatsapp_accounts")
           .select("status, whatsapp_phone_numbers (display_phone_number)")
           .eq("company_id", session.activeCompanyId)
+          .neq("status", "disabled")
           .maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
