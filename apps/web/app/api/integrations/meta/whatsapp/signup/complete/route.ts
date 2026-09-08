@@ -186,19 +186,22 @@ export async function POST(request: Request): Promise<Response> {
     });
   } catch (error) {
     if (error instanceof EmbeddedSignupFlowError) {
-      // `error.diagnostics` (currently populated only for exchange_failed)
-      // is already sanitized to a small set of non-secret fields -- see
-      // EmbeddedSignupFlowErrorDiagnostics's own doc comment -- so it's safe
-      // to both audit (durable, queryable) and log (Cloudflare Worker
-      // console, same path as every other logServerError call site) here.
-      // Neither of these is ever sent to the browser: the response below is
-      // unchanged, still just the sanitized message + failure code.
+      // `error.diagnostics` (currently populated for exchange_failed and
+      // registration_failed -- see EmbeddedSignupFlowErrorDiagnostics's own
+      // doc comment for why only those two) is already sanitized to a small
+      // set of non-secret fields, so it's safe to both audit (durable,
+      // queryable) and log (Cloudflare Worker console, same path as every
+      // other logServerError call site) here. Neither of these is ever sent
+      // to the browser: the response below is unchanged, still just the
+      // sanitized message + failure code. The log message/operation name
+      // are derived from `error.code` itself (not hardcoded to one step) so
+      // they accurately describe whichever step actually failed.
       if (error.diagnostics) {
         logServerError(
-          "WhatsApp Embedded Signup: Meta code exchange failed",
+          `WhatsApp Embedded Signup failed with provider diagnostics (${error.code})`,
           error,
           { companyId: session.activeCompanyId },
-          { operation: "whatsapp_signup_complete.exchange_failed", ...error.diagnostics },
+          { operation: `whatsapp_signup_complete.${error.code}`, ...error.diagnostics },
         );
       }
 

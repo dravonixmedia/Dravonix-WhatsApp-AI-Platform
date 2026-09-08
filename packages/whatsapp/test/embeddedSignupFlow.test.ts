@@ -398,8 +398,9 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
       registerPhoneNumber: vi.fn().mockResolvedValue({ success: false }),
     });
 
-    await expect(
-      completeEmbeddedSignup(
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
         {
           repo,
           metaCredentials: CREDS,
@@ -407,9 +408,112 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           graphManagementClientFactory: () => graphClient as never,
         },
         BASE_INPUT,
-      ),
-    ).rejects.toMatchObject({ code: "registration_failed" });
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_failed");
     expect(repo.completeAttempt).not.toHaveBeenCalled();
+    // A 2xx response with success: false has no underlying exception to
+    // extract diagnostics from at all -- nothing to capture either way.
+    expect(caught?.diagnostics).toBeUndefined();
+  });
+
+  it("registration_failed: when Meta rejects registration with a WhatsAppProviderError, the sanitized status/error code/subcode are captured as diagnostics (same mechanism as exchange_failed)", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      registerPhoneNumber: vi
+        .fn()
+        .mockRejectedValue(
+          new WhatsAppProviderError("Registration rejected", 400, "133010", "2593109"),
+        ),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_failed");
+    expect(caught?.diagnostics).toEqual({
+      providerStatus: 400,
+      providerErrorCode: "133010",
+      providerErrorSubcode: "2593109",
+      providerErrorType: "WhatsAppProviderError",
+    });
+    expect(repo.completeAttempt).not.toHaveBeenCalled();
+  });
+
+  it("registration_failed: a non-WhatsAppProviderError (e.g. a raw thrown Error) never produces diagnostics, and never leaks the underlying message into the diagnostics object", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      registerPhoneNumber: vi.fn().mockRejectedValue(new Error("PIN required")),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_failed");
+    expect(caught?.diagnostics).toBeUndefined();
+  });
+
+  it("registration_failed diagnostics never leak the access token, app secret, a PIN, or any raw response text", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      registerPhoneNumber: vi
+        .fn()
+        .mockRejectedValue(
+          new WhatsAppProviderError("Registration rejected", 400, "133010", "2593109"),
+        ),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    const serialized = JSON.stringify(caught?.diagnostics ?? {});
+    expect(serialized).not.toContain("exchanged-token-value");
+    expect(serialized).not.toContain(CREDS.appSecret);
+    expect(Object.keys(caught?.diagnostics ?? {}).sort()).toEqual([
+      "providerErrorCode",
+      "providerErrorSubcode",
+      "providerErrorType",
+      "providerStatus",
+    ]);
   });
 
   it("subscription_failed: a webhook-subscription failure never marks the connection active -- no whatsapp_accounts/whatsapp_phone_numbers row is ever written for this attempt", async () => {
