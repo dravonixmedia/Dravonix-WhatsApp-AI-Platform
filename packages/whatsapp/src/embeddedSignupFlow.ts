@@ -187,8 +187,6 @@ export interface CompleteEmbeddedSignupInput {
 export interface CompleteEmbeddedSignupDeps {
   repo: SignupAttemptRepository;
   metaCredentials: MetaAppCredentials;
-  /** Must exactly match this Meta app's configured Facebook Login redirect URI. */
-  redirectUri: string;
   encryptionKey: WhatsAppTokenEncryptionKey;
   /** Constructs a Graph management client authenticated with the just-exchanged access token. */
   graphManagementClientFactory: (accessToken: string) => MetaGraphManagementClient;
@@ -253,7 +251,6 @@ export async function completeEmbeddedSignup(
     const exchanged = await exchangeEmbeddedSignupCode({
       ...deps.metaCredentials,
       code: input.code,
-      redirectUri: deps.redirectUri,
     });
     accessToken = exchanged.accessToken;
     expiresInSeconds = exchanged.expiresInSeconds;

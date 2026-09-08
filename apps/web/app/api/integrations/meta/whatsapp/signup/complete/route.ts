@@ -150,7 +150,6 @@ export async function POST(request: Request): Promise<Response> {
       {
         repo: new SupabaseSignupAttemptRepository(serviceRoleClient),
         metaCredentials: config.metaCredentials,
-        redirectUri: config.redirectUri,
         encryptionKey: config.encryptionKey,
         graphManagementClientFactory: (accessToken) =>
           new MetaGraphManagementClient({

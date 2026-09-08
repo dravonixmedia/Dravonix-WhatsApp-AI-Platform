@@ -82,7 +82,6 @@ beforeEach(() => {
   });
   resolveWhatsappEmbeddedSignupServerConfig.mockReturnValue({
     metaCredentials: { appId: "APP", appSecret: "SECRET", graphApiVersion: "v21.0" },
-    redirectUri: "https://example.test/callback",
     encryptionKey: { version: 1, keyBase64: "AAAA" },
   });
 });
@@ -192,6 +191,18 @@ describe("POST /api/integrations/meta/whatsapp/signup/complete", () => {
 
     const [, input] = completeEmbeddedSignup.mock.calls[0] ?? [];
     expect(input.companyId).toBe("company-a");
+  });
+
+  it("never passes a redirectUri dependency to completeEmbeddedSignup (removed: FB.login()'s popup flow never associates one with the authorization request)", async () => {
+    completeEmbeddedSignup.mockResolvedValue({
+      whatsappAccountId: "account-1",
+      whatsappPhoneNumberId: "phone-1",
+    });
+
+    await callRoute(VALID_BODY);
+
+    const [deps] = completeEmbeddedSignup.mock.calls[0] ?? [];
+    expect(deps).not.toHaveProperty("redirectUri");
   });
 
   it("returns 503 without ever exchanging a code when Embedded Signup is not configured", async () => {

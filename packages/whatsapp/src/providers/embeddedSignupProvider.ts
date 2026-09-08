@@ -26,18 +26,30 @@ import { WhatsAppProviderError } from "./graphApiProvider.js";
  * changes) and are cross-checked against multiple independent, current
  * sources.
  *
- * `exchangeEmbeddedSignupCode`'s exact request shape (POST, JSON body,
- * `grant_type: "authorization_code"`, required `redirect_uri`) was verified
- * directly against Meta's own live Embedded Signup Builder for this app's
- * actual configuration -- app "Dravonix Bot", Facebook Login for Business
+ * `exchangeEmbeddedSignupCode`'s request shape (POST, JSON body,
+ * `grant_type: "authorization_code"`, `client_id`/`client_secret`/`code`
+ * only) targets app "Dravonix Bot", Facebook Login for Business
  * configuration "DRAIVA WhatsApp Signup" (config_id 2509972019488744),
- * Embedded Signup v4, Session Info Version 3, System User access token --
- * whose generated "Exchange Token" example explicitly showed this POST/JSON
- * contract. This is scoped specifically to *this* Embedded Signup v4
- * configuration's documented exchange step, not a general claim about every
- * Meta OAuth flow -- a different config/version could show a different
- * example, and this should be re-checked if the app's Embedded Signup
- * configuration is ever recreated or migrated to a newer version.
+ * Embedded Signup v4, Session Info Version 3, System User access token.
+ *
+ * CORRECTION (originally shipped with a `redirect_uri` field, removed after
+ * a real staging failure): the browser-side flow drives Meta's popup via
+ * the JS SDK's `FB.login()` (see EmbeddedSignupButton.tsx) -- it never
+ * supplies, and the JS SDK never associates, an app-configured redirect URI
+ * with that authorization request, since it is a popup flow, not a
+ * page-redirect flow. Sending our own `META_EMBEDDED_SIGNUP_REDIRECT_URI`
+ * value in the exchange call therefore did not match the (absent) redirect
+ * URI Meta associated with the original authorization, and Meta's OAuth
+ * validation rejects that mismatch: a real staging attempt failed with
+ * `error.code=100`, `error.error_subcode=36008` -- Meta's own "redirect URI
+ * does not match" family of `OAuthException` -- confirmed via this
+ * project's own sanitized diagnostics capture (EmbeddedSignupFlowError,
+ * see embeddedSignupFlow.ts). `redirect_uri` is therefore correctly omitted
+ * from this call for this app's popup-based (`FB.login()`) Embedded Signup
+ * configuration; this is scoped specifically to that flow, not a general
+ * claim about every Meta OAuth flow -- a manual full-page-redirect OAuth
+ * flow elsewhere in the project (if any is ever added) would still need its
+ * own matching `redirect_uri`, independent of this decision.
  *
  * One thing remains genuinely unresolved and is called out explicitly
  * below rather than assumed: the exact PIN requirement for a phone
@@ -67,17 +79,15 @@ export interface ExchangeEmbeddedSignupCodeResult {
 }
 
 /**
- * Input for `exchangeEmbeddedSignupCode`. `redirectUri` is required (not
- * optional) -- Meta's live Embedded Signup Builder for this app's actual
- * "DRAIVA WhatsApp Signup" (v4) configuration shows it as a required field
- * of the exchange request body, taken from the app's own Facebook Login
- * settings. This module never hardcodes a redirect URI (staging or
- * otherwise) and never reads one from an environment variable -- the
- * caller must supply the exact value configured for this app.
+ * Input for `exchangeEmbeddedSignupCode`. No `redirectUri` field -- see this
+ * module's own doc comment for why: the popup-based `FB.login()` flow this
+ * app uses never associates a redirect URI with the authorization request
+ * in the first place, and sending one anyway (this module's original
+ * shape) caused Meta to reject the exchange (`error.code=100`,
+ * `error.error_subcode=36008`) against a real staging attempt.
  */
 export interface ExchangeEmbeddedSignupCodeInput extends MetaAppCredentials {
   code: string;
-  redirectUri: string;
 }
 
 /**
@@ -85,16 +95,15 @@ export interface ExchangeEmbeddedSignupCodeInput extends MetaAppCredentials {
  * token via Meta's OAuth token endpoint.
  *
  * Request shape (`POST /oauth/access_token`, `Content-Type: application/json`,
- * body `{client_id, client_secret, grant_type: "authorization_code",
- * redirect_uri, code}`) was verified directly against Meta's own live
- * Embedded Signup Builder for this app's actual "DRAIVA WhatsApp Signup"
- * (Embedded Signup v4) configuration -- see this module's own doc comment
- * for the exact app/config identifiers checked. This is NOT a generic claim
- * about every Meta OAuth flow; it is scoped to this specific configuration's
- * documented exchange step.
+ * body `{client_id, client_secret, grant_type: "authorization_code", code}`,
+ * deliberately no `redirect_uri`) targets this app's actual "DRAIVA WhatsApp
+ * Signup" (Embedded Signup v4, popup/`FB.login()`-based) configuration --
+ * see this module's own doc comment for why `redirect_uri` is omitted. This
+ * is NOT a generic claim about every Meta OAuth flow; it is scoped to this
+ * specific configuration's exchange step.
  *
- * `code`, `appSecret`, and `redirectUri` are sent only in this request's own
- * JSON body and never appear in any thrown error -- a failure throws a
+ * `code` and `appSecret` are sent only in this request's own JSON body and
+ * never appear in any thrown error -- a failure throws a
  * WhatsAppProviderError with a static, redacted message naming only the
  * operation, never the request body.
  */
@@ -112,7 +121,6 @@ export async function exchangeEmbeddedSignupCode(
         client_id: input.appId,
         client_secret: input.appSecret,
         grant_type: "authorization_code",
-        redirect_uri: input.redirectUri,
         code: input.code,
       }),
     });
