@@ -1,4 +1,9 @@
-import { encryptWhatsAppAccessToken, type WhatsAppTokenEncryptionKey } from "@dravonix/core";
+import {
+  decryptWhatsAppRegistrationPin,
+  encryptWhatsAppAccessToken,
+  encryptWhatsAppRegistrationPin,
+  type WhatsAppTokenEncryptionKey,
+} from "@dravonix/core";
 import { WhatsAppProviderError } from "./providers/graphApiProvider.js";
 import {
   exchangeEmbeddedSignupCode,
@@ -75,6 +80,7 @@ export type EmbeddedSignupFlowErrorCode =
   | "graph_verification_failed"
   | "phone_ownership_mismatch"
   | "registration_failed"
+  | "registration_pin_mismatch"
   | "subscription_failed"
   | "persistence_failed";
 
@@ -91,7 +97,8 @@ export type EmbeddedSignupFlowErrorCode =
  * captures them either). Populated for every EmbeddedSignupFlowError code
  * that originates from a caught Graph API exception (`exchange_failed`,
  * `token_verification_failed`, `graph_verification_failed`,
- * `registration_failed`, `subscription_failed`) via the shared
+ * `registration_failed`, `registration_pin_mismatch`, `subscription_failed`)
+ * via the shared
  * `captureProviderDiagnostics` helper below. `attempt_not_claimable` and
  * `phone_ownership_mismatch` never get diagnostics -- neither originates
  * from a caught provider exception (the former is a repository-layer
@@ -268,12 +275,36 @@ export interface CompleteEmbeddedSignupInput {
   businessId: string | null;
 }
 
+/** An encrypted registration PIN envelope as stored in whatsapp_registration_pins (migration 39), plus the key version it was encrypted under. */
+export interface RegistrationPinEnvelope {
+  encryptedPin: string;
+  keyVersion: number;
+}
+
 export interface CompleteEmbeddedSignupDeps {
   repo: SignupAttemptRepository;
   metaCredentials: MetaAppCredentials;
   encryptionKey: WhatsAppTokenEncryptionKey;
   /** Constructs a Graph management client authenticated with the just-exchanged access token. */
   graphManagementClientFactory: (accessToken: string) => MetaGraphManagementClient;
+  /**
+   * Looks up whatsapp_registration_pins (migration 39) for a previously
+   * successful /register call against this exact phone_number_id --
+   * independent of company, account, or signup attempt (a PIN is a
+   * property of the Meta asset, not of any one DRAIVA row). Returns null
+   * when none exists (first-ever registration of this number).
+   */
+  findRegistrationPin: (phoneNumberId: string) => Promise<RegistrationPinEnvelope | null>;
+  /**
+   * Upserts the exact PIN just used in a successful /register call, keyed
+   * by phone_number_id. Called immediately after registerPhoneNumber
+   * succeeds, before subscribeAppToWaba -- see this module's own comment on
+   * the registration step, and migration 39's header comment, for why this
+   * ordering is what makes the PIN recoverable across a later partial
+   * failure (subscription/persistence failing after a successful Meta
+   * registration).
+   */
+  saveRegistrationPin: (phoneNumberId: string, pin: RegistrationPinEnvelope) => Promise<void>;
 }
 
 /**
@@ -408,12 +439,41 @@ export async function completeEmbeddedSignup(
 
   // Meta's documented registration contract requires a 6-digit `pin` in the
   // /register request body to both register the number and set its
-  // two-step verification PIN. Generated fresh here, used once, and never
-  // persisted -- see generateRegistrationPin's own doc comment for why no
-  // historical PIN needs to be retained for a future re-registration.
+  // two-step verification PIN. CORRECTION (a real staging attempt proved
+  // this wrong): a fresh PIN cannot simply be generated and discarded on
+  // every call -- Meta rejects re-registering an already-registered number
+  // with a DIFFERENT pin than the one already set (HTTP 400,
+  // error.code=133005, "Security PIN mismatch: Wrong PIN used"). So: reuse
+  // the exact PIN previously used to successfully register this exact
+  // phoneNumberId, if one is on record (whatsapp_registration_pins,
+  // migration 39); only generate a fresh one when none exists (first-ever
+  // registration of this number, or a genuinely different number).
   // Declared outside the try block so the catch below can redact it out of
   // providerErrorDetail if Meta's response were ever to echo it back.
-  const registrationPin = generateRegistrationPin();
+  const existingPin = await deps.findRegistrationPin(phoneNumberId);
+  let registrationPin: string;
+  if (existingPin) {
+    try {
+      registrationPin = await decryptWhatsAppRegistrationPin(
+        existingPin.encryptedPin,
+        phoneNumberId,
+        (version) =>
+          version === existingPin.keyVersion ? deps.encryptionKey.keyBase64 : undefined,
+      );
+    } catch {
+      // A stored envelope that fails to decrypt (wrong/rotated key, etc.) is
+      // exceptional, not the expected path -- fall back to generating a
+      // fresh PIN rather than failing the whole signup outright. If this
+      // number really is already registered under a different PIN, Meta's
+      // own 133005 rejection below will surface that honestly as
+      // registration_pin_mismatch, never silently mis-mapped to a bare
+      // registration_failed.
+      registrationPin = generateRegistrationPin();
+    }
+  } else {
+    registrationPin = generateRegistrationPin();
+  }
+
   try {
     const registered = await graphClient.registerPhoneNumber(phoneNumberId, registrationPin);
     if (!registered.success) {
@@ -428,15 +488,49 @@ export async function completeEmbeddedSignup(
     // same guarantees as every other Graph-call catch block in this
     // function: never the access token, PIN, Authorization header, or a raw
     // Graph response body (the registrationPin redaction above is defense
-    // in depth on top of that, not a substitute for it). Does not change
-    // what's thrown to the caller (still the same generic
-    // "registration_failed" code) -- only what a caller MAY choose to
-    // log/audit alongside it.
+    // in depth on top of that, not a substitute for it).
+    //
+    // Meta's error.code=133005 ("Security PIN mismatch: Wrong PIN used") is
+    // classified as its own registration_pin_mismatch code, distinct from
+    // the generic registration_failed -- this is a CONFIRMED, previously
+    // observed real Meta response (not a guess), and callers/ops need to be
+    // able to tell "the number needs a fresh signup/manual recovery because
+    // its PIN is unknown/wrong" apart from every other registration
+    // rejection. This never overwrites the stored PIN (saveRegistrationPin
+    // below is only ever called on a CONFIRMED successful registration) and
+    // never retries with a guessed value.
+    const isPinMismatch = error instanceof WhatsAppProviderError && error.errorCode === "133005";
     throw new EmbeddedSignupFlowError(
-      "Phone number registration failed",
-      "registration_failed",
+      isPinMismatch
+        ? "Phone number registration failed: Meta rejected the stored/generated PIN"
+        : "Phone number registration failed",
+      isPinMismatch ? "registration_pin_mismatch" : "registration_failed",
       captureProviderDiagnostics(error, [registrationPin]),
     );
+  }
+
+  // Registration succeeded -- persist this exact PIN immediately, before
+  // subscribeAppToWaba or persistence can fail, so a LATER retry of this
+  // same phoneNumberId (a brand-new signup attempt; failed attempts are
+  // never reused, see migration 37) can find and reuse it instead of
+  // generating a mismatching new one. Best-effort: a failure to persist
+  // this cache must never fail an otherwise-successful registration --
+  // registration itself already succeeded, and the only cost of a failed
+  // save here is that the NEXT reconnect of this exact number might need to
+  // recover via the same registration_pin_mismatch path, not a regression
+  // introduced by this save.
+  try {
+    const encryptedPin = await encryptWhatsAppRegistrationPin(
+      registrationPin,
+      phoneNumberId,
+      deps.encryptionKey,
+    );
+    await deps.saveRegistrationPin(phoneNumberId, {
+      encryptedPin,
+      keyVersion: deps.encryptionKey.version,
+    });
+  } catch {
+    // Intentionally swallowed -- see the comment above.
   }
 
   try {

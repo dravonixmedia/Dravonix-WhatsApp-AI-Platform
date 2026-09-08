@@ -89,6 +89,21 @@ function additionalDataFor(whatsappAccountId: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(`purpose=whatsapp_access_token;account=${whatsappAccountId}`);
 }
 
+/**
+ * Distinct AAD purpose for the registration PIN (whatsapp_registration_pins,
+ * migration 39) -- bound to `phoneNumberId`, Meta's own identifier for the
+ * number, never `whatsappAccountId`. Using a different purpose string AND a
+ * different bound identifier than `additionalDataFor` above means a PIN
+ * envelope can never be substituted for an access-token envelope (or vice
+ * versa) even though both share the same key material: AES-GCM fails
+ * authentication outright on an AAD mismatch, so a mixed-up ciphertext
+ * simply fails to decrypt rather than silently decrypting as the wrong kind
+ * of secret.
+ */
+function additionalDataForRegistrationPin(phoneNumberId: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(`purpose=whatsapp_registration_pin;phone=${phoneNumberId}`);
+}
+
 async function importAesGcmKey(
   keyBase64: string,
   usage: "encrypt" | "decrypt",
@@ -218,6 +233,97 @@ export async function decryptWhatsAppAccessToken(
     // Wrong key, wrong AAD (including a mismatched whatsappAccountId), and a
     // tampered ciphertext/tag all surface here as Web Crypto's own
     // OperationError -- deliberately collapsed into the same generic error.
+    throw new CredentialDecryptionError();
+  }
+}
+
+/**
+ * Encrypts a plaintext WhatsApp phone registration PIN for storage in
+ * whatsapp_registration_pins.registration_pin_encrypted (migration 39).
+ * Same cipher/envelope/key material as encryptWhatsAppAccessToken above --
+ * only the AAD purpose and bound identifier differ (phoneNumberId, Meta's
+ * own identifier for the number, never a DRAIVA row id) -- see
+ * additionalDataForRegistrationPin's own comment for why that separation
+ * matters. `phoneNumberId` must be the exact number the ciphertext will be
+ * stored against; the resulting envelope can only ever be decrypted for
+ * that same phone_number_id.
+ */
+export async function encryptWhatsAppRegistrationPin(
+  plaintextPin: string,
+  phoneNumberId: string,
+  key: WhatsAppTokenEncryptionKey,
+): Promise<string> {
+  if (plaintextPin.length === 0) {
+    throw new CredentialEncryptionError("Cannot encrypt an empty registration PIN");
+  }
+  if (phoneNumberId.length === 0) {
+    throw new CredentialEncryptionError("phoneNumberId is required to bind the encryption AAD");
+  }
+  if (!Number.isInteger(key.version) || key.version < 1) {
+    throw new CredentialEncryptionError("Key version must be a positive integer");
+  }
+
+  const cryptoKey = await importAesGcmKey(key.keyBase64, "encrypt");
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_BYTES));
+  const plaintextBytes = new TextEncoder().encode(plaintextPin);
+
+  const ciphertext = await globalThis.crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: additionalDataForRegistrationPin(phoneNumberId) },
+    cryptoKey,
+    plaintextBytes,
+  );
+
+  const envelope: TokenEnvelope = {
+    v: ENVELOPE_VERSION,
+    kv: key.version,
+    iv: bytesToBase64Url(iv),
+    ct: bytesToBase64Url(new Uint8Array(ciphertext)),
+  };
+  return JSON.stringify(envelope);
+}
+
+/**
+ * Decrypts an envelope previously produced by encryptWhatsAppRegistrationPin.
+ * Same failure-collapsing behavior as decryptWhatsAppAccessToken -- every
+ * failure mode (malformed envelope, wrong key, wrong AAD/phoneNumberId,
+ * tampered ciphertext, unknown key version) surfaces as the same generic
+ * CredentialDecryptionError.
+ */
+export async function decryptWhatsAppRegistrationPin(
+  envelopeJson: string,
+  phoneNumberId: string,
+  resolveKey: (keyVersion: number) => string | undefined,
+): Promise<string> {
+  const envelope = parseEnvelope(envelopeJson);
+
+  const keyBase64 = resolveKey(envelope.kv);
+  if (keyBase64 === undefined) throw new CredentialDecryptionError();
+
+  let iv: Uint8Array<ArrayBuffer>;
+  let ciphertext: Uint8Array<ArrayBuffer>;
+  try {
+    iv = base64UrlToBytes(envelope.iv);
+    ciphertext = base64UrlToBytes(envelope.ct);
+  } catch {
+    throw new CredentialDecryptionError();
+  }
+  if (iv.length !== IV_BYTES) throw new CredentialDecryptionError();
+
+  let cryptoKey: CryptoKey;
+  try {
+    cryptoKey = await importAesGcmKey(keyBase64, "decrypt");
+  } catch {
+    throw new CredentialDecryptionError();
+  }
+
+  try {
+    const plaintextBytes = await globalThis.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv, additionalData: additionalDataForRegistrationPin(phoneNumberId) },
+      cryptoKey,
+      ciphertext,
+    );
+    return new TextDecoder().decode(plaintextBytes);
+  } catch {
     throw new CredentialDecryptionError();
   }
 }

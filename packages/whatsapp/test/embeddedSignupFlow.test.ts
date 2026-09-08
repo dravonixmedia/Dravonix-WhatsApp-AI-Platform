@@ -1,8 +1,10 @@
+import { decryptWhatsAppRegistrationPin, encryptWhatsAppRegistrationPin } from "@dravonix/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   completeEmbeddedSignup,
   initiateEmbeddedSignup,
   type EmbeddedSignupFlowError,
+  type RegistrationPinEnvelope,
   type SignupAttemptRepository,
 } from "../src/embeddedSignupFlow.js";
 import * as embeddedSignupProvider from "../src/providers/embeddedSignupProvider.js";
@@ -112,6 +114,8 @@ describe("completeEmbeddedSignup: happy path", () => {
         metaCredentials: CREDS,
         encryptionKey: KEY,
         graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin: async () => null,
+        saveRegistrationPin: async () => {},
       },
       BASE_INPUT,
     );
@@ -153,6 +157,8 @@ describe("completeEmbeddedSignup: happy path", () => {
         metaCredentials: CREDS,
         encryptionKey: KEY,
         graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin: async () => null,
+        saveRegistrationPin: async () => {},
       },
       BASE_INPUT,
     );
@@ -180,6 +186,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       ),
@@ -205,6 +213,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       ),
@@ -228,6 +238,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -261,6 +273,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -294,6 +308,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -322,6 +338,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       ),
@@ -344,6 +362,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       ),
@@ -365,6 +385,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         { ...BASE_INPUT, phoneNumberId: "someone-elses-phone-number-id" },
       ),
@@ -387,6 +409,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       ),
@@ -410,6 +434,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -442,6 +468,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -473,6 +501,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -502,6 +532,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -533,6 +565,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       ),
@@ -554,6 +588,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       ),
@@ -572,6 +608,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         { ...BASE_INPUT, wabaId: "  " },
       ),
@@ -591,6 +629,8 @@ describe("completeEmbeddedSignup: every failure mode fails BEFORE persistence", 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       ),
@@ -620,6 +660,8 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -656,6 +698,8 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -683,6 +727,8 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -715,6 +761,8 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -745,6 +793,8 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         { ...BASE_INPUT, phoneNumberId: "someone-elses-phone-number-id" },
       );
@@ -781,6 +831,8 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -813,6 +865,8 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -849,6 +903,8 @@ describe("completeEmbeddedSignup: provider diagnostics are captured for every Gr
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -883,6 +939,8 @@ describe("completeEmbeddedSignup: registration PIN (Meta's documented /register 
         metaCredentials: CREDS,
         encryptionKey: KEY,
         graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin: async () => null,
+        saveRegistrationPin: async () => {},
       },
       BASE_INPUT,
     );
@@ -905,6 +963,8 @@ describe("completeEmbeddedSignup: registration PIN (Meta's documented /register 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -942,6 +1002,8 @@ describe("completeEmbeddedSignup: registration PIN (Meta's documented /register 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -981,6 +1043,8 @@ describe("completeEmbeddedSignup: registration PIN (Meta's documented /register 
           metaCredentials: CREDS,
           encryptionKey: KEY,
           graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
         },
         BASE_INPUT,
       );
@@ -1004,6 +1068,8 @@ describe("completeEmbeddedSignup: registration PIN (Meta's documented /register 
         metaCredentials: CREDS,
         encryptionKey: KEY,
         graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin: async () => null,
+        saveRegistrationPin: async () => {},
       },
       BASE_INPUT,
     );
@@ -1024,11 +1090,252 @@ describe("completeEmbeddedSignup: registration PIN (Meta's documented /register 
         metaCredentials: CREDS,
         encryptionKey: KEY,
         graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin: async () => null,
+        saveRegistrationPin: async () => {},
       },
       BASE_INPUT,
     );
 
     expect(graphClient.subscribeAppToWaba).toHaveBeenCalledWith("waba-1");
     expect(repo.completeAttempt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("completeEmbeddedSignup: registration PIN reuse and persistence (migration 39)", () => {
+  it("reconnecting the SAME phone number reuses its previously-successful PIN instead of generating a new one", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+    const storedPlaintextPin = "654321";
+    const storedEnvelope = await encryptWhatsAppRegistrationPin(
+      storedPlaintextPin,
+      "phone-real-1",
+      KEY,
+    );
+    const findRegistrationPin = vi.fn().mockResolvedValue({
+      encryptedPin: storedEnvelope,
+      keyVersion: 1,
+    } as RegistrationPinEnvelope);
+    const saveRegistrationPin = vi.fn().mockResolvedValue(undefined);
+
+    await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin,
+        saveRegistrationPin,
+      },
+      BASE_INPUT,
+    );
+
+    expect(findRegistrationPin).toHaveBeenCalledWith("phone-real-1");
+    expect(graphClient.registerPhoneNumber).toHaveBeenCalledWith(
+      "phone-real-1",
+      storedPlaintextPin,
+    );
+  });
+
+  it("a genuinely new phone number (no stored PIN) still generates a fresh PIN", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+    const findRegistrationPin = vi.fn().mockResolvedValue(null);
+
+    await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin,
+        saveRegistrationPin: async () => {},
+      },
+      BASE_INPUT,
+    );
+
+    expect(findRegistrationPin).toHaveBeenCalledWith("phone-real-1");
+    const [, pin] = graphClient.registerPhoneNumber.mock.calls[0]!;
+    expect(pin).toMatch(/^\d{6}$/);
+  });
+
+  it("after a successful registration, the exact PIN used is encrypted and persisted via saveRegistrationPin, keyed by phoneNumberId, decryptable back to the same plaintext", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+    const saveRegistrationPin = vi.fn().mockResolvedValue(undefined);
+
+    await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin: async () => null,
+        saveRegistrationPin,
+      },
+      BASE_INPUT,
+    );
+
+    const [, usedPin] = graphClient.registerPhoneNumber.mock.calls[0]!;
+    expect(saveRegistrationPin).toHaveBeenCalledTimes(1);
+    const [savedPhoneNumberId, savedEnvelope] = saveRegistrationPin.mock.calls[0]!;
+    expect(savedPhoneNumberId).toBe("phone-real-1");
+    expect(savedEnvelope.encryptedPin).not.toContain(usedPin); // never plaintext
+    const decrypted = await decryptWhatsAppRegistrationPin(
+      savedEnvelope.encryptedPin,
+      "phone-real-1",
+      (version) => (version === savedEnvelope.keyVersion ? KEY.keyBase64 : undefined),
+    );
+    expect(decrypted).toBe(usedPin);
+  });
+
+  it("registration is saved BEFORE subscribeAppToWaba runs -- persisted even if a later step in the same call were to fail", async () => {
+    const callOrder: string[] = [];
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      subscribeAppToWaba: vi.fn().mockImplementation(() => {
+        callOrder.push("subscribeAppToWaba");
+        return Promise.resolve({ success: true });
+      }),
+    });
+    const saveRegistrationPin = vi.fn().mockImplementation(() => {
+      callOrder.push("saveRegistrationPin");
+      return Promise.resolve(undefined);
+    });
+
+    await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin: async () => null,
+        saveRegistrationPin,
+      },
+      BASE_INPUT,
+    );
+
+    expect(callOrder).toEqual(["saveRegistrationPin", "subscribeAppToWaba"]);
+  });
+
+  it("a failure to persist the PIN (saveRegistrationPin throws) never fails an otherwise-successful registration/subscription/persistence", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+
+    const result = await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin: async () => null,
+        saveRegistrationPin: async () => {
+          throw new Error("transient DB failure");
+        },
+      },
+      BASE_INPUT,
+    );
+
+    expect(result).toEqual({ whatsappAccountId: "account-1", whatsappPhoneNumberId: "phone-1" });
+    expect(repo.completeAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stored PIN that fails to decrypt (corrupted/wrong key) falls back to generating a fresh PIN rather than throwing", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient();
+    const findRegistrationPin = vi
+      .fn()
+      .mockResolvedValue({ encryptedPin: "{ not a valid envelope", keyVersion: 1 });
+
+    await completeEmbeddedSignup(
+      {
+        repo,
+        metaCredentials: CREDS,
+        encryptionKey: KEY,
+        graphManagementClientFactory: () => graphClient as never,
+        findRegistrationPin,
+        saveRegistrationPin: async () => {},
+      },
+      BASE_INPUT,
+    );
+
+    const [, pin] = graphClient.registerPhoneNumber.mock.calls[0]!;
+    expect(pin).toMatch(/^\d{6}$/);
+  });
+
+  it('Meta\'s error.code=133005 ("Security PIN mismatch") is classified as registration_pin_mismatch, distinct from generic registration_failed, and the stored PIN is never overwritten on this failure', async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      registerPhoneNumber: vi
+        .fn()
+        .mockRejectedValue(
+          new MetaGraphApiError(
+            "Registration rejected",
+            400,
+            "133005",
+            undefined,
+            "OAuthException",
+            "Security PIN mismatch: Wrong PIN used. Make sure that you are using the correct PIN and try again.",
+          ),
+        ),
+    });
+    const saveRegistrationPin = vi.fn().mockResolvedValue(undefined);
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin,
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_pin_mismatch");
+    expect(caught?.diagnostics).toEqual({
+      providerStatus: 400,
+      providerErrorCode: "133005",
+      providerErrorSubcode: undefined,
+      providerErrorType: "WhatsAppProviderError",
+      metaErrorType: "OAuthException",
+      providerErrorDetail:
+        "Security PIN mismatch: Wrong PIN used. Make sure that you are using the correct PIN and try again.",
+    });
+    expect(saveRegistrationPin).not.toHaveBeenCalled();
+    expect(repo.completeAttempt).not.toHaveBeenCalled();
+  });
+
+  it("a generic (non-133005) registration rejection remains the ordinary registration_failed code, unaffected by the new PIN-mismatch classification", async () => {
+    const repo = makeRepo();
+    const graphClient = makeGraphClient({
+      registerPhoneNumber: vi
+        .fn()
+        .mockRejectedValue(new WhatsAppProviderError("Registration rejected", 400, "100")),
+    });
+
+    let caught: EmbeddedSignupFlowError | undefined;
+    try {
+      await completeEmbeddedSignup(
+        {
+          repo,
+          metaCredentials: CREDS,
+          encryptionKey: KEY,
+          graphManagementClientFactory: () => graphClient as never,
+          findRegistrationPin: async () => null,
+          saveRegistrationPin: async () => {},
+        },
+        BASE_INPUT,
+      );
+    } catch (error) {
+      caught = error as EmbeddedSignupFlowError;
+    }
+
+    expect(caught?.code).toBe("registration_failed");
   });
 });

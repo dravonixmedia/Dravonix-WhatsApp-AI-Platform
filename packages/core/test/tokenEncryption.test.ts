@@ -3,7 +3,9 @@ import {
   CredentialDecryptionError,
   CredentialEncryptionError,
   decryptWhatsAppAccessToken,
+  decryptWhatsAppRegistrationPin,
   encryptWhatsAppAccessToken,
+  encryptWhatsAppRegistrationPin,
   type WhatsAppTokenEncryptionKey,
 } from "../src/tokenEncryption.js";
 
@@ -221,5 +223,100 @@ describe("encryptWhatsAppAccessToken / decryptWhatsAppAccessToken", () => {
 
     const plaintext = await decryptWhatsAppAccessToken(envelope, ACCOUNT_ID, multiVersionResolver);
     expect(plaintext).toBe("token-under-v1");
+  });
+});
+
+const PHONE_NUMBER_ID = "1327624763758546";
+const OTHER_PHONE_NUMBER_ID = "9999999999999999";
+
+describe("encryptWhatsAppRegistrationPin / decryptWhatsAppRegistrationPin", () => {
+  it("round-trips a plaintext PIN", async () => {
+    const key = randomKey();
+    const envelope = await encryptWhatsAppRegistrationPin("123456", PHONE_NUMBER_ID, key);
+    const plaintext = await decryptWhatsAppRegistrationPin(
+      envelope,
+      PHONE_NUMBER_ID,
+      resolverFor(key),
+    );
+    expect(plaintext).toBe("123456");
+  });
+
+  it("never stores the plaintext PIN inside the envelope", async () => {
+    const key = randomKey();
+    const envelope = await encryptWhatsAppRegistrationPin("123456", PHONE_NUMBER_ID, key);
+    expect(envelope).not.toContain("123456");
+  });
+
+  it("fails to decrypt with the wrong phoneNumberId (AAD mismatch)", async () => {
+    const key = randomKey();
+    const envelope = await encryptWhatsAppRegistrationPin("123456", PHONE_NUMBER_ID, key);
+    await expect(
+      decryptWhatsAppRegistrationPin(envelope, OTHER_PHONE_NUMBER_ID, resolverFor(key)),
+    ).rejects.toBeInstanceOf(CredentialDecryptionError);
+  });
+
+  it("fails to decrypt with the wrong key", async () => {
+    const key = randomKey();
+    const wrongKey = randomKey();
+    const envelope = await encryptWhatsAppRegistrationPin("123456", PHONE_NUMBER_ID, key);
+    await expect(
+      decryptWhatsAppRegistrationPin(envelope, PHONE_NUMBER_ID, resolverFor(wrongKey)),
+    ).rejects.toBeInstanceOf(CredentialDecryptionError);
+  });
+
+  it("fails to decrypt a tampered ciphertext", async () => {
+    const key = randomKey();
+    const envelope = JSON.parse(
+      await encryptWhatsAppRegistrationPin("123456", PHONE_NUMBER_ID, key),
+    );
+    // Flip the FIRST base64url character of ct rather than the last: the
+    // last character of a base64(url) string can, depending on the
+    // ciphertext's byte length modulo 3, encode only padding bits that
+    // decoders discard -- flipping the first character always corresponds
+    // to real ciphertext bits, regardless of length.
+    const tampered = {
+      ...envelope,
+      ct: (envelope.ct[0] === "A" ? "B" : "A") + envelope.ct.slice(1),
+    };
+    await expect(
+      decryptWhatsAppRegistrationPin(JSON.stringify(tampered), PHONE_NUMBER_ID, resolverFor(key)),
+    ).rejects.toBeInstanceOf(CredentialDecryptionError);
+  });
+
+  it("rejects encrypting an empty PIN", async () => {
+    const key = randomKey();
+    await expect(encryptWhatsAppRegistrationPin("", PHONE_NUMBER_ID, key)).rejects.toBeInstanceOf(
+      CredentialEncryptionError,
+    );
+  });
+
+  it("a PIN envelope cannot be decrypted as an access token, and vice versa -- distinct AAD purpose strings prevent cross-purpose ciphertext substitution even under the identical key and identical bound identifier", async () => {
+    const key = randomKey();
+    // Deliberately reuse the SAME identifier value for both purposes to prove
+    // the separation comes from the purpose string, not just from using
+    // different identifiers in this test.
+    const sharedId = "1327624763758546";
+    const pinEnvelope = await encryptWhatsAppRegistrationPin("123456", sharedId, key);
+    const tokenEnvelope = await encryptWhatsAppAccessToken("EAAG-some-token", sharedId, key);
+
+    await expect(
+      decryptWhatsAppAccessToken(pinEnvelope, sharedId, resolverFor(key)),
+    ).rejects.toBeInstanceOf(CredentialDecryptionError);
+    await expect(
+      decryptWhatsAppRegistrationPin(tokenEnvelope, sharedId, resolverFor(key)),
+    ).rejects.toBeInstanceOf(CredentialDecryptionError);
+  });
+
+  it("never includes the plaintext PIN in a thrown decryption error", async () => {
+    const key = randomKey();
+    const wrongKey = randomKey();
+    const envelope = await encryptWhatsAppRegistrationPin("654321", PHONE_NUMBER_ID, key);
+    try {
+      await decryptWhatsAppRegistrationPin(envelope, PHONE_NUMBER_ID, resolverFor(wrongKey));
+      expect.unreachable("expected decryption to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CredentialDecryptionError);
+      expect(String(error)).not.toContain("654321");
+    }
   });
 });

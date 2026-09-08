@@ -2,6 +2,7 @@ import { maskPhoneNumber } from "@dravonix/handover";
 import Link from "next/link";
 import { disconnectWhatsappAccountAction } from "../../../../lib/actions/whatsappSignup.js";
 import { getDashboardCapabilities } from "../../../../lib/permissions.js";
+import { logServerError } from "../../../../lib/serverLogging.js";
 import { getDashboardSession } from "../../../../lib/session.js";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server.js";
 import { EmptyState } from "../../EmptyState.js";
@@ -60,6 +61,22 @@ export default async function WhatsAppConnectionPage() {
   // it exists only for the Worker-side send path (packages/whatsapp), which
   // reads it directly from Postgres via the service-role client, never
   // through this RLS-scoped dashboard query.
+  //
+  // One-active-WABA-per-company policy (migration 39): a company may have
+  // multiple HISTORICAL whatsapp_accounts rows (a superseded manual_admin
+  // connection, a disconnected prior Embedded Signup, etc.), but at most one
+  // is ever the active operational connection -- status <> 'disabled' is
+  // exactly that marker (complete_whatsapp_signup, migration 39, disables
+  // every other row for the company atomically on a successful signup).
+  // `.neq("status", "disabled")` finds that one active row.
+  //
+  // `.maybeSingle()` here is a genuine invariant check, not just a
+  // convenience: if the invariant above is ever violated (a bug leaves two
+  // non-disabled rows for one company -- exactly what happened on staging
+  // before this fix), PostgREST returns a "multiple rows" error rather than
+  // picking one arbitrarily. `accountResult.error` MUST be checked and
+  // handled distinctly from "no row" -- collapsing a real query error into
+  // the empty state (the bug this migration fixes) must never happen again.
   const [accountResult, phoneNumbersResult, lastInboundResult, lastOutboundResult] =
     await Promise.all([
       supabase
@@ -68,11 +85,16 @@ export default async function WhatsAppConnectionPage() {
           "id, waba_id, business_name, status, is_test_account, last_error, connection_source",
         )
         .eq("company_id", companyId)
+        .neq("status", "disabled")
         .maybeSingle(),
+      // Scoped to the same active (non-disabled) rows as accountResult above
+      // -- a historical/superseded connection's phone numbers should not
+      // render alongside the active connection's.
       supabase
         .from("whatsapp_phone_numbers")
         .select("id, phone_number_id, display_phone_number, status, webhook_health_checked_at")
-        .eq("company_id", companyId),
+        .eq("company_id", companyId)
+        .neq("status", "disabled"),
       supabase
         .from("messages")
         .select("created_at")
@@ -90,6 +112,32 @@ export default async function WhatsAppConnectionPage() {
         .limit(1)
         .maybeSingle(),
     ]);
+
+  if (accountResult.error) {
+    // A real query error (including PostgREST's "multiple rows returned"
+    // when the one-active-WABA-per-company invariant is somehow violated)
+    // must NEVER be silently treated as "not yet set up" -- that exact
+    // collapse (an unchecked accountResult.error) is the bug that made a
+    // real, connected, credentialed account render as unconfigured. Fail
+    // visibly and log for investigation instead of guessing.
+    logServerError(
+      "Failed to load the company's active WhatsApp connection",
+      accountResult.error,
+      { companyId },
+      { operation: "whatsapp_connection_page.load_account" },
+    );
+    return (
+      <div>
+        <h1 className="dvx-page-title">WhatsApp connection</h1>
+        <div className="dvx-card" style={{ marginTop: "1.5rem", maxWidth: 480 }}>
+          <p className="dvx-muted" style={{ margin: 0 }}>
+            Something went wrong loading your WhatsApp connection. Our team has been notified --
+            please try again shortly.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const account = accountResult.data;
   const phoneNumbers = phoneNumbersResult.data ?? [];

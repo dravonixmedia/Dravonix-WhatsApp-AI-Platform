@@ -3,7 +3,9 @@ import { recordAuditLog } from "@dravonix/observability";
 import {
   completeEmbeddedSignup,
   EmbeddedSignupFlowError,
+  findRegistrationPin,
   MetaGraphManagementClient,
+  saveRegistrationPin,
   SupabaseSignupAttemptRepository,
 } from "@dravonix/whatsapp";
 import { revalidatePath } from "next/cache";
@@ -156,6 +158,10 @@ export async function POST(request: Request): Promise<Response> {
             accessToken,
             graphApiVersion: config.metaCredentials.graphApiVersion,
           }),
+        findRegistrationPin: (phoneNumberId) =>
+          findRegistrationPin(serviceRoleClient, phoneNumberId),
+        saveRegistrationPin: (phoneNumberId, pin) =>
+          saveRegistrationPin(serviceRoleClient, phoneNumberId, pin),
       },
       {
         companyId: session.activeCompanyId,

@@ -52,10 +52,15 @@ export default async function OnboardingPage() {
       .from("subscriptions")
       .select("id", { count: "exact", head: true })
       .eq("company_id", session.activeCompanyId),
+    // One-active-WABA-per-company (migration 39): a company may have
+    // historical/superseded rows (status = 'disabled'); this checklist
+    // checks the one active connection, same filter as the main WhatsApp
+    // connection page.
     supabase
       .from("whatsapp_accounts")
       .select("status")
       .eq("company_id", session.activeCompanyId)
+      .neq("status", "disabled")
       .maybeSingle(),
   ]);
 
