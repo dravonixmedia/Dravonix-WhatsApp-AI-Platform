@@ -79,6 +79,8 @@ export type EmbeddedSignupFlowErrorCode =
   | "token_verification_failed"
   | "graph_verification_failed"
   | "phone_ownership_mismatch"
+  | "registration_pin_reservation_failed"
+  | "registration_pin_unavailable"
   | "registration_failed"
   | "registration_pin_mismatch"
   | "subscription_failed"
@@ -104,7 +106,11 @@ export type EmbeddedSignupFlowErrorCode =
  * from a caught provider exception (the former is a repository-layer
  * rejection, the latter an explicit boolean check on a successful
  * response) -- and `registered.success === false` (a 2xx response with no
- * error body) has nothing to capture either.
+ * error body) has nothing to capture either. `registration_pin_reservation_failed`
+ * and `registration_pin_unavailable` (see reserveOrReuseRegistrationPin)
+ * also never get diagnostics -- both originate from local
+ * encryption/persistence failures, not a Meta response, so there is no
+ * provider-side detail to capture.
  */
 export interface EmbeddedSignupFlowErrorDiagnostics {
   /** HTTP status of the failed Meta request, or the synthetic 502 WhatsAppProviderError uses for a transport-level (fetch threw) or malformed-response failure. */
@@ -293,18 +299,117 @@ export interface CompleteEmbeddedSignupDeps {
    * independent of company, account, or signup attempt (a PIN is a
    * property of the Meta asset, not of any one DRAIVA row). Returns null
    * when none exists (first-ever registration of this number).
+   *
+   * Tenant-safety note (no company_id filter here, by design): by the time
+   * this is ever called (inside completeEmbeddedSignup, via
+   * reserveOrReuseRegistrationPin, immediately before /register),
+   * `phoneNumberId` has already passed verifyPhoneBelongsToWaba -- a live
+   * Graph API check, using the access token just exchanged for THIS
+   * caller's own OAuth flow, that Meta itself confirms this exact number
+   * belongs to the WABA this caller just proved control of. A caller could
+   * only reach this lookup with a phone_number_id it does not legitimately
+   * control on Meta's own side if it already held a valid Meta access token
+   * for that number's WABA -- at which point it has equivalent real access
+   * on Meta's side regardless of what this table does or doesn't return.
+   * whatsapp_registration_pins itself also carries no RLS policy for any
+   * role (service-role only, see the migration), so no browser-facing path
+   * can reach this function at all. This is why phone_number_id-only keying
+   * (no additional company_id binding) is safe here -- it is NOT safe to
+   * assume in a hypothetical future caller that skips the Graph
+   * verification above.
    */
   findRegistrationPin: (phoneNumberId: string) => Promise<RegistrationPinEnvelope | null>;
   /**
-   * Upserts the exact PIN just used in a successful /register call, keyed
-   * by phone_number_id. Called immediately after registerPhoneNumber
-   * succeeds, before subscribeAppToWaba -- see this module's own comment on
-   * the registration step, and migration 39's header comment, for why this
-   * ordering is what makes the PIN recoverable across a later partial
-   * failure (subscription/persistence failing after a successful Meta
-   * registration).
+   * Durably upserts a freshly generated PIN for this phone_number_id.
+   * Called by reserveOrReuseRegistrationPin BEFORE registerPhoneNumber is
+   * ever invoked -- not after, and not best-effort -- so that a PIN is
+   * never sent to Meta unless it is already recoverable by a later retry.
+   * If this throws, the caller aborts before calling Meta at all (see
+   * reserveOrReuseRegistrationPin's own doc comment and migration 39's
+   * header comment for the full reasoning).
    */
   saveRegistrationPin: (phoneNumberId: string, pin: RegistrationPinEnvelope) => Promise<void>;
+}
+
+/**
+ * Crash-safe registration-PIN lifecycle for a given phoneNumberId. Enforces
+ * one invariant above all else: a PIN is NEVER sent to Meta's /register
+ * unless DRAIVA already holds a durable, encrypted copy of that exact PIN.
+ * This is deliberately the opposite ordering from an earlier design
+ * (generate -> call Meta -> best-effort save afterward), which left a real
+ * window where Meta could accept a PIN that DRAIVA itself never durably
+ * recorded -- confirmed dangerous by a real Meta error.code=133005
+ * ("Security PIN mismatch") once a later retry generated a different PIN
+ * for the same, already-registered number.
+ *
+ * - A phone with an existing saved PIN: decrypt and reuse it. No new Meta
+ *   call risk is introduced by this path (nothing is written).
+ * - A phone with no saved PIN: generate one, encrypt it, and persist it via
+ *   `deps.saveRegistrationPin` BEFORE returning it to the caller. If that
+ *   persistence fails, this function throws `registration_pin_reservation_failed`
+ *   and the caller (completeEmbeddedSignup) never calls Meta's /register at
+ *   all for this attempt -- a fresh retry (a brand-new signup attempt) will
+ *   attempt the same reservation again, which is safe to repeat since it is
+ *   a plain upsert keyed by phoneNumberId.
+ * - A phone with an existing saved PIN that fails to DECRYPT (wrong/rotated
+ *   key, corruption): this is deliberately NOT treated as "no PIN exists".
+ *   The existence of a row is itself evidence Meta very likely already has
+ *   a real PIN set for this number; generating and sending a guessed
+ *   replacement would risk exactly the 133005 stranding this function
+ *   exists to prevent. This throws `registration_pin_unavailable` instead
+ *   -- an explicit, actionable failure requiring recovery (e.g. a key
+ *   rotation investigation), never a silent guess.
+ * - A lookup failure (the read itself throws, e.g. a transient DB error) is
+ *   treated the same as a reservation failure: fail closed, never guess,
+ *   never call Meta without first knowing the true PIN state.
+ */
+async function reserveOrReuseRegistrationPin(
+  deps: CompleteEmbeddedSignupDeps,
+  phoneNumberId: string,
+): Promise<string> {
+  let existing: RegistrationPinEnvelope | null;
+  try {
+    existing = await deps.findRegistrationPin(phoneNumberId);
+  } catch {
+    throw new EmbeddedSignupFlowError(
+      "Unable to determine the phone's existing registration PIN",
+      "registration_pin_reservation_failed",
+    );
+  }
+
+  if (existing) {
+    try {
+      return await decryptWhatsAppRegistrationPin(
+        existing.encryptedPin,
+        phoneNumberId,
+        (version) => (version === existing.keyVersion ? deps.encryptionKey.keyBase64 : undefined),
+      );
+    } catch {
+      throw new EmbeddedSignupFlowError(
+        "Stored registration PIN could not be decrypted",
+        "registration_pin_unavailable",
+      );
+    }
+  }
+
+  const freshPin = generateRegistrationPin();
+  try {
+    const encryptedPin = await encryptWhatsAppRegistrationPin(
+      freshPin,
+      phoneNumberId,
+      deps.encryptionKey,
+    );
+    await deps.saveRegistrationPin(phoneNumberId, {
+      encryptedPin,
+      keyVersion: deps.encryptionKey.version,
+    });
+  } catch {
+    throw new EmbeddedSignupFlowError(
+      "Unable to durably reserve a registration PIN before contacting Meta",
+      "registration_pin_reservation_failed",
+    );
+  }
+  return freshPin;
 }
 
 /**
@@ -320,8 +425,9 @@ export interface CompleteEmbeddedSignupDeps {
  * 5. Confirm phoneNumberId actually belongs to wabaId (Graph API, never the
  *    browser-reported pairing alone) -- this is what stops a forged
  *    (wabaId, phoneNumberId) pair from ever being trusted.
- * 6. Register the phone number (Meta requires a freshly generated 6-digit
- *    PIN in this request -- see generateRegistrationPin).
+ * 6. Reserve/reuse this number's registration PIN (durably persisted BEFORE
+ *    the call, never after -- see reserveOrReuseRegistrationPin), then
+ *    register the phone number with it.
  * 7. Subscribe this app to the WABA's webhooks.
  * 8. Encrypt the token and persist, atomically, via complete_whatsapp_signup.
  *
@@ -439,40 +545,19 @@ export async function completeEmbeddedSignup(
 
   // Meta's documented registration contract requires a 6-digit `pin` in the
   // /register request body to both register the number and set its
-  // two-step verification PIN. CORRECTION (a real staging attempt proved
-  // this wrong): a fresh PIN cannot simply be generated and discarded on
-  // every call -- Meta rejects re-registering an already-registered number
-  // with a DIFFERENT pin than the one already set (HTTP 400,
-  // error.code=133005, "Security PIN mismatch: Wrong PIN used"). So: reuse
-  // the exact PIN previously used to successfully register this exact
-  // phoneNumberId, if one is on record (whatsapp_registration_pins,
-  // migration 39); only generate a fresh one when none exists (first-ever
-  // registration of this number, or a genuinely different number).
-  // Declared outside the try block so the catch below can redact it out of
-  // providerErrorDetail if Meta's response were ever to echo it back.
-  const existingPin = await deps.findRegistrationPin(phoneNumberId);
-  let registrationPin: string;
-  if (existingPin) {
-    try {
-      registrationPin = await decryptWhatsAppRegistrationPin(
-        existingPin.encryptedPin,
-        phoneNumberId,
-        (version) =>
-          version === existingPin.keyVersion ? deps.encryptionKey.keyBase64 : undefined,
-      );
-    } catch {
-      // A stored envelope that fails to decrypt (wrong/rotated key, etc.) is
-      // exceptional, not the expected path -- fall back to generating a
-      // fresh PIN rather than failing the whole signup outright. If this
-      // number really is already registered under a different PIN, Meta's
-      // own 133005 rejection below will surface that honestly as
-      // registration_pin_mismatch, never silently mis-mapped to a bare
-      // registration_failed.
-      registrationPin = generateRegistrationPin();
-    }
-  } else {
-    registrationPin = generateRegistrationPin();
-  }
+  // two-step verification PIN. CORRECTION #2 (a real staging attempt proved
+  // CORRECTION #1 -- PR #74's "generate fresh, discard it" design --
+  // insufficient): once a PIN is sent to Meta, Meta may already have
+  // accepted it as this number's real PIN even if THIS process never learns
+  // that (crash, network failure, or any failure between the Graph response
+  // and durable persistence). A later retry that generates and sends a
+  // DIFFERENT PIN then gets rejected with HTTP 400, error.code=133005
+  // ("Security PIN mismatch: Wrong PIN used"), stranding the number. The
+  // only safe invariant: DRAIVA must have a durable, encrypted copy of a
+  // PIN BEFORE that PIN is ever sent to Meta -- never after. See
+  // reserveOrReuseRegistrationPin below, which enforces exactly that
+  // ordering and is called before the /register try block, not inside it.
+  const registrationPin = await reserveOrReuseRegistrationPin(deps, phoneNumberId);
 
   try {
     const registered = await graphClient.registerPhoneNumber(phoneNumberId, registrationPin);
@@ -496,9 +581,11 @@ export async function completeEmbeddedSignup(
     // observed real Meta response (not a guess), and callers/ops need to be
     // able to tell "the number needs a fresh signup/manual recovery because
     // its PIN is unknown/wrong" apart from every other registration
-    // rejection. This never overwrites the stored PIN (saveRegistrationPin
-    // below is only ever called on a CONFIRMED successful registration) and
-    // never retries with a guessed value.
+    // rejection. The saved PIN is NEVER rotated or overwritten in response
+    // to this failure -- it was already durably persisted (or reused
+    // unchanged) before this call was ever made, by
+    // reserveOrReuseRegistrationPin above, and stays exactly as-is for the
+    // next retry to find.
     const isPinMismatch = error instanceof WhatsAppProviderError && error.errorCode === "133005";
     throw new EmbeddedSignupFlowError(
       isPinMismatch
@@ -507,30 +594,6 @@ export async function completeEmbeddedSignup(
       isPinMismatch ? "registration_pin_mismatch" : "registration_failed",
       captureProviderDiagnostics(error, [registrationPin]),
     );
-  }
-
-  // Registration succeeded -- persist this exact PIN immediately, before
-  // subscribeAppToWaba or persistence can fail, so a LATER retry of this
-  // same phoneNumberId (a brand-new signup attempt; failed attempts are
-  // never reused, see migration 37) can find and reuse it instead of
-  // generating a mismatching new one. Best-effort: a failure to persist
-  // this cache must never fail an otherwise-successful registration --
-  // registration itself already succeeded, and the only cost of a failed
-  // save here is that the NEXT reconnect of this exact number might need to
-  // recover via the same registration_pin_mismatch path, not a regression
-  // introduced by this save.
-  try {
-    const encryptedPin = await encryptWhatsAppRegistrationPin(
-      registrationPin,
-      phoneNumberId,
-      deps.encryptionKey,
-    );
-    await deps.saveRegistrationPin(phoneNumberId, {
-      encryptedPin,
-      keyVersion: deps.encryptionKey.version,
-    });
-  } catch {
-    // Intentionally swallowed -- see the comment above.
   }
 
   try {
