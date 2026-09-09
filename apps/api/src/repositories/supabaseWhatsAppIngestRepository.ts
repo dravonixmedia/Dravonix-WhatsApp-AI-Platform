@@ -89,13 +89,35 @@ export class SupabaseWhatsAppIngestRepository implements WhatsAppIngestRepositor
       .single();
     if (contactError) throw contactError;
 
-    const { data: existingConversation, error: findError } = await this.client
+    // Resolved up front (not only for the "create a new conversation" branch
+    // below, as before) so the existing-conversation lookup can require an
+    // exact match on this exact phone. Without this, a contact who
+    // previously messaged a DIFFERENT WhatsApp number connected to this same
+    // company (e.g. a superseded manual_admin connection, migration 39's
+    // one-active-WABA-per-company switch) would have their new message
+    // silently reattached to that old conversation -- which still points at
+    // the old, now-disabled phone -- instead of getting a conversation bound
+    // to the number that actually received this message. A real staging
+    // inbound message reproduced exactly this.
+    const { data: phoneNumberRow, error: phoneNumberError } = await this.client
+      .from("whatsapp_phone_numbers")
+      .select("id")
+      .eq("phone_number_id", input.phoneNumberId)
+      .maybeSingle();
+    if (phoneNumberError) throw phoneNumberError;
+    const phoneRowId = phoneNumberRow?.id ?? null;
+
+    let existingConversationQuery = this.client
       .from("conversations")
       .select("id")
       .eq("company_id", input.companyId)
       .eq("contact_id", contact.id)
-      .neq("state", "closed")
-      .maybeSingle();
+      .neq("state", "closed");
+    existingConversationQuery = phoneRowId
+      ? existingConversationQuery.eq("whatsapp_phone_number_id", phoneRowId)
+      : existingConversationQuery.is("whatsapp_phone_number_id", null);
+    const { data: existingConversation, error: findError } =
+      await existingConversationQuery.maybeSingle();
     if (findError) throw findError;
 
     if (existingConversation) {
@@ -104,19 +126,12 @@ export class SupabaseWhatsAppIngestRepository implements WhatsAppIngestRepositor
 
     // Recorded so the message-consumer worker knows which Meta phone_number_id
     // to reply from without re-deriving it later -- see conversations.whatsapp_phone_number_id.
-    const { data: phoneNumberRow, error: phoneNumberError } = await this.client
-      .from("whatsapp_phone_numbers")
-      .select("id")
-      .eq("phone_number_id", input.phoneNumberId)
-      .maybeSingle();
-    if (phoneNumberError) throw phoneNumberError;
-
     const { data: newConversation, error: createError } = await this.client
       .from("conversations")
       .insert({
         company_id: input.companyId,
         contact_id: contact.id,
-        whatsapp_phone_number_id: phoneNumberRow?.id ?? null,
+        whatsapp_phone_number_id: phoneRowId,
         state: "ai_active",
       })
       .select("id")
@@ -141,6 +156,22 @@ export class SupabaseWhatsAppIngestRepository implements WhatsAppIngestRepositor
       .select("id")
       .single();
     if (error) throw error;
+
+    // conversations.last_message_at drives the dashboard conversation list's
+    // sort order and its "has unread activity" indicator (apps/web/lib/
+    // repositories/conversationsRepository.ts) -- both are meaningless if
+    // only an OUTBOUND send bumps it (as the existing
+    // update_message_send_result RPCs, migration 12, already do on a
+    // successful send) while the customer's own inbound message never does.
+    // conversations_set_updated_at (migration 2) already bumps updated_at
+    // automatically on any UPDATE to this table, so this one statement keeps
+    // both fields correct -- no separate trigger needed.
+    const { error: conversationUpdateError } = await this.client
+      .from("conversations")
+      .update({ last_message_at: new Date().toISOString() })
+      .eq("id", input.conversationId);
+    if (conversationUpdateError) throw conversationUpdateError;
+
     return { messageId: data.id };
   }
 
