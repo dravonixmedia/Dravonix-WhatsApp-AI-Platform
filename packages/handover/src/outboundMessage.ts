@@ -1,4 +1,5 @@
 import { assertCompanyMayUseProvider, type EntitlementRepository } from "@dravonix/billing";
+import type { Logger } from "@dravonix/observability";
 import {
   canSendFreeFormWhatsAppMessage,
   WhatsAppProviderError,
@@ -10,6 +11,28 @@ import {
 } from "./errors.js";
 import type { HandoverRepository, HandoverWorkerRepository } from "./repository.js";
 import type { MessageChannelType, OutboundDeliveryStatus, ServiceWindowState } from "./types.js";
+
+/**
+ * Sanitized, non-secret diagnostic detail captured ONLY from
+ * WhatsAppProviderError's own already-sanitized fields (packages/whatsapp/
+ * src/providers/graphApiProvider.ts) -- never a raw response body, ciphertext,
+ * encryption key, or Authorization header/access token. Mirrors the same
+ * shape apps/web/lib/actions/whatsappTestMessage.ts's captureProviderDiagnostics
+ * already established, rather than inventing a second, incompatible one.
+ */
+function captureProviderDiagnostics(error: unknown): Record<string, unknown> {
+  if (!(error instanceof WhatsAppProviderError)) {
+    return { providerErrorType: error instanceof Error ? error.name : "unknown" };
+  }
+  return {
+    providerStatus: error.status,
+    providerErrorCode: error.errorCode ?? null,
+    providerErrorSubcode: error.errorSubcode ?? null,
+    providerErrorType: error.errorType ?? null,
+    providerErrorDetail: error.errorDetail ?? null,
+    providerFbtraceId: error.fbtraceId ?? null,
+  };
+}
 
 export interface SendFailureClassification {
   status: "send_failed" | "delivery_unknown";
@@ -237,6 +260,21 @@ export interface SendAiOutboundMessageInput {
 }
 
 /**
+ * Optional structured-diagnostics context for sendAiOutboundMessage's
+ * free-form send (closes the observability gap found investigating the
+ * first real staging AI outbound failure: classifySendError/
+ * finalizeAiOutboundMessage persist only a bare errorCode, discarding the
+ * richer sanitized fields WhatsAppProviderError already carries). Optional
+ * and additive so existing callers (apps/workers/voice-consumer, tests) are
+ * unaffected; only a caller that provides this gets the richer log line.
+ */
+export interface AiOutboundSendLogContext {
+  companyId: string;
+  conversationId: string;
+  logger: Logger;
+}
+
+/**
  * Meta/WhatsApp Batch 2, Phase 2/7: resolves whether the 24-hour free-form
  * service window is currently open for the conversation this inbound
  * message belongs to, plus its WABA's configured fallback template (if
@@ -368,6 +406,7 @@ export async function sendAiOutboundMessage(
   repo: HandoverWorkerRepository,
   whatsappProvider: WhatsAppProvider,
   input: SendAiOutboundMessageInput,
+  logContext?: AiOutboundSendLogContext,
 ): Promise<SendOutboundResult> {
   const serviceWindow = await resolveServiceWindowState(repo, input.sourceMessageId);
   if (!serviceWindow.open) {
@@ -413,6 +452,16 @@ export async function sendAiOutboundMessage(
       alreadyHandled: false,
     };
   } catch (error) {
+    if (logContext) {
+      logContext.logger.error("AI outbound WhatsApp send failed", {
+        operation: "ai_outbound.send",
+        companyId: logContext.companyId,
+        conversationId: logContext.conversationId,
+        reservationId: reservation.id,
+        phoneNumberId: input.phoneNumberId,
+        ...captureProviderDiagnostics(error),
+      });
+    }
     const classification = classifySendError(error);
     const finalized = await repo.finalizeAiOutboundMessage(
       reservation.id,

@@ -13,7 +13,11 @@ import {
 } from "@dravonix/handover";
 import type { KnowledgeRetriever } from "@dravonix/knowledge";
 import type { Logger } from "@dravonix/observability";
-import { WhatsAppProviderError, type WhatsAppProvider } from "@dravonix/whatsapp";
+import {
+  WhatsAppProviderError,
+  type WhatsAppProvider,
+  type WhatsappAccountCredentialRow,
+} from "@dravonix/whatsapp";
 import type { MessageConsumerRepository } from "./repository.js";
 
 /** Never includes a message body, prompt content, or any provider credential. */
@@ -41,7 +45,20 @@ export interface MessageConsumerDeps {
   entitlementRepo: EntitlementRepository;
   knowledgeRetriever: KnowledgeRetriever;
   aiProvider: AiProvider;
-  whatsappProvider: WhatsAppProvider;
+  /**
+   * Meta/WhatsApp Batch 3 Slice E: resolves the outbound-send WhatsApp
+   * provider for THIS message's own connected account, using the sanitized
+   * credential row loaded by loadConversationContext (never a global,
+   * every-tenant token -- see this function's own call site below and
+   * apps/workers/message-consumer/src/worker.ts's real implementation,
+   * which delegates to @dravonix/whatsapp's resolveOutboundAccessToken, the
+   * same helper the proven-good Settings test-message path already uses).
+   * Called fresh for every message -- never memoized/cached across calls in
+   * this Worker's batch loop -- so one company's resolved token/provider can
+   * never be retained and reused for a different company's message in the
+   * same queue batch.
+   */
+  resolveWhatsappProvider: (credential: WhatsappAccountCredentialRow) => Promise<WhatsAppProvider>;
   logger: Logger;
   /**
    * DRAIVA Research staging pilot: the Worker environment's half of the
@@ -283,13 +300,40 @@ export async function processMessageJob(
     throw error;
   }
 
-  const outboundResult = await sendAiOutboundMessage(deps.handoverRepo, deps.whatsappProvider, {
-    sourceMessageId: payload.messageId,
-    channelType: "text",
-    phoneNumberId: context.phoneNumberId,
-    toWaId: context.waId,
-    body: response.answer,
-  });
+  // Meta/WhatsApp Batch 3 Slice E: resolve THIS message's own connected
+  // account's credential before attempting any send -- never the single
+  // global token for every tenant (the root cause of the first real AI
+  // outbound failure in staging). Resolved fresh per message, never
+  // memoized, so no provider/token is ever retained across a different
+  // company's message later in this same queue batch. Fails closed: if the
+  // credential can't be resolved (no stored token, decryption failure, or
+  // global token not configured for a manual_admin account), no Meta call
+  // is ever attempted -- mirrors the entitlement-denial branches above,
+  // which also log and return without creating an outbound message row.
+  let whatsappProvider: WhatsAppProvider;
+  try {
+    whatsappProvider = await deps.resolveWhatsappProvider(context.whatsappCredential);
+  } catch (error) {
+    log.error("Failed to resolve outbound WhatsApp credential for AI reply", {
+      ...safeErrorDetails(error),
+      operation: "ai_outbound.resolve_credential",
+      phoneNumberId: context.phoneNumberId,
+    });
+    return;
+  }
+
+  const outboundResult = await sendAiOutboundMessage(
+    deps.handoverRepo,
+    whatsappProvider,
+    {
+      sourceMessageId: payload.messageId,
+      channelType: "text",
+      phoneNumberId: context.phoneNumberId,
+      toWaId: context.waId,
+      body: response.answer,
+    },
+    { companyId: payload.companyId, conversationId: payload.conversationId, logger: log },
+  );
 
   if (outboundResult.alreadyHandled) {
     // This exact inbound message already produced a text reply (a redelivered

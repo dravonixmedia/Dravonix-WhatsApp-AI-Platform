@@ -5,7 +5,11 @@ compatibility_flags = ["nodejs_compat"]
 
 # Secrets (set via the Cloudflare dashboard or `wrangler secret put <NAME>`,
 # never committed): SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, SUPABASE_URL,
-# ANTHROPIC_API_KEY, META_ACCESS_TOKEN.
+# ANTHROPIC_API_KEY, META_ACCESS_TOKEN, WHATSAPP_TOKEN_ENCRYPTION_KEY_V1.
+# WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 must be provisioned (matching the same key
+# already used by apps/web for the Settings test-message path) before an
+# embedded_signup-connected tenant's AI replies can send -- a manual_admin
+# tenant is unaffected without it (see resolveOutboundAccessToken).
 #
 # This top-level (unnamed environment) config is used only by local
 # `wrangler dev` -- every real deploy goes through .github/workflows/deploy.yml,
@@ -51,10 +55,12 @@ RESEARCH_STAGING_ENABLED = "true"
 # with -- a plain, non-sensitive integer, safe as a committed var (see
 # CLOUDFLARE_SETUP.md's "Embedded Signup token encryption key" section).
 # The actual key material (WHATSAPP_TOKEN_ENCRYPTION_KEY_V1) is never set
-# here -- it is a `wrangler secret put` value, provisioned independently,
-# and is NOT YET provisioned for this Worker as of this config change. This
-# Worker only decrypts an embedded_signup row's own token when one exists;
-# it has no effect on the existing manual_admin META_ACCESS_TOKEN path.
+# here -- it is a `wrangler secret put` value, provisioned independently.
+# Batch 3 Slice E: this Worker's outbound AI-reply send path now actually
+# decrypts an embedded_signup row's own token via resolveOutboundAccessToken
+# when this key is provisioned; it has no effect on the existing
+# manual_admin META_ACCESS_TOKEN path. Provisioning the secret itself is a
+# separate deploy-time step, not done by this config change.
 WHATSAPP_TOKEN_ENCRYPTION_CURRENT_VERSION = "1"
 
 [[env.staging.queues.consumers]]

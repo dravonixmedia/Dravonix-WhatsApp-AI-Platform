@@ -12,6 +12,7 @@ import { MESSAGE_THREAD_WATCHES } from "../../../../lib/realtime/watchConfigs.js
 import { OutboundStatusBadge } from "../../badges.js";
 import { MicIcon } from "../../Icons.js";
 import { resolveMessageBodyDisplay } from "./messageBodyDisplay.js";
+import { isReconcileEligible } from "./reconciliationEligibility.js";
 import { ReconcileAiMessageForm } from "./ReconcileAiMessageForm.js";
 import { mapRealtimeMessageRow, toRealtimeUpdatePatch } from "./realtimeMessageMapper.js";
 import { bottomScrollTop, isNearBottom, scrollTopAfterPrepend } from "./scrollBehavior.js";
@@ -231,9 +232,7 @@ export function ConversationThread({
       ) : (
         state.messages.map((message) => {
           const isCustomer = message.senderType === "customer";
-          const needsReconcile =
-            message.outboundStatus === "delivery_unknown" ||
-            message.outboundStatus === "send_failed";
+          const needsReconcile = isReconcileEligible(message.outboundStatus);
           const bubbleClass =
             message.senderType === "customer" || message.senderType === "system"
               ? message.senderType === "system"
@@ -272,9 +271,7 @@ export function ConversationThread({
               {needsReconcile ? (
                 <div style={{ marginTop: "0.4rem" }}>
                   <p style={{ color: "var(--warning)", fontSize: "0.75rem", margin: "0 0 0.3rem" }}>
-                    {message.outboundStatus === "delivery_unknown"
-                      ? "Delivery could not be confirmed -- manual reconciliation required."
-                      : "This send failed."}
+                    Delivery could not be confirmed -- manual reconciliation required.
                   </p>
                   {message.senderType === "ai" ? (
                     <ReconcileAiMessageForm

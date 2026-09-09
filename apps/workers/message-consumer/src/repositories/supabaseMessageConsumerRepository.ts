@@ -11,6 +11,7 @@ import {
   type ConversationState,
 } from "@dravonix/core";
 import { recordUsageEvents as insertUsageEvents, type UsageEventInsert } from "@dravonix/database";
+import type { WhatsappAccountCredentialRow } from "@dravonix/whatsapp";
 import type { ConversationContext, MessageConsumerRepository } from "../repository.js";
 
 const RECENT_MESSAGE_LIMIT = 10;
@@ -70,13 +71,13 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
       conversation.whatsapp_phone_number_id
         ? this.client
             .from("whatsapp_phone_numbers")
-            .select("phone_number_id")
+            .select("phone_number_id, whatsapp_account_id")
             .eq("id", conversation.whatsapp_phone_number_id)
             .eq("status", "connected")
             .maybeSingle()
         : this.client
             .from("whatsapp_phone_numbers")
-            .select("phone_number_id")
+            .select("phone_number_id, whatsapp_account_id")
             .eq("company_id", companyId)
             .eq("status", "connected")
             .limit(1)
@@ -119,6 +120,38 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
     if (!phoneNumberId) {
       throw new Error(`No WhatsApp phone number configured for company ${companyId}`);
     }
+
+    // Meta/WhatsApp Batch 3 Slice E: resolve the outbound-send credential
+    // from the SAME trusted DB relationship the phone lookup above just
+    // used (conversation -> whatsapp_phone_number_id -> whatsapp_phone_numbers
+    // -> whatsapp_account_id -> whatsapp_accounts), never from a browser/
+    // company-supplied account identifier. status = "connected" is required
+    // here too -- a disabled/not_connected/error account must fail closed
+    // exactly like a disabled phone mapping above, never fall back to some
+    // other account's credential.
+    const whatsappAccountId = phoneNumberResult.data?.whatsapp_account_id as string | undefined;
+    if (!whatsappAccountId) {
+      throw new Error(`No WhatsApp account configured for company ${companyId}`);
+    }
+    const { data: account, error: accountError } = await this.client
+      .from("whatsapp_accounts")
+      .select("waba_id, connection_source, encrypted_access_token, encryption_key_version")
+      .eq("id", whatsappAccountId)
+      .eq("status", "connected")
+      .maybeSingle();
+    if (accountError) throw accountError;
+    if (!account) {
+      throw new Error(
+        `WhatsApp account ${whatsappAccountId} is not connected for company ${companyId}`,
+      );
+    }
+    const whatsappCredential: WhatsappAccountCredentialRow = {
+      connectionSource:
+        account.connection_source as WhatsappAccountCredentialRow["connectionSource"],
+      wabaId: account.waba_id as string,
+      encryptedAccessToken: account.encrypted_access_token as string | null,
+      encryptionKeyVersion: account.encryption_key_version as number | null,
+    };
 
     const aiContext: CompanyAiContext = {
       companyId,
@@ -174,6 +207,7 @@ export class SupabaseMessageConsumerRepository implements MessageConsumerReposit
       temporal,
       waId: contact.whatsapp_wa_id,
       phoneNumberId,
+      whatsappCredential,
     };
   }
 

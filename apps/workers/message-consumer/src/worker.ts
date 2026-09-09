@@ -4,7 +4,7 @@ import { createServiceRoleClient } from "@dravonix/database";
 import { SupabaseHandoverWorkerRepository } from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
 import { PostgresKnowledgeRetriever } from "@dravonix/knowledge";
-import { GraphApiWhatsAppProvider } from "@dravonix/whatsapp";
+import { GraphApiWhatsAppProvider, resolveOutboundAccessToken } from "@dravonix/whatsapp";
 import {
   processMessageJob,
   type MessageConsumerDeps,
@@ -35,7 +35,10 @@ export interface WorkerEnv {
   SUPABASE_ANON_KEY?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  /** manual_admin accounts only (Meta/WhatsApp Batch 3 Slice E) -- see resolveOutboundAccessToken. An embedded_signup account never falls back to this. */
   META_ACCESS_TOKEN?: string;
+  /** Decrypts embedded_signup accounts' whatsapp_accounts.encrypted_access_token (Meta/WhatsApp Batch 3 Slice E) -- see resolveOutboundAccessToken. Not required for a manual_admin-only deployment. */
+  WHATSAPP_TOKEN_ENCRYPTION_KEY_V1?: string;
   /** DRAIVA Research staging pilot -- see packages/config/src/env.ts (hard-blocked in production). */
   RESEARCH_STAGING_ENABLED?: string;
 }
@@ -96,10 +99,25 @@ export default {
         model: platformEnv.ANTHROPIC_MODEL,
         maxTokens: platformEnv.ANTHROPIC_MAX_TOKENS,
       }),
-      whatsappProvider: new GraphApiWhatsAppProvider({
-        accessToken: env.META_ACCESS_TOKEN,
-        graphApiVersion: platformEnv.META_GRAPH_API_VERSION,
-      }),
+      // Meta/WhatsApp Batch 3 Slice E: resolves a fresh provider for EACH
+      // message from that message's own connected account credential --
+      // never one Worker-wide provider built from a single global token
+      // shared across every tenant (the root cause of the first real AI
+      // outbound failure in staging). Delegates to the same
+      // resolveOutboundAccessToken helper the proven-good Settings
+      // test-message path (apps/web/lib/actions/whatsappTestMessage.ts)
+      // already uses, rather than a second, divergent implementation.
+      resolveWhatsappProvider: async (credential) => {
+        const accessToken = await resolveOutboundAccessToken(credential, {
+          globalAccessToken: env.META_ACCESS_TOKEN,
+          resolveEncryptionKey: (version) =>
+            version === 1 ? env.WHATSAPP_TOKEN_ENCRYPTION_KEY_V1 : undefined,
+        });
+        return new GraphApiWhatsAppProvider({
+          accessToken,
+          graphApiVersion: platformEnv.META_GRAPH_API_VERSION,
+        });
+      },
       logger,
       researchStagingEnabled: platformEnv.researchStagingEnabled,
       appEnv: platformEnv.APP_ENV,
