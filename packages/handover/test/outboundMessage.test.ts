@@ -1,4 +1,5 @@
 import type { EntitlementRepository, EntitlementSnapshot } from "@dravonix/billing";
+import type { Logger } from "@dravonix/observability";
 import {
   WhatsAppProviderError,
   type SendAudioInput,
@@ -377,6 +378,105 @@ describe("sendAiOutboundMessage (Meta/WhatsApp Batch 2 window gating)", () => {
         bodyParameters: [],
       },
     ]);
+  });
+
+  describe("logContext diagnostics (observability gap found investigating the first real staging AI outbound failure)", () => {
+    function capturingLogger() {
+      const lines: Array<{ message: string; extra?: Record<string, unknown> }> = [];
+      const logger: Logger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: (message: string, extra?: Record<string, unknown>) => {
+          lines.push({ message, extra });
+        },
+        child: () => logger,
+      };
+      return { lines, logger };
+    }
+
+    it("logs sanitized PR #77 provider diagnostics when the send fails with a WhatsAppProviderError", async () => {
+      const workerRepo = new FakeHandoverWorkerRepository();
+      const whatsappProvider = new ControllableWhatsAppProvider();
+      whatsappProvider.failWith = new WhatsAppProviderError(
+        "WhatsApp Graph API request failed with status 401",
+        401,
+        "100",
+        "33",
+        "OAuthException",
+        "Token is not valid for this phone number",
+        "fbtrace-xyz",
+      );
+      const { logger, lines } = capturingLogger();
+
+      await sendAiOutboundMessage(workerRepo, whatsappProvider, baseAiInput, {
+        companyId: "company-1",
+        conversationId: "conv-1",
+        logger,
+      });
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]?.message).toBe("AI outbound WhatsApp send failed");
+      expect(lines[0]?.extra).toMatchObject({
+        operation: "ai_outbound.send",
+        companyId: "company-1",
+        conversationId: "conv-1",
+        phoneNumberId: "phone-1",
+        providerStatus: 401,
+        providerErrorCode: "100",
+        providerErrorSubcode: "33",
+        providerErrorType: "OAuthException",
+        providerErrorDetail: "Token is not valid for this phone number",
+        providerFbtraceId: "fbtrace-xyz",
+      });
+    });
+
+    it("never logs an access token, Authorization header, or raw response body", async () => {
+      const workerRepo = new FakeHandoverWorkerRepository();
+      const whatsappProvider = new ControllableWhatsAppProvider();
+      whatsappProvider.failWith = new WhatsAppProviderError(
+        "WhatsApp Graph API request failed with status 401",
+        401,
+        "190",
+      );
+      const { logger, lines } = capturingLogger();
+
+      await sendAiOutboundMessage(workerRepo, whatsappProvider, baseAiInput, {
+        companyId: "company-1",
+        conversationId: "conv-1",
+        logger,
+      });
+
+      const serialized = JSON.stringify(lines);
+      expect(serialized).not.toMatch(/Bearer /i);
+      expect(serialized).not.toContain("access_token");
+    });
+
+    it("never throws when no logContext is provided -- existing callers (voice-consumer, pre-existing tests) are unaffected", async () => {
+      const workerRepo = new FakeHandoverWorkerRepository();
+      const whatsappProvider = new ControllableWhatsAppProvider();
+      whatsappProvider.failWith = new WhatsAppProviderError("failed", 500, "1");
+
+      const result = await sendAiOutboundMessage(workerRepo, whatsappProvider, baseAiInput);
+
+      expect(result.outboundStatus).toBe("send_failed");
+    });
+
+    it("still classifies and finalizes the send failure exactly as before when logContext is provided (logging is additive, never changes behavior)", async () => {
+      const workerRepo = new FakeHandoverWorkerRepository();
+      const whatsappProvider = new ControllableWhatsAppProvider();
+      whatsappProvider.failWith = new WhatsAppProviderError("failed", 500, "1");
+      const { logger } = capturingLogger();
+
+      const result = await sendAiOutboundMessage(workerRepo, whatsappProvider, baseAiInput, {
+        companyId: "company-1",
+        conversationId: "conv-1",
+        logger,
+      });
+
+      expect(result.outboundStatus).toBe("send_failed");
+      expect(result.alreadyHandled).toBe(false);
+    });
   });
 });
 

@@ -6,6 +6,7 @@ import type {
   LeadUpdates,
 } from "@dravonix/ai";
 import type { UsageEventInsert } from "@dravonix/database";
+import type { WhatsappAccountCredentialRow } from "@dravonix/whatsapp";
 
 export interface ConversationContext {
   companyId: string;
@@ -18,6 +19,18 @@ export interface ConversationContext {
   temporal: ConversationTemporalContext;
   waId: string;
   phoneNumberId: string;
+  /**
+   * Meta/WhatsApp Batch 3 Slice E: the outbound-send credential for the
+   * WhatsApp account actually connected to this conversation's phone,
+   * resolved server-side from the trusted DB chain conversation ->
+   * whatsapp_phone_number_id -> whatsapp_phone_numbers -> whatsapp_account_id
+   * -> whatsapp_accounts -- never from a browser/company-supplied account
+   * identifier. Feed this to resolveOutboundAccessToken (@dravonix/whatsapp,
+   * the same helper the proven-good Settings test-message path already uses)
+   * to build a per-tenant WhatsAppProvider for this message's send; see
+   * MessageConsumerDeps.resolveWhatsappProvider in processMessageJob.ts.
+   */
+  whatsappCredential: WhatsappAccountCredentialRow;
 }
 
 /**

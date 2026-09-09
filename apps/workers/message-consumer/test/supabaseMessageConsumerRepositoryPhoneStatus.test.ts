@@ -6,8 +6,17 @@ import { SupabaseMessageConsumerRepository } from "../src/repositories/supabaseM
  * phone-number lookup must require status = "connected" in both the
  * by-conversation-id and the by-company-fallback branch, so a disabled/
  * not_connected/error mapping can never be used to send an outbound AI
- * reply. Scoped narrowly to that one behavior -- not a general-purpose test
- * of the rest of loadConversationContext's aggregation.
+ * reply.
+ *
+ * Extended for Meta/WhatsApp Batch 3 Slice E: loadConversationContext also
+ * resolves the connected whatsapp_accounts row's own outbound-send
+ * credential (conversation -> whatsapp_phone_number_id ->
+ * whatsapp_phone_numbers -> whatsapp_account_id -> whatsapp_accounts),
+ * required by AI outbound sends to stop using a single global token for
+ * every tenant (the root cause of the first real staging AI outbound
+ * failure). Still scoped narrowly to phone/account status filtering and
+ * credential-row shape -- not a general-purpose test of the rest of
+ * loadConversationContext's aggregation.
  */
 
 function chain(result: { data: unknown; error: unknown }) {
@@ -30,10 +39,23 @@ const BASE_CONVERSATION = {
   contacts: { whatsapp_wa_id: "911234567890", last_detected_language: null, timezone: null },
 };
 
+const CONNECTED_MANUAL_ADMIN_ACCOUNT = {
+  waba_id: "waba-1",
+  connection_source: "manual_admin",
+  encrypted_access_token: null,
+  encryption_key_version: null,
+};
+
 function buildFrom(
   phoneNumberChain: ReturnType<typeof chain>,
-  conversation: Record<string, unknown> = BASE_CONVERSATION,
+  options: {
+    conversation?: Record<string, unknown>;
+    accountChain?: ReturnType<typeof chain>;
+  } = {},
 ) {
+  const conversation = options.conversation ?? BASE_CONVERSATION;
+  const accountChain =
+    options.accountChain ?? chain({ data: CONNECTED_MANUAL_ADMIN_ACCOUNT, error: null });
   const conversationChain = chain({ data: conversation, error: null });
   const companyChain = chain({
     data: { name: "Co", timezone: "Asia/Kolkata", is_demo: false },
@@ -71,6 +93,8 @@ function buildFrom(
         return voiceSettingsChain;
       case "whatsapp_phone_numbers":
         return phoneNumberChain;
+      case "whatsapp_accounts":
+        return accountChain;
       case "contact_preferences":
         return preferenceChain;
       case "leads":
@@ -82,13 +106,16 @@ function buildFrom(
     }
   });
 
-  return from;
+  return { from, accountChain };
 }
 
 describe("SupabaseMessageConsumerRepository.loadConversationContext phone-number status filtering", () => {
   it("resolves the phone_number_id when the mapped phone number is connected, filtering by status in the query", async () => {
-    const phoneNumberChain = chain({ data: { phone_number_id: "meta-phone-1" }, error: null });
-    const from = buildFrom(phoneNumberChain);
+    const phoneNumberChain = chain({
+      data: { phone_number_id: "meta-phone-1", whatsapp_account_id: "account-1" },
+      error: null,
+    });
+    const { from } = buildFrom(phoneNumberChain);
     const repo = new SupabaseMessageConsumerRepository({ from } as never);
 
     const context = await repo.loadConversationContext("conversation-1");
@@ -101,7 +128,7 @@ describe("SupabaseMessageConsumerRepository.loadConversationContext phone-number
     // Simulates the real Supabase behavior once .eq("status","connected") is
     // added: a disabled mapping simply matches zero rows.
     const phoneNumberChain = chain({ data: null, error: null });
-    const from = buildFrom(phoneNumberChain);
+    const { from } = buildFrom(phoneNumberChain);
     const repo = new SupabaseMessageConsumerRepository({ from } as never);
 
     await expect(repo.loadConversationContext("conversation-1")).rejects.toThrow(
@@ -111,9 +138,12 @@ describe("SupabaseMessageConsumerRepository.loadConversationContext phone-number
   });
 
   it("also filters by status in the by-company fallback branch (no whatsapp_phone_number_id on the conversation)", async () => {
-    const phoneNumberChain = chain({ data: { phone_number_id: "meta-phone-2" }, error: null });
+    const phoneNumberChain = chain({
+      data: { phone_number_id: "meta-phone-2", whatsapp_account_id: "account-1" },
+      error: null,
+    });
     const conversationWithoutPhone = { ...BASE_CONVERSATION, whatsapp_phone_number_id: null };
-    const from = buildFrom(phoneNumberChain, conversationWithoutPhone);
+    const { from } = buildFrom(phoneNumberChain, { conversation: conversationWithoutPhone });
     const repo = new SupabaseMessageConsumerRepository({ from } as never);
 
     const context = await repo.loadConversationContext("conversation-1");
@@ -121,5 +151,87 @@ describe("SupabaseMessageConsumerRepository.loadConversationContext phone-number
     expect(context.phoneNumberId).toBe("meta-phone-2");
     expect(phoneNumberChain.eq).toHaveBeenCalledWith("company_id", "company-1");
     expect(phoneNumberChain.eq).toHaveBeenCalledWith("status", "connected");
+  });
+});
+
+describe("SupabaseMessageConsumerRepository.loadConversationContext whatsapp account credential resolution (Meta/WhatsApp Batch 3 Slice E)", () => {
+  function connectedPhoneChain(accountId = "account-1") {
+    return chain({
+      data: { phone_number_id: "meta-phone-1", whatsapp_account_id: accountId },
+      error: null,
+    });
+  }
+
+  it("resolves the credential from the connected account referenced by the phone row -- never a browser/company-supplied identifier", async () => {
+    const accountChain = chain({
+      data: {
+        waba_id: "waba-embedded-1",
+        connection_source: "embedded_signup",
+        encrypted_access_token: '{"v":1,"kv":1,"iv":"AAAA","ct":"BBBB"}',
+        encryption_key_version: 1,
+      },
+      error: null,
+    });
+    const { from } = buildFrom(connectedPhoneChain("account-1"), { accountChain });
+    const repo = new SupabaseMessageConsumerRepository({ from } as never);
+
+    const context = await repo.loadConversationContext("conversation-1");
+
+    expect(context.whatsappCredential).toEqual({
+      connectionSource: "embedded_signup",
+      wabaId: "waba-embedded-1",
+      encryptedAccessToken: '{"v":1,"kv":1,"iv":"AAAA","ct":"BBBB"}',
+      encryptionKeyVersion: 1,
+    });
+    expect(accountChain.eq).toHaveBeenCalledWith("id", "account-1");
+    expect(accountChain.eq).toHaveBeenCalledWith("status", "connected");
+  });
+
+  it("resolves a manual_admin account's credential row (encryptedAccessToken/encryptionKeyVersion both null)", async () => {
+    const { from } = buildFrom(connectedPhoneChain());
+    const repo = new SupabaseMessageConsumerRepository({ from } as never);
+
+    const context = await repo.loadConversationContext("conversation-1");
+
+    expect(context.whatsappCredential).toEqual({
+      connectionSource: "manual_admin",
+      wabaId: "waba-1",
+      encryptedAccessToken: null,
+      encryptionKeyVersion: null,
+    });
+  });
+
+  it("fails closed with a safe error when the phone row has no whatsapp_account_id at all", async () => {
+    const phoneNumberChain = chain({
+      data: { phone_number_id: "meta-phone-1", whatsapp_account_id: null },
+      error: null,
+    });
+    const { from } = buildFrom(phoneNumberChain);
+    const repo = new SupabaseMessageConsumerRepository({ from } as never);
+
+    await expect(repo.loadConversationContext("conversation-1")).rejects.toThrow(
+      "No WhatsApp account configured for company company-1",
+    );
+  });
+
+  it("fails closed instead of using a disabled/not_connected/error whatsapp_accounts row -- the status filter returns no row, never a stale credential", async () => {
+    const accountChain = chain({ data: null, error: null });
+    const { from } = buildFrom(connectedPhoneChain(), { accountChain });
+    const repo = new SupabaseMessageConsumerRepository({ from } as never);
+
+    await expect(repo.loadConversationContext("conversation-1")).rejects.toThrow(
+      "WhatsApp account account-1 is not connected for company company-1",
+    );
+    expect(accountChain.eq).toHaveBeenCalledWith("status", "connected");
+  });
+
+  it("propagates a genuine Supabase error from the account lookup rather than swallowing it", async () => {
+    const accountChain = chain({ data: null, error: { message: "connection reset" } });
+    const { from } = buildFrom(connectedPhoneChain(), { accountChain });
+    const repo = new SupabaseMessageConsumerRepository({ from } as never);
+
+    await expect(repo.loadConversationContext("conversation-1")).rejects.toMatchObject({
+      message: "connection reset",
+    });
   });
 });

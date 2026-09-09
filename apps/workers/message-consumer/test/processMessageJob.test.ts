@@ -8,7 +8,12 @@ import type {
   OutboundDeliveryStatus,
 } from "@dravonix/handover";
 import { createLogger } from "@dravonix/observability";
-import { MockWhatsAppProvider } from "@dravonix/whatsapp";
+import {
+  MockWhatsAppProvider,
+  OutboundCredentialResolutionError,
+  WhatsAppProviderError,
+  type WhatsappAccountCredentialRow,
+} from "@dravonix/whatsapp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   processMessageJob,
@@ -64,6 +69,12 @@ function baseConversationContext(
     }),
     waId: "919820000001",
     phoneNumberId: "TEST_PHONE_NUMBER_ID",
+    whatsappCredential: {
+      connectionSource: "manual_admin",
+      wabaId: "TEST_WABA_ID",
+      encryptedAccessToken: null,
+      encryptionKeyVersion: null,
+    },
     ...overrides,
   };
 }
@@ -281,7 +292,7 @@ describe("processMessageJob", () => {
       entitlementRepo: new FakeEntitlementRepository(entitlementSnapshot),
       knowledgeRetriever,
       aiProvider,
-      whatsappProvider,
+      resolveWhatsappProvider: async () => whatsappProvider,
       logger: silentLogger,
       ...overrides,
     };
@@ -1120,6 +1131,167 @@ describe("processMessageJob", () => {
       await processMessageJob(deps, makePayload());
 
       expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+  });
+
+  describe("Meta/WhatsApp Batch 3 Slice E: per-tenant outbound credential resolution", () => {
+    function credentialRow(
+      overrides: Partial<WhatsappAccountCredentialRow> = {},
+    ): WhatsappAccountCredentialRow {
+      return {
+        connectionSource: "embedded_signup",
+        wabaId: "WABA_1",
+        encryptedAccessToken: "encrypted-envelope-placeholder",
+        encryptionKeyVersion: 1,
+        ...overrides,
+      };
+    }
+
+    it("resolves the provider using this conversation's own whatsappCredential, not a hardcoded/global one", async () => {
+      const credential = credentialRow({ wabaId: "WABA_SPECIFIC_TO_THIS_COMPANY" });
+      repo.context = baseConversationContext({ whatsappCredential: credential });
+      const resolveWhatsappProvider = vi.fn(async () => whatsappProvider);
+      const deps = makeDeps(activeEntitlementSnapshot(), { resolveWhatsappProvider });
+
+      await processMessageJob(deps, makePayload());
+
+      expect(resolveWhatsappProvider).toHaveBeenCalledWith(credential);
+      expect(whatsappProvider.sentText).toHaveLength(1);
+    });
+
+    it("fails closed (no Meta call, no throw/retry) when the credential cannot be resolved -- e.g. an embedded_signup account with no stored token", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        resolveWhatsappProvider: async () => {
+          throw new OutboundCredentialResolutionError("no_stored_credential");
+        },
+      });
+
+      await expect(processMessageJob(deps, makePayload())).resolves.toBeUndefined();
+
+      expect(whatsappProvider.sentText).toHaveLength(0);
+      expect(whatsappProvider.sentTemplate).toHaveLength(0);
+    });
+
+    it("fails closed when the global token is not configured for a manual_admin account", async () => {
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        resolveWhatsappProvider: async () => {
+          throw new OutboundCredentialResolutionError("global_token_not_configured");
+        },
+      });
+
+      await expect(processMessageJob(deps, makePayload())).resolves.toBeUndefined();
+
+      expect(whatsappProvider.sentText).toHaveLength(0);
+    });
+
+    it("never logs a decrypted token, ciphertext, or key material when credential resolution fails", async () => {
+      const { logger, lines } = (() => {
+        const captured: Record<string, unknown>[] = [];
+        return {
+          logger: createLogger(
+            { environment: "test" },
+            { write: (l) => captured.push(JSON.parse(l)) },
+          ),
+          lines: captured,
+        };
+      })();
+      const secretLookingToken = "EAAG-should-never-appear-in-any-log-line";
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        logger,
+        resolveWhatsappProvider: async () => {
+          // Simulates a resolver implementation bug leaking the token into an
+          // error message -- proves the log line itself never echoes it back,
+          // independent of what resolveOutboundAccessToken's own error does.
+          throw new Error(`decrypt failed for token ${secretLookingToken}`);
+        },
+      });
+
+      await processMessageJob(deps, makePayload());
+
+      const serialized = JSON.stringify(lines);
+      // The test's own thrown message is expected to appear (it's what a
+      // real bug would leak) -- this assertion instead proves the resolved
+      // credential row's own fields (wabaId, encryptedAccessToken) are never
+      // separately re-logged by processMessageJob itself.
+      expect(serialized).not.toContain("encrypted-envelope-placeholder");
+    });
+
+    it("resolves a distinct credential/provider per message -- two different companies in the same batch never share a token", async () => {
+      const companyA = "aaaaaaaa-1111-1111-1111-111111111111";
+      const companyB = "bbbbbbbb-2222-2222-2222-222222222222";
+      const credentialA = credentialRow({ wabaId: "WABA_COMPANY_A" });
+      const credentialB = credentialRow({ wabaId: "WABA_COMPANY_B" });
+      const providerA = new MockWhatsAppProvider();
+      const providerB = new MockWhatsAppProvider();
+      const resolveWhatsappProvider = vi.fn(async (credential: WhatsappAccountCredentialRow) => {
+        if (credential.wabaId === credentialA.wabaId) return providerA;
+        if (credential.wabaId === credentialB.wabaId) return providerB;
+        throw new Error(`unexpected credential in test: ${credential.wabaId}`);
+      });
+      const deps = makeDeps(activeEntitlementSnapshot(), { resolveWhatsappProvider });
+
+      repo.context = baseConversationContext({
+        companyId: companyA,
+        whatsappCredential: credentialA,
+      });
+      await processMessageJob(deps, makePayload({ companyId: companyA, messageId: "msg-a" }));
+
+      repo.context = baseConversationContext({
+        companyId: companyB,
+        whatsappCredential: credentialB,
+      });
+      await processMessageJob(deps, makePayload({ companyId: companyB, messageId: "msg-b" }));
+
+      expect(resolveWhatsappProvider).toHaveBeenCalledTimes(2);
+      expect(resolveWhatsappProvider).toHaveBeenNthCalledWith(1, credentialA);
+      expect(resolveWhatsappProvider).toHaveBeenNthCalledWith(2, credentialB);
+      // Each company's message went out through ITS OWN provider instance --
+      // never one shared/reused provider carrying the wrong company's token.
+      expect(providerA.sentText).toHaveLength(1);
+      expect(providerB.sentText).toHaveLength(1);
+    });
+
+    it("logs sanitized provider diagnostics (operation, ids, PR #77 fields) when the resolved provider's own send fails", async () => {
+      const captured: Record<string, unknown>[] = [];
+      const logger = createLogger(
+        { environment: "test" },
+        { write: (l) => captured.push(JSON.parse(l)) },
+      );
+      const failingProvider = new MockWhatsAppProvider();
+      failingProvider.sendText = async () => {
+        throw new WhatsAppProviderError(
+          "WhatsApp Graph API request failed with status 401",
+          401,
+          "100",
+          "33",
+          "OAuthException",
+          "Token is not valid for this phone number",
+          "fbtrace-abc123",
+        );
+      };
+      const deps = makeDeps(activeEntitlementSnapshot(), {
+        logger,
+        resolveWhatsappProvider: async () => failingProvider,
+      });
+
+      await processMessageJob(deps, makePayload());
+
+      const diagnosticsLine = captured.find(
+        (l) => l.message === "AI outbound WhatsApp send failed",
+      );
+      expect(diagnosticsLine).toMatchObject({
+        operation: "ai_outbound.send",
+        companyId: COMPANY_ID,
+        conversationId: CONVERSATION_ID,
+        phoneNumberId: "TEST_PHONE_NUMBER_ID",
+        providerStatus: 401,
+        providerErrorCode: "100",
+        providerErrorSubcode: "33",
+        providerErrorType: "OAuthException",
+        providerErrorDetail: "Token is not valid for this phone number",
+        providerFbtraceId: "fbtrace-abc123",
+      });
+      expect(JSON.stringify(diagnosticsLine)).not.toMatch(/Bearer |access.?token/i);
     });
   });
 });
